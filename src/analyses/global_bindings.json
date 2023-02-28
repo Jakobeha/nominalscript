@@ -1,0 +1,7 @@
+{
+  "console": {
+    "log": "(...Any) => Void",
+    "warn": "(...Any) => Void",
+    "error": "(...Any) => Void"
+  }
+}

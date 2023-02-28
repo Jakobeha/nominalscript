@@ -1,0 +1,20 @@
+# NominalScript: Nominal type system over JavaScript/TypeScript with runtime checks and well-proven semantics
+
+NominalScript is a superset of TypeScript which adds an alternate type system. Hence the name this type system is **nominal**: when you declare a type `A` with supertype `B`, you may implicitly cast values of `A` to `B` but must explicitly cast values from `B` to `A` (TypeScript lets you `type Foo = { dog: number }`, *any* values of type `{ dog: number }` are automatically of type `Foo`). This type system has other differences: objects must have the exact fields / tuples the exact number of elements, generics may have explicit variance (though it can still be inferred), and natural numbers / integers have separate types which are both subtypes.of `Number` Furthermore, unlike TypeScript, NominalScript has built-in runtime type checking by generating guards at explicit casts and does not let you violate soundness via implicit casts, so you can prevent values from being bound to the incorrect type.
+
+TODO diagram showing TypeScript's type system and NominalScript's type system, with types as circles / regions and values as points.
+
+## Why *another* type system?
+
+NominalScript lets you add even more type-safety to your existing TypeScript projects like how TypeScript lets you add more safety to your JavaScript projects. TypeScript is an amazing innovation and is not going away anytime soon, but there are a few things it does not cover:
+
+- Zero cost primitive wrappers
+- Contracts
+
+Furthermore, a major issue plaguing TypeScript is that values at runtime can actually be bound to the wrong type, and they will not throw a runtime type error: they will simply be passed around until a null value is accessed or another illegal operation occurs, and this will raise a misleading error that does not point to the real cause. There has been prior art attempting to generate guards which check TypeScript types at runtime, but they are still experimental, and TypeScript's complexity makes it hard to reliably check all possible types or generate guards at all necessary locations: see [ts-runtime](https://fabiandev.github.io/ts-runtime/) and [ts-type-checked](https://github.com/janjakubnanista/ts-type-checked). Furthermore, attempting to check *all* of TypeScript's type assertions would almost certainly have unreasonable overhead, as noted in [*Is Sound Gradual Typing Dead?*](https://www2.ccs.neu.edu/racket/pubs/popl16-tfgnvf.pdf) (see section 4.2) which discusses the same issue in the context of Racket. NominalScript provides an effective compromise by letting you have *some* types whose values are checked at runtime, and other (particularly more complex or less important) values/types may be assumed correct.
+
+## Type Guards
+
+NominalScript can generate type guards at runtime, and it can do so at every boundary where potential runtime type errors would occur (since there is only one operation to promote a non-nominal value into a nominal type, the nominal wrapper, guards are inserted at these locations). NominalScript does not ever allow you to create a nominally-typed value without the nominal wrap operator, so you will have no accidental implicit casts to incorrectly-typed values either. NominalScript's types are simpler, so they can always be reliably checked. Well-formed NominalScript programs should have less need for guards leading to lower overhead than would be in TypeScript, but to forther reduce overhead NominalScript can vary the guards it generates: you can generate guards which are only triggered in debug mode, or every `n`th occurrence, and you can disable guards for specific regions of code. You can even vary how guards are generated for specific types, to restrict or disable guards for more common types or not check deeply-nested fields in complicated types.
+
+etc. copy from js version
