@@ -1,0 +1,3 @@
+[submodule "vendor/tree-sitter-nominalscript"]
+	path = vendor/tree-sitter-nominalscript
+	url = git@github.com:Jakobeha/tree-sitter-nominalscript.git
