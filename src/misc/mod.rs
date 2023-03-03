@@ -1,2 +1,4 @@
-/// Wrapper for a lazily-computed, asynchronous value which can also detect and catch cycles
-pub mod lazy_promise;
+/// Wrapper for a lazily-computed value which can also detect and catch cycles
+pub mod lazy;
+/// Roaring bitmaps for ids (particularly node ids but any u64 value is ok)
+pub mod id_maps;
