@@ -1,18 +1,12 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::path::Path;
 use std::fs;
 use std::iter::{once, Once};
 use std::str::Utf8Error;
-use aho_corasick::AhoCorasick;
 use derive_more::{Display, From, Error};
 use std::fmt::Write;
 use std::ops::{Range, RangeBounds};
-use std::ops::Bound::Unbounded;
-use log::warn;
-use nonempty::NonEmpty;
-use crate::diff::{TSNodeId, TSNodeIdBTreeMany2One, TSNodeIdMap, TSNodeIdSet};
-use crate::misc::id_maps::{IdMap, IdSet};
-use crate::misc::UnwrapNone;
+use crate::misc::id_maps::{Id, IdSet};
 
 #[derive(Debug)]
 pub struct TSTree {
@@ -47,7 +41,7 @@ pub struct TSQueryCursor {
 
 #[derive(Debug)]
 pub struct TSQueryMatches<'query, 'tree: 'query> {
-    query_matches: tree_sitter::QueryMatches<'query, 'tree, TSTreeTextProvider<'tree>>,
+    query_matches: tree_sitter::QueryMatches<'query, 'tree, &'query TSTree>,
     tree: &'tree TSTree,
     query: &'query TSQuery
 }
@@ -61,7 +55,7 @@ pub struct TSQueryMatch<'query, 'tree> {
 
 #[derive(Debug)]
 pub struct TSQueryCaptures<'query, 'tree> {
-    query_captures: tree_sitter::QueryCaptures<'query, 'tree, TSTreeTextProvider<'tree>>,
+    query_captures: tree_sitter::QueryCaptures<'query, 'tree, &'query TSTree>,
     tree: &'tree TSTree,
     query: &'query TSQuery
 }
@@ -79,7 +73,7 @@ pub type TSLanguageError = tree_sitter::LanguageError;
 pub type TSQuery = tree_sitter::Query;
 pub type TSQueryProperty = tree_sitter::QueryProperty;
 pub type TSRange = tree_sitter::Range;
-pub type TSIncludedRangeError = tree_sitter::IncludedRangeError;
+pub type TSIncludedRangesError = tree_sitter::IncludedRangesError;
 pub type TSPoint = tree_sitter::Point;
 
 #[derive(Debug, Display, From, Error)]
@@ -87,6 +81,7 @@ pub enum TreeCreateError {
     IO(std::io::Error),
     LoadLanguage(tree_sitter::LanguageError),
     ParsingFailed,
+    #[display(fmt = "Invalid UTF-8 at byte index {}-{}", actual_index, "error.error_len()")]
     NotUtf8 { actual_index: usize, error: Utf8Error }
 }
 
@@ -123,21 +118,26 @@ impl TSParser {
         self.0.set_language(language)
     }
 
-    pub fn set_included_ranges(&mut self, ranges: &[TSRange]) -> Result<(), TSIncludedRangeError> {
+    pub fn set_included_ranges(&mut self, ranges: &[TSRange]) -> Result<(), TSIncludedRangesError> {
         self.0.set_included_ranges(ranges)
     }
 
-    pub fn parse(&mut self, text: &[u8], old_tree: Option<&tree_sitter::Tree>) -> Option<tree_sitter::Tree> {
-        self.0.parse(text, old_tree)
+    pub fn parse_file(&mut self, path: &Path) -> Result<TSTree, TreeCreateError> {
+        self.parse_bytes(fs::read(path)?)
+    }
+
+    pub fn parse_string(&mut self, text: String) -> Result<TSTree, TreeCreateError> {
+        self.parse_bytes(text.into_bytes())
+    }
+
+    pub fn parse_bytes(&mut self, byte_text: Vec<u8>) -> Result<TSTree, TreeCreateError> {
+        let tree = self.0.parse(&byte_text, None).ok_or(TreeCreateError::ParsingFailed)?;
+        TSTree::new(tree, byte_text)
     }
 }
 
 impl TSTree {
-    fn new(path: &Path, parser: &mut TSParser) -> Result<Self, TreeCreateError> {
-        let byte_text = fs::read(path)?;
-        let Some(tree) = parser.parse(&byte_text, None) else {
-            return Err(CodeCreateError::ParsingFailed)
-        };
+    fn new(tree: tree_sitter::Tree, byte_text: Vec<u8>) -> Result<Self, TreeCreateError> {
         Self::validate_utf8(&tree, &byte_text)?;
         let cached_data = CachedTreeData::new(&tree);
         Ok(Self { byte_text, tree, cached_data, marked_nodes: RefCell::new(IdSet::new()) })
@@ -226,10 +226,17 @@ impl<'tree> TSNode<'tree> {
         self.node.byte_range()
     }
 
+    pub fn range(&self) -> TSRange {
+        self.node.range()
+    }
+
+    fn byte_text(&self) -> &[u8] {
+        &self.tree.byte_text[self.byte_range()]
+    }
+
     pub fn text(&self) -> &str {
-        let byte_text = &self.tree.byte_text[self.start_byte()..self.end_byte()];
         // SAFETY: we ran validate_utf8 before constructing so all nodes are valid UTF-8
-        unsafe { std::str::from_utf8_unchecked(byte_text) }
+        unsafe { std::str::from_utf8_unchecked(self.byte_text()) }
     }
 
     pub fn all_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> {
@@ -318,6 +325,13 @@ impl<'tree> TSNode<'tree> {
         TSCursor::new(self.node.walk(), self.tree)
     }
 
+    /// NOTE: If tree-sitter has a way to convert a node into a sub-tree that will be really helpful...
+    ///   we cannot and don't really want to store a reference to a node here, and currently
+    ///   we need to re-parse the node's text to get a sub-tree.
+    pub fn into_tree(self, parser: &mut TSParser) -> Result<TSTree, TreeCreateError> {
+        parser.parse_bytes(self.byte_text().into_vec())
+    }
+
     /// *Panics* if already marked
     pub fn mark(&self) {
         let is_marked = self.tree.marked_nodes.borrow_mut().insert(self.id());
@@ -398,15 +412,15 @@ impl TSQueryCursor {
 
     pub fn matches<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryMatches<'query, 'tree> {
         TSQueryMatches {
-            query_matches: self.query_cursor.matches(&query.query, tree.tree.root_node(), node.tree),
+            query_matches: self.query_cursor.matches(&query.query, node.node, node.tree),
             tree: node.tree,
             query
         }
     }
 
-    pub fn captures<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSCaptures<'query, 'tree> {
+    pub fn captures<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryCaptures<'query, 'tree> {
         TSQueryCaptures {
-            query_captures: self.query_cursor.captures(&query, tree.tree.root_node(), node.tree),
+            query_captures: self.query_cursor.captures(&query, node.node, node.tree),
             tree: node.tree,
             query
         }
@@ -522,6 +536,14 @@ impl From<u64> for TSNodeId {
 impl Into<u64> for TSNodeId {
     fn into(self) -> u64 {
         self.0 as u64
+    }
+}
+
+impl Id for TSNodeId {}
+
+impl CachedTreeData {
+    fn new(_tree: &tree_sitter::Tree) -> Self {
+        CachedTreeData {}
     }
 }
 

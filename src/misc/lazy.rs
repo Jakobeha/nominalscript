@@ -1,7 +1,6 @@
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::{RwLock};
-use derive_more::{Display, Error, From};
+use derive_more::{Display, Error};
 use parking_lot::lock_api::RwLockReadGuard;
 use replace_with::replace_with_and_return;
 
@@ -19,14 +18,14 @@ pub struct Lazy<T, F: FnOnce() -> Result<T, LazyError>> {
 
 pub type DynLazy<'a, T> = Lazy<T, Box<dyn FnOnce() -> Result<T, LazyError> + 'a>>;
 
-enum LazyState<T, F: FnOnce() -> T> {
+enum LazyState<T, F: FnOnce() -> Result<T, LazyError>> {
     Value { value: T },
     IsBeingForced,
     ForcePanicked,
     Thunk { thunk: F },
 }
 
-impl<T, F: FnOnce() -> T> Lazy<T, F> {
+impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
     pub fn new(thunk: F) -> Lazy<T, F> {
         Lazy { state: RwLock::new(LazyState::Thunk { thunk }) }
     }
@@ -77,7 +76,13 @@ impl<T, F: FnOnce() -> T> Lazy<T, F> {
         // Importantly we have the lock released when we force,
         // so that we get cycle-detected and not a deadlock
         let value = thunk();
-        *self.state.write() = LazyState::Value { value };
+        *self.state.write() = match value {
+            Ok(value) => LazyState::Value { value },
+            // Will cause subsequent calls to get to return an "cycle detected",
+            // which is what we intend even though the cycle as passed
+            Err(LazyError::CycleDetected) => LazyState::IsBeingForced,
+            Err(LazyError::ForcePanicked) => LazyState::ForcePanicked,
+        };
         true
     }
 

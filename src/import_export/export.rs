@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use crate::analyses::types::TypeName;
+use crate::analyses::bindings::{TypeName, ValueName};
+use crate::analyses::types::{FatType, FatTypeDecl};
 use crate::misc::lazy::DynLazy;
 
 pub struct Exports<'a> {
-    value: HashMap<ValueName, DynLazy<'a, NominalTypeShape>>,
-    nominal: HashMap<TypeName, DynLazy<'a, NominalTypeDeclShape>>
+    value: HashMap<ValueName, DynLazy<'a, FatType>>,
+    nominal: HashMap<TypeName, DynLazy<'a, FatTypeDecl>>
 }
 
 /// Lazy transpile output which lets us access header information without transpiling the rest,

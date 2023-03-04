@@ -2,3 +2,6 @@
 pub mod lazy;
 /// Roaring bitmaps for ids (particularly node ids but any u64 value is ok)
 pub mod id_maps;
+mod chain;
+
+pub(crate) use chain::chain;

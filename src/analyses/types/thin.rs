@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use smol_str::SmolStr;
+use crate::analyses::bindings::TypeName;
 
 /// Thin type = type reference which is parsed from a string or AST node
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -11,17 +12,13 @@ pub enum ThinType {
     },
     Structural {
         nullability: Nullability,
-        structure: StructuralType<ThinType>
+        structure: TypeStructure<ThinType>
     },
     Nominal {
         nullability: Nullability,
         id: TypeIdent<ThinType>
     }
 }
-
-/// The string type used for all type names
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName(SmolStr);
 
 /// An identifier and its generic args
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +43,8 @@ pub enum Variance {
     Invariant,
     Covariant,
     Contravariant,
-    Bivariant
+    #[default]
+    Bivariant,
 }
 
 /// The JavaScript structure of instances of the type, if it is a compound type
@@ -81,14 +79,13 @@ pub enum TypeStructure<Type> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Type of a function return. Note that `Void` is different (and a subtype) of `Type(Any)`,
 /// which is the default.
 ///
 /// The inner type is boxed because this is only a field of `TypeStructure`
 pub enum ReturnType<Type> {
     Void,
-    #[default]
     Type(Box<Type>),
 }
 
@@ -135,23 +132,6 @@ pub enum Optionality {
     Required,
 }
 
-impl TypeName {
-    pub const RESERVED: [TypeName; 4] = [
-        TypeName::new_inline("Any"),
-        TypeName::new_inline("Never"),
-        TypeName::new_inline("Null"),
-        TypeName::new_inline("Void"),
-    ];
-
-    pub fn new(name: impl Into<SmolStr>) -> Self {
-        Self(name.into())
-    }
-
-    pub const fn new_inline(name: &'static str) -> Self {
-        Self(SmolStr::new_inline(name))
-    }
-}
-
 impl PartialOrd for Variance {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -166,5 +146,11 @@ impl PartialOrd for Variance {
             (Variance::Contravariant, Variance::Contravariant) => Some(Ordering::Equal),
             (Variance::Contravariant, Variance::Covariant) => None,
         }
+    }
+}
+
+impl<T: Default> Default for ReturnType<T> {
+    fn default() -> Self {
+        Self::Type(Default::default())
     }
 }

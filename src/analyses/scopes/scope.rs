@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use smol_str::SmolStr;
-use crate::analyses::types::TypeName;
+use crate::analyses::bindings::{TypeName, ValueName};
 use crate::ast::tree_sitter::TSNode;
 
 /// A local scope: contains all of the bindings in a scope node
