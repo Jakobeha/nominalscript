@@ -421,6 +421,7 @@ dependencies = [
  "smol_str",
  "thiserror",
  "tree-sitter",
+ "tree-sitter-nominalscript",
  "tsconfig",
 ]
 
@@ -773,6 +774,14 @@ checksum = "d4423c784fe11398ca91e505cdc71356b07b1a924fc8735cfab5333afe3e18bc"
 dependencies = [
  "cc",
  "regex",
+]
+
+[[package]]
+name = "tree-sitter-nominalscript"
+version = "0.20.2"
+dependencies = [
+ "cc",
+ "tree-sitter",
 ]
 
 [[package]]
