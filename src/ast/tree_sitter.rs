@@ -5,6 +5,7 @@ use std::iter::{once, Once};
 use std::str::Utf8Error;
 use derive_more::{Display, From, Error};
 use std::fmt::Write;
+use std::hash::{Hash, Hasher};
 use std::ops::{Range, RangeBounds};
 use crate::misc::id_maps::{Id, IdSet};
 
@@ -19,7 +20,7 @@ pub struct TSTree {
 #[derive(Debug)]
 struct CachedTreeData {}
 
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub struct TSNode<'tree> {
     node: tree_sitter::Node<'tree>,
     tree: &'tree TSTree,
@@ -370,6 +371,12 @@ impl<'tree> PartialEq<TSNode<'tree>> for TSNode<'tree> {
 }
 
 impl<'tree> Eq for TSNode<'tree> {}
+
+impl<'tree> Hash for TSNode<'tree> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id().hash(state)
+    }
+}
 
 impl<'tree> TSCursor<'tree> {
     fn new(cursor: tree_sitter::TreeCursor<'tree>, tree: &'tree TSTree) -> Self {

@@ -1,4 +1,4 @@
-use crate::analyses::types::FatType;
+use crate::analyses::types::{FatType, ReturnType};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::AstType;
 
@@ -7,6 +7,12 @@ pub struct InferredType<'tree> {
     pub inferred_from: TSNode<'tree>,
     /// If this type was not "inferred" but explicitly provided, this will be set.
     /// If this is set, `inferred_from` will usually be the type's node (but not enforced).
+    pub explicit_type: Option<AstType<'tree>>,
+}
+
+pub struct InferredReturnType<'tree> {
+    pub type_: ReturnType<FatType>,
+    pub return_node: Option<TSNode<'tree>>,
     pub explicit_type: Option<AstType<'tree>>,
 }
 
