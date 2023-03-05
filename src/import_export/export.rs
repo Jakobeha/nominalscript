@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{FatType, FatTypeDecl};
-use crate::misc::lazy::DynLazy;
 
 pub struct Exports<'a> {
     value: HashMap<ValueName, DynLazy<'a, FatType>>,

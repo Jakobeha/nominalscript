@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use smol_str::SmolStr;
 use crate::analyses::bindings::TypeName;
+use crate::ast::tree_sitter::TSNode;
 
 /// Thin type = type reference which is parsed from a string or AST node
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -24,6 +25,7 @@ pub enum ThinType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeIdent<Type> {
     pub name: TypeName,
+    // Remember: these don't need to be boxed because they are in a vec
     pub generic_args: Vec<Type>,
 }
 
@@ -34,6 +36,7 @@ pub struct TypeParam<Type> {
     /// Furthermore, if this is outside of the actual variance the compiler will log an error
     pub variance_bound: Variance,
     pub name: TypeName,
+    // Remember: these don't need to be boxed because they are in a vec
     /// Any instantiation of this parameter must inherit these
     pub supers: Vec<Type>
 }
@@ -58,12 +61,15 @@ pub enum TypeStructure<Type> {
         type_params: Vec<TypeParam<Type>>,
         /// The type of `this` in the function
         this_type: Box<Type>,
+        // Remember: these don't need to be boxed because they are in a vec
         /// The types of the arguments
         arg_types: Vec<OptionalType<Type>>,
         /// The type of the rest argument, pass `[]` for no rest argument
         rest_arg_type: Box<Type>,
         /// The type of the return value
-        return_type: ReturnType<Type>,
+        ///
+        /// The inner type is boxed because otherwise it's an inline field of `TypeStructure`
+        return_type: ReturnType<Box<Type>>,
     },
     Array {
         /// The type of the elements
@@ -82,11 +88,9 @@ pub enum TypeStructure<Type> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Type of a function return. Note that `Void` is different (and a subtype) of `Type(Any)`,
 /// which is the default.
-///
-/// The inner type is boxed because this is only a field of `TypeStructure`
 pub enum ReturnType<Type> {
     Void,
-    Type(Box<Type>),
+    Type(Type),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +134,127 @@ pub enum Nullability {
 pub enum Optionality {
     Optional,
     Required,
+}
+
+impl ThinType {
+    pub fn ident(name: &str) -> Self {
+        Self::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: TypeName::new(name),
+                generic_args: Vec::new(),
+            }
+        }
+    }
+
+    pub fn generic(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
+        Self::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: TypeName::new(name),
+                generic_args: generic_args.collect(),
+            }
+        }
+    }
+
+    pub fn func(
+        type_params: impl Iterator<Item=TypeParam<Self>>,
+        this_type: Self,
+        arg_types: impl Iterator<Item=OptionalType<Self>>,
+        rest_arg_type: Self,
+        return_type: ReturnType<Box<Self>>
+    ) -> Self {
+        Self::Structural {
+            nullability: Nullability::NonNullable,
+            structure: TypeStructure::Fn {
+                type_params: type_params.collect(),
+                this_type: Box::new(this_type),
+                arg_types: arg_types.collect(),
+                rest_arg_type: Box::new(rest_arg_type),
+                return_type,
+            }
+        }
+    }
+
+    pub fn array(element_type: Self) -> Self {
+        Self::Structural {
+            nullability: Nullability::NonNullable,
+            structure: TypeStructure::Array {
+                element_type: Box::new(element_type),
+            }
+        }
+    }
+
+    pub fn tuple(element_types: impl Iterator<Item=OptionalType<Self>>) -> Self {
+        Self::Structural {
+            nullability: Nullability::NonNullable,
+            structure: TypeStructure::Tuple {
+                element_types: element_types.collect(),
+            }
+        }
+    }
+
+    pub fn object(property_types: impl Iterator<Item=Field<OptionalType<Self>>>) -> Self {
+        Self::Structural {
+            nullability: Nullability::NonNullable,
+            structure: TypeStructure::Object {
+                property_types: property_types.collect(),
+            }
+        }
+    }
+
+    pub fn empty_rest_arg() -> Self {
+        Self::tuple(std::iter::empty())
+    }
+
+    pub fn nullable(self) -> Self {
+        match self {
+            Self::Any => Self::Any,
+            Self::Never { nullability: _ } => Self::Never { nullability: Nullability::Nullable },
+            Self::Structural { nullability: _, structure } => Self::Structural { nullability: Nullability::Nullable, structure },
+            Self::Nominal { nullability: _, id } => Self::Nominal { nullability: Nullability::Nullable, id },
+        }
+    }
+
+    pub fn nullable_if(self, nullable: bool) -> Self {
+        if nullable {
+            self.nullable()
+        } else {
+            self
+        }
+    }
+
+    pub fn make_nullable(&mut self) {
+        *self = self.nullable();
+    }
+
+    pub fn make_nullable_if(&mut self, nullable: bool) {
+        if nullable {
+            self.make_nullable();
+        }
+    }
+}
+
+impl<T> OptionalType<T> {
+    pub fn required(type_: T) -> Self {
+        Self {
+            optionality: Optionality::Required,
+            type_,
+        }
+    }
+
+    pub fn optional(type_: T) -> Self {
+        Self {
+            optionality: Optionality::Required,
+            type_,
+        }
+    }
+}
+
+impl<T> ReturnType<Box<T>> {
+    pub fn boxed(type_: T) -> Self {
+        Self::Type(Box::new(type_))
+    }
 }
 
 impl PartialOrd for Variance {

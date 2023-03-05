@@ -1,5 +1,6 @@
 use lazy_static::lazy_static;
 use crate::ast::tree_sitter::TSParser;
+use std::cell::RefCell;
 use tree_sitter_nominalscript::language_nominalscript;
 
 /// Wrapper for arbitrary tree-sitter nodes, queries, and other datatypes
@@ -10,6 +11,6 @@ pub mod queries;
 pub mod typed_nodes;
 
 lazy_static! {
-    pub static ref NOMINALSCRIPT_PARSER: TSParser =
-        TSParser::new(language_nominalscript()).expect("failed to load NominalScript parser");
+    pub static ref NOMINALSCRIPT_PARSER: RefCell<TSParser> =
+        RefCell::new(TSParser::new(language_nominalscript()).expect("failed to load NominalScript parser"));
 }

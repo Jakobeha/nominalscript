@@ -9,7 +9,7 @@ pub struct NominalGuard {
     /// The parameter binding
     pub param: ValueName,
     /// The body of the guard.
-    pub body: Vec<TSTree>
+    pub body: TSTree
 }
 
 /// Type declaration after we've resolved the supertypes
@@ -37,5 +37,42 @@ pub enum FatType {
         id: TypeIdent<FatType>,
         super_ids: Vec<TypeIdent<FatType>>,
         structure: Option<TypeStructure<FatType>>,
+    }
+}
+
+impl FatType {
+    pub fn nullable(self) -> Self {
+        match self {
+            Self::Never { .. } => self,
+            Self::Any => Self::Never { nullability: Nullability::Nullable },
+            Self::Structural { nullability: _, structure } => Self::Structural {
+                nullability: Nullability::Nullable,
+                structure
+            },
+            Self::Nominal { nullability: _, id, super_ids, structure } => Self::Nominal {
+                nullability: Nullability::Nullable,
+                id,
+                super_ids,
+                structure
+            }
+        }
+    }
+
+    pub fn nullable_if(self, nullable: bool) -> Self {
+        if nullable {
+            self.nullable()
+        } else {
+            self
+        }
+    }
+
+    pub fn make_nullable(&mut self) {
+        *self = self.nullable();
+    }
+
+    pub fn make_nullable_if(&mut self, nullable: bool) {
+        if nullable {
+            self.make_nullable();
+        }
     }
 }

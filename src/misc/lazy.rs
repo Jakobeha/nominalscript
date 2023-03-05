@@ -12,25 +12,26 @@ pub enum LazyError {
     ForcePanicked,
 }
 
-pub struct Lazy<T, F: FnOnce() -> Result<T, LazyError>> {
-    state: RwLock<LazyState<T, F>>
+pub struct Lazy<T, Origin> {
+    state: RwLock<LazyState<T, Origin>>
 }
 
-pub type DynLazy<'a, T> = Lazy<T, Box<dyn FnOnce() -> Result<T, LazyError> + 'a>>;
-
-enum LazyState<T, F: FnOnce() -> Result<T, LazyError>> {
+enum LazyState<T, Origin> {
     Value { value: T },
     IsBeingForced,
     ForcePanicked,
-    Thunk { thunk: F },
+    Thunk {
+        origin: Origin,
+        compute: fn(Origin) -> Result<T, LazyError>
+    },
 }
 
-impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
-    pub fn new(thunk: F) -> Lazy<T, F> {
-        Lazy { state: RwLock::new(LazyState::Thunk { thunk }) }
+impl<T, Origin> Lazy<T, Origin> {
+    pub fn new(origin: Origin, compute: fn(Origin) -> Result<T, LazyError>) -> Lazy<T, Origin> {
+        Lazy { state: RwLock::new(LazyState::Thunk { origin, compute }) }
     }
 
-    pub fn immediate(value: T) -> Lazy<T, F> {
+    pub fn immediate(value: T) -> Lazy<T, Origin> {
         Lazy { state: RwLock::new(LazyState::Value { value }) }
     }
 
@@ -65,10 +66,10 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
 
     fn force(&self) -> bool {
         let Some(thunk) = replace_with_and_return(&mut *self.state.write(), LazyState::ForcePanicked, |lock| {
-            let LazyState::Thunk { thunk } = lock else {
+            let LazyState::Thunk { origin, compute } = lock else {
                 return (None, lock);
             };
-            (Some(thunk), LazyState::IsBeingForced)
+            (Some(|| compute(origin)), LazyState::IsBeingForced)
         }) else {
             // Already forced or is being forced
             return false
@@ -86,12 +87,15 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
         true
     }
 
-    pub fn map<U, G: FnOnce(T) -> U>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
-        Lazy::new(|| self.get().map(|x| transform(&*x)))
-    }
-
-    pub fn and_then<U, G: FnOnce(T) -> Result<U, LazyError>>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
-        Lazy::new(|| self.get().and_then(|x| transform(&*x)))
+    pub fn and_then<U, AuxOrigin>(
+        self,
+        aux_origin: AuxOrigin,
+        new_compute: fn(T, AuxOrigin) -> Result<U, LazyError>
+    ) -> Lazy<U, (Origin, fn(Origin) -> Result<T, LazyError>, AuxOrigin)> {
+        Lazy::new((self.state, self.compute, aux_origin), |(origin, compute, aux_origin)| {
+            let value = compute(origin)?;
+            new_compute(value, aux_origin)
+        })
     }
 }
 

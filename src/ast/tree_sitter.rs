@@ -19,7 +19,7 @@ pub struct TSTree {
 #[derive(Debug)]
 struct CachedTreeData {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct TSNode<'tree> {
     node: tree_sitter::Node<'tree>,
     tree: &'tree TSTree,
@@ -362,6 +362,14 @@ impl<'tree> TSNode<'tree> {
         }
     }
 }
+
+impl<'tree> PartialEq<TSNode<'tree>> for TSNode<'tree> {
+    fn eq(&self, other: &TSNode<'tree>) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl<'tree> Eq for TSNode<'tree> {}
 
 impl<'tree> TSCursor<'tree> {
     fn new(cursor: tree_sitter::TreeCursor<'tree>, tree: &'tree TSTree) -> Self {
