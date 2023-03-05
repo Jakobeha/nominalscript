@@ -1,0 +1,62 @@
+type; Number
+type; Integer <; Number
+type; Natural <; Integer
+type; Boolean
+type; String
+type; Symbol
+type; Object
+type; Function
+type; Bigint
+// TODO: Specify functions on these
+type; Array<T> <; Object
+type; Set<T> <; Object
+type; Map<K, V> <; Object
+type; Promise<T> <; Object
+type; Generator<T> <; Object
+type; GeneratorFunction <; Function
+type; AsyncFunction <; Function
+type; AsyncGenerator<T> <; Object
+type; AsyncGeneratorFunction <; Function
+type; Iterable<T> <; Object
+type; Iterator<T> <; Object
+type; IterableIterator<T> <; Object
+type; AsyncIterable<T> <; Object
+type; AsyncIterator<T> <; Object
+type; AsyncIterableIterator<T> <; Object
+type; RegExp <; Object
+type; Date <; Object
+type; Error <; Object
+type; EvalError <; Error
+type; RangeError <; Error
+type; ReferenceError <; Error
+type; SyntaxError <; Error
+type; TypeError <; Error
+type; URIError <; Error
+type; ArrayBuffer <; Object
+type; SharedArrayBuffer <; Object
+type; DataView <; Object
+type; Int8Array <; Object
+type; Uint8Array <; Object
+type; Uint8ClampedArray <; Object
+type; Int16Array <; Object
+type; Uint16Array <; Object
+type; Int32Array <; Object
+type; Uint32Array <; Object
+type; Float32Array <; Object
+type; Float64Array <; Object
+type; BigInt64Array <; Object
+type; BigUint64Array <; Object
+type; Atomics <; Object
+type; JSON <; Object
+type; Math <; Object
+type; Reflect <; Object
+type; Intl <; Object
+type; WebAssembly <; Object
+
+type; Console <; {
+    log; (...Any) => Void
+    warn; (...Any) => Void
+    error; (...Any) => Void
+}
+
+declare const console; Console

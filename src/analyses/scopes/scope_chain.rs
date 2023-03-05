@@ -1,25 +1,49 @@
-use crate::analyses::scopes::{ModuleCtx, Scope};
-use crate::ast::tree_sitter::TSNode;
+use std::rc::Rc;
+use crate::analyses::scopes::{ModuleCtx, Scope, scope_parent_of};
+use crate::ast::tree_sitter::{TSCursor, TSNode};
+use crate::ast::typed_nodes::AstValueDecl;
 
 pub struct ScopeChain<'a, 'tree> {
     ctx: &'a ModuleCtx<'tree>,
-    scopes: Vec<(TSNode<'tree>, Scope<'tree>)>,
+    scopes: Vec<(TSNode<'tree>, Rc<Scope<'tree>>)>,
 }
 
 impl<'a, 'tree> ScopeChain {
-    pub fn new(ctx: &'a ModuleCtx<'tree>, scope_parent: TSNode<'tree>) -> Self {
+    //noinspection RsUnreachableCode (this inspection is bugged for IntelliJ with let-else statements)
+    pub fn new(ctx: &'a ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
         let mut scopes = Vec::new();
         let mut scope_parent = scope_parent;
         loop {
-            let scope = ctx.scopes.get(scope_parent);
+            let scope = ctx.scopes.get(scope_parent, c);
             scopes.push((scope_parent, scope));
-            scope_parent = scope_parent_of(scope_parent);
-            if scope_parent.is_null() {
-                break;
-            }
+            let Some(next_scope_parent) = scope_parent_of(scope_parent, c) else {
+                break
+            };
+            scope_parent = next_scope_parent;
         }
         scopes.reverse();
         Self { ctx, scopes }
+    }
+
+    pub fn push(&mut self, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) {
+        let scope = ctx.scopes.get(scope_parent, c);
+        self.scopes.push((scope_parent, scope));
+    }
+
+    pub fn pop(&mut self) -> Option<(TSNode<'tree>, Rc<Scope<'tree>>)> {
+        self.scopes.pop()
+    }
+
+    pub fn top(&self) -> Option<&(TSNode<'tree>, Rc<Scope<'tree>>)> {
+        self.scopes.last()
+    }
+
+    pub fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, Rc<Scope<'tree>>)> {
+        self.scopes.last_mut()
+    }
+
+    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, c: &mut TSCursor<'tree>) {
+        self.top_mut().expect("ScopeChain is empty").1.add_sequential(decl, c);
     }
 }
 

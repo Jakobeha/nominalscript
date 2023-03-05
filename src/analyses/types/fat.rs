@@ -1,10 +1,11 @@
-use crate::analyses::bindings::ValueName;
+use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{Nullability, TypeIdent, TypeParam, TypeStructure};
 use crate::ast::tree_sitter::TSTree;
 
 /// A nominal guard is a special function which is called after a nominal wrap expression,
 /// and checks that the value is of the correct type.
 /// If it returns false, the program will throw a TypeError.
+#[derive(Debug, Clone)]
 pub struct NominalGuard {
     /// The parameter binding
     pub param: ValueName,
@@ -13,10 +14,10 @@ pub struct NominalGuard {
 }
 
 /// Type declaration after we've resolved the supertypes
+#[derive(Debug, Clone)]
 pub struct FatTypeDecl {
     type_params: Vec<TypeParam<FatType>>,
     type_: FatType,
-    guard: NominalGuard
 }
 
 /// Fat type = type after we've resolved the supertypes so that they are also in this structure,
@@ -37,10 +38,20 @@ pub enum FatType {
         id: TypeIdent<FatType>,
         super_ids: Vec<TypeIdent<FatType>>,
         structure: Option<TypeStructure<FatType>>,
+        typescript_type: Option<TSTree>,
+        guard: Option<NominalGuard>,
     }
 }
 
 impl FatType {
+    pub fn never() -> Self {
+        Self::Never { nullability: Nullability::NonNullable }
+    }
+
+    pub fn null() -> Self {
+        Self::Never { nullability: Nullability::Nullable }
+    }
+
     pub fn nullable(self) -> Self {
         match self {
             Self::Never { .. } => self,
@@ -49,11 +60,13 @@ impl FatType {
                 nullability: Nullability::Nullable,
                 structure
             },
-            Self::Nominal { nullability: _, id, super_ids, structure } => Self::Nominal {
+            Self::Nominal { nullability: _, id, super_ids, structure, typescript_type, guard } => Self::Nominal {
                 nullability: Nullability::Nullable,
                 id,
                 super_ids,
-                structure
+                structure,
+                typescript_type,
+                guard,
             }
         }
     }
@@ -73,6 +86,31 @@ impl FatType {
     pub fn make_nullable_if(&mut self, nullable: bool) {
         if nullable {
             self.make_nullable();
+        }
+    }
+}
+
+impl TypeParam<FatType> {
+    pub fn into_type(self) -> FatType {
+        let (super_ids, structure, typescript_type, guard) = FatType::collapse_supers(self.supers);
+        FatType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                generic_args: Vec::new()
+            },
+            super_ids,
+            structure,
+            typescript_type,
+            guard
+        }
+    }
+
+    pub fn into_decl(self) -> FatTypeDecl {
+        FatTypeDecl {
+            // No higher-kinded types
+            type_params: Vec::new(),
+            type_: self.into_type(),
         }
     }
 }

@@ -2,7 +2,7 @@ use std::any::Any;
 use enquote::unquote;
 use once_cell::unsync::OnceCell;
 use smol_str::SmolStr;
-use crate::analyses::bindings::{Binding, LocalBinding, TypeName, ValueName};
+use crate::analyses::bindings::{ValueBinding, LocalValueBinding, TypeName, ValueName, LocalTypeBinding, LocalUses, TypeBinding};
 use crate::analyses::types::{FatType, FatTypeDecl, Field, InferredType, NominalGuard, OptionalType, ReturnType, ThinType, TypeParam, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
@@ -55,23 +55,23 @@ pub trait TypedAstNode<'tree>: AstNode<'tree> {
     }
 }
 
-pub trait AstBinding<'tree>: TypedAstNode<'tree> + LocalBinding<'tree> {
+pub trait AstBinding<'tree>: TypedAstNode<'tree> + LocalValueBinding<'tree> {
     fn name_ident(&self) -> &AstValueIdent<'tree>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AstValueIdent<'tree> {
     pub node: TSNode<'tree>,
     pub name: ValueName,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AstTypeIdent<'tree> {
     pub node: TSNode<'tree>,
     pub name: TypeName,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstTypeParameter<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstTypeIdent<'tree>,
@@ -80,24 +80,37 @@ pub struct AstTypeParameter<'tree> {
     pub resolved: OnceCell<TypeParam<FatType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstType<'tree> {
     pub node: TSNode<'tree>,
     pub shape: ThinType,
     pub resolved: OnceCell<FatType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstParameter<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
+    pub is_this_param: bool,
     pub is_rest_param: bool,
     pub type_: Option<AstType<'tree>>,
     pub inferred_type: OnceCell<InferredType<'tree>>,
     pub value: Option<TSNode<'tree>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+pub struct AstReturn<'tree> {
+    pub node: TSNode<'tree>,
+    pub returned_value: Option<TSNode<'tree>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AstThrow<'tree> {
+    pub node: TSNode<'tree>,
+    pub thrown_value: Option<TSNode<'tree>>,
+}
+
+#[derive(Debug)]
 pub struct AstValueDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
@@ -106,7 +119,7 @@ pub struct AstValueDecl<'tree> {
     pub value: Option<TSNode<'tree>>
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstFunctionDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
@@ -116,7 +129,7 @@ pub struct AstFunctionDecl<'tree> {
     pub inferred_return_type: OnceCell<InferredType<'tree>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstNominalGuard<'tree> {
     pub node: TSNode<'tree>,
     pub parameter: AstValueIdent<'tree>,
@@ -124,7 +137,7 @@ pub struct AstNominalGuard<'tree> {
     pub shape: NominalGuard,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstTypeDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstTypeIdent<'tree>,
@@ -135,7 +148,7 @@ pub struct AstTypeDecl<'tree> {
     pub resolved: OnceCell<FatTypeDecl>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstValueImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstValueIdent<'tree>,
@@ -143,7 +156,7 @@ pub struct AstValueImportSpecifier<'tree> {
     pub resolved_type: OnceCell<FatType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstTypeImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstTypeIdent<'tree>,
@@ -151,7 +164,7 @@ pub struct AstTypeImportSpecifier<'tree> {
     pub resolved_decl: OnceCell<FatTypeDecl>
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AstImportStatement<'tree> {
     pub node: TSNode<'tree>,
     pub path_node: TSNode<'tree>,
@@ -190,7 +203,9 @@ impl<'tree> AstTypeParameter<'tree> {
                 .collect::<Vec<_>>()
         }).unwrap_or_default();
         let thin = TypeParam {
-            variance_bound: Variance::Bivariant,
+            variance_bound: node.field_child("variance")
+                .map(Self::variance_from)
+                .unwrap_or_default(),
             name: name.name.clone(),
             supers: nominal_supertypes.iter().map(|t| t.shape.clone()).collect(),
         };
@@ -202,7 +217,32 @@ impl<'tree> AstTypeParameter<'tree> {
             resolved: OnceCell::new(),
         }
     }
+
+    fn variance_from(node: TSNode<'tree>) -> Variance {
+        match node.text() {
+            "biv" => Variance::Bivariant,
+            "cov" => Variance::Covariant,
+            "con" => Variance::Contravariant,
+            "inv" => Variance::Invariant,
+            _ => panic!("Invalid variance: {}", node.text()),
+        }
+    }
 }
+
+impl<'tree> TypeBinding<'tree> for AstTypeParameter<'tree> {
+    fn name(&self) -> &TypeName {
+        &self.name.name
+    }
+
+    fn resolve_decl(&self) -> Lazy<FatTypeDecl> {
+        match self.resolved.get() {
+            None => todo!(),
+            Some(decl) => Lazy::immediate(decl.clone().into_decl()),
+        }
+    }
+}
+
+impl<'tree> LocalTypeBinding<'tree> for AstTypeParameter<'tree> {}
 
 impl_ast_node_common!(AstType, [
     "nominal_type_identifier",
@@ -229,8 +269,6 @@ impl<'tree> AstType<'tree> {
         }
     }
 
-    // TODO: Allow this_type to be set (requires modifying the grammar),
-    // and optional fields/tuple elements
     fn parse(node: TSNode<'tree>) -> ThinType {
         match node.kind() {
             "nominal_type_identifier" => ThinType::ident(node.text()),
@@ -240,20 +278,19 @@ impl<'tree> AstType<'tree> {
                 node.named_child(1).unwrap().named_children(&mut node.walk()).map(Self::parse),
             ),
             "function_nominal_type" => {
-                let final_rest_param = node
-                    .named_child(1).unwrap()
-                    .field_child("rest_param");
+                let parameters = node.field_child("parameters").unwrap();
+                let this_param = parameters.field_child("this_param");
+                let rest_param = parameters.field_child("rest_param");
                 ThinType::func(
                     node.field_child("nominal_type_parameters").unwrap()
                         .named_children(&mut node.walk())
                         .map(|x| AstTypeParameter::new(x).thin),
-                    ThinType::Any,
-                    node.field_child("parameters").unwrap()
+                    this_param.map_or(ThinType::Any, Self::parse),
+                    parameters
                         .named_children(&mut node.walk())
-                        .filter(|x| x != final_rest_param)
-                        .map(Self::parse)
-                        .map(OptionalType::required),
-                    final_rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
+                        .filter(|x| x != this_param && x != rest_param)
+                        .map(Self::parse_optional),
+                    rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
                     Self::parse_return(node.field_child("return_type").unwrap()),
                 )
             }
@@ -262,8 +299,7 @@ impl<'tree> AstType<'tree> {
             ),
             "tuple_nominal_type" => ThinType::tuple(
                 node.named_children(&mut node.walk())
-                    .map(Self::parse)
-                    .map(OptionalType::required),
+                    .map(Self::parse_optional),
             ),
             "object_nominal_type" => ThinType::object(
                 node.named_children(&mut node.walk()).map(Self::parse_field)
@@ -279,36 +315,45 @@ impl<'tree> AstType<'tree> {
         match node.kind() {
             "nominal_property_signature" => {
                 let name = node.named_child(0).unwrap().text();
+                let is_optional = node.field_child("is_optional").is_some();
                 let type_ = Self::parse(node.named_child(1).unwrap().named_child(0).unwrap());
                 Field {
                     name: SmolStr::new(name),
-                    type_: OptionalType::required(type_),
+                    type_: OptionalType::new(type_, is_optional),
                 }
             }
             "nominal_method_signature" => {
                 let name = node.named_child(0).unwrap().text().to_string();
-                let final_rest_param = node
-                    .named_child(2).unwrap()
-                    .field_child("rest_param");
+                let is_optional = node.field_child("is_optional").is_some();
+                let parameters = node.named_child(2).unwrap();
+                let this_param = parameters.field_child("this_param");
+                let rest_param = parameters.field_child("rest_param");
                 let method_type = ThinType::func(
                     node.named_child(1).unwrap()
                         .named_children(&mut node.walk())
                         .map(|x| AstTypeParameter::new(x).thin),
-                    ThinType::Any,
+                    this_param.map_or(ThinType::Any, Self::parse),
                     node.named_child(2).unwrap()
                         .named_children(&mut node.walk())
-                        .filter(|x| x != final_rest_param)
-                        .map(Self::parse)
-                        .map(OptionalType::required),
-                    final_rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
+                        .filter(|x| x != this_param && x != rest_param)
+                        .map(Self::parse_optional),
+                    rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
                     Self::parse_return(node.named_child(3).unwrap()),
                 );
                 Field {
                     name: SmolStr::new(name),
-                    type_: OptionalType::required(method_type),
+                    type_: OptionalType::new(method_type, is_optional),
                 }
             }
             _ => panic!("unhandled node kind: {}", node.kind()),
+        }
+    }
+
+    fn parse_optional(node: TSNode<'tree>) -> OptionalType<ThinType> {
+        if node.kind() == "optional_nominal_type" {
+            OptionalType::optional(Self::parse(node.named_child(0).unwrap()))
+        } else {
+            OptionalType::required(Self::parse(node))
         }
     }
 
@@ -329,7 +374,8 @@ impl<'tree> AstParameter<'tree> {
         Self {
             node,
             name: AstValueIdent::new(name_node),
-            is_rest_param: name_node.kind() != "rest_pattern",
+            is_this_param: name_node.kind() == "this",
+            is_rest_param: name_node.kind() == "rest_pattern",
             type_: node.field_child("nominal_type").map(AstType::of_annotation),
             inferred_type: OnceCell::new(),
             value: node.field_child("value"),
@@ -341,10 +387,51 @@ impl<'tree> AstParameter<'tree> {
         Self {
             node,
             name: AstValueIdent::new(node),
+            is_this_param: false,
             is_rest_param: false,
             type_: None,
             inferred_type: OnceCell::new(),
             value: None,
+        }
+    }
+}
+
+impl<'tree> ValueBinding<'tree> for AstParameter<'tree> {
+    fn name(&self) -> &ValueName {
+        self.name.name()
+    }
+
+    fn resolve_type(&self) -> Lazy<FatType> {
+        match (self.inferred_type.get(), &self.type_) {
+            (Some(inferred_type), _) => Lazy::immediate(inferred_type.type_.clone()),
+            (None, None) => Lazy::immediate(FatType::Any),
+            (None, Some(type_)) => todo!()
+        }
+    }
+}
+
+impl<'tree> LocalValueBinding<'tree> for AstParameter<'tree> {
+    fn local_uses(&self) -> &LocalUses<'tree> {
+        todo!()
+    }
+}
+
+impl_ast_node_common!(AstReturn, ["return_statement"]);
+impl<'tree> AstReturn<'tree> {
+    fn _new(node: TSNode<'tree>) -> Self {
+        Self {
+            node,
+            returned_value: node.last_named_child(),
+        }
+    }
+}
+
+impl_ast_node_common!(AstThrow, ["throw_statement"]);
+impl<'tree> AstThrow<'tree> {
+    fn _new(node: TSNode<'tree>) -> Self {
+        Self {
+            node,
+            thrown_value: node.last_named_child(),
         }
     }
 }

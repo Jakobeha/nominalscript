@@ -1,6 +1,11 @@
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
-use crate::analyses::bindings::{TypeName, ValueName};
+use std::rc::Rc;
+use crate::analyses::bindings::{LocalTypeBinding, LocalValueBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::scopes::ExprTypeMap;
+use crate::analyses::types::{FatType, InferredReturnType, Nullability, ReturnType};
 use crate::ast::tree_sitter::TSNode;
+use crate::ast::typed_nodes::{AstNode, AstParameter, AstReturn, AstThrow, AstValueDecl};
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -15,15 +20,22 @@ pub struct Scope<'tree> {
 
 /// A local scope: contains all of the value bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.)
-pub struct ValueScope<'tree> {
-    hoisted: HashMap<ValueName, ValueBinding<'tree>>,
-    sequential: HashMap<ValueName, Vec<ValueBinding<'tree>>>,
-    return_: Option<Return<'tree>>,
-    throw: Option<Throw<'tree>>,
+pub struct ValueScope<'tree>(RefCell<_ValueScope<'tree>>);
+
+struct _ValueScope<'tree> {
+    params: Vec<Rc<AstParameter<'tree>>>,
+    hoisted: HashMap<ValueName, Rc<dyn LocalValueBinding<'tree>>>,
+    sequential: HashMap<ValueName, Vec<Rc<AstValueDecl<'tree>>>>,
+    return_: Option<AstReturn<'tree>>,
+    throw: Option<AstThrow<'tree>>,
 }
 
-pub struct TypeScope<'tree> {
-    hoisted: HashMap<TypeName, TypeBinding<'tree>>,
+/// A local scope: contains all of the type bindings in a scope node
+/// (top level, module, statement block, class declaration, arrow function, etc.)
+pub struct TypeScope<'tree>(RefCell<_TypeScope<'tree>>);
+
+struct _TypeScope<'tree> {
+    hoisted: HashMap<TypeName, Rc<dyn LocalTypeBinding<'tree>>>,
 }
 
 impl<'tree> Scope<'tree> {
@@ -34,24 +46,122 @@ impl<'tree> Scope<'tree> {
             types: TypeScope::new(),
         }
     }
+
+    pub fn set_params(&self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
+        assert!(!self.did_set_params, "set_params() can only be called once per scope");
+        self.values.set_params(params)
+    }
 }
 
 impl<'tree> ValueScope<'tree> {
     fn new() -> ValueScope<'tree> {
-        ValueScope {
+        ValueScope(RefCell::new(_ValueScope {
+            params: Vec::new(),
             hoisted: HashMap::new(),
             sequential: HashMap::new(),
             return_: None,
             throw: None,
+        }))
+    }
+
+    pub fn params(&self) -> Ref<'_, [Rc<AstParameter<'tree>>]> {
+        Ref::map(self.0.borrow(), |this| this.params.as_ref())
+    }
+
+    pub fn set_params(&self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
+        let mut this = self.0.borrow_mut();
+        debug_assert!(this.params.is_empty());
+        this.params = params.collect();
+        for param in &this.params {
+            this.hoisted.insert(param.name().clone(), param.clone());
+        }
+    }
+
+    pub fn add_hoisted(&self, decl: Rc<dyn LocalValueBinding<'tree>>) {
+        let mut this = self.0.borrow_mut();
+        this.hoisted.add_hoisted(decl)
+    }
+
+    pub fn hoisted(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
+        self.0.borrow().hoisted.get(name).cloned()
+    }
+
+    pub fn add_sequential(&self, decl: Rc<AstValueDecl<'tree>>) {
+        let mut this = self.0.borrow_mut();
+        this.sequential.entry(decl.name().clone()).or_default().push(decl)
+    }
+
+    pub fn has_any(&self, name: &ValueName) -> bool {
+        let this = self.0.borrow();
+        this.sequential.contains_key(name) || this.hoisted.contains_key(name)
+    }
+
+    pub fn get_last(&self, name: &ValueName) -> Option<Rc<dyn ValueBinding<'tree>>> {
+        let this = self.0.borrow();
+        if let Some(sequential) = this.sequential.get(name) {
+            return Some(sequential.last()
+                .expect("sequential should never be Some(<empty vec>)")
+                .clone())
+        }
+        this.hoisted.get(name).cloned()
+    }
+
+    pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
+        self.get(name, pos_node).is_some()
+    }
+
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+        let this = self.0.borrow();
+        return this.sequential.get(name).and_then(|sequential| {
+            sequential.iter()
+                .rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
+        }).or_else(|| this.hoisted.get(name)).cloned()
+    }
+
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+        let this = self.0.borrow();
+        this.sequential.get(name).and_then(|sequential| {
+            sequential.iter()
+                .rfind(|decl| decl.node().start_byte() <= pos_node.start_byte()
+                    && decl.node().end_byte() >= pos_node.end_byte())
+        }).cloned()
+    }
+
+    pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> InferredReturnType<'tree> {
+        let this = self.0.borrow();
+        match (this.return_.as_ref(), this.throw.as_ref()) {
+            (None, None) => InferredReturnType {
+                type_: ReturnType::Void,
+                return_node: None,
+                explicit_type: None,
+            },
+            (return_, Some(throw))
+            if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => InferredReturnType {
+                type_: ReturnType::Type(FatType::never()),
+                return_node: Some(throw.node),
+                explicit_type
+            },
+            (Some(return_), _) => {
+                let expr = return_.returned_value.and_then(|x| typed_exprs.get(x));
+                let (type_, explicit_type) = match expr {
+                    None => (FatType::Any, None),
+                    Some(expr) => (expr.type_, expr.explicit_type)
+                };
+                InferredReturnType {
+                    type_: ReturnType::Type(type_),
+                    return_node: Some(return_.node),
+                    explicit_type
+                }
+            }
         }
     }
 }
 
 impl<'tree> TypeScope<'tree> {
     fn new() -> TypeScope<'tree> {
-        TypeScope {
+        TypeScope(RefCell::new(_TypeScope {
             hoisted: HashMap::new(),
-        }
+        }))
     }
 }
 
@@ -144,122 +254,4 @@ export class NominalTypeDeclMap {
       shape => ({ shape, ast: type.ast })
     )
   }
-}
-
-export class Scope {
-  private _params: Param[] | null = null
-  private readonly hoisted: Map<string, HoistedAstBinding> = new Map()
-  private readonly sequential: Map<string, ValueDecl[]> = new Map()
-  public returnStmt: TSNode | null = null
-  public returnValue: TSNode | null = null
-  public throwStmt: TSNode | null = null
-  public throwValue: TSNode | null = null
-
-  constructor (readonly scopeNode: TSNode) {}
-
-  get params (): readonly Param[] | null {
-    return this._params
-  }
-
-  setParams (params: Param[]): void {
-    assert(this._params === null, 'already has params')
-    this._params = params
-    for (const param of params) {
-      this._addHoisted(param, true)
-    }
-  }
-
-  addHoisted (decl: HoistedAstBinding): void {
-    this._addHoisted(decl, false)
-  }
-
-  private _addHoisted (decl: HoistedAstBinding, allowParams: boolean): void {
-    assert(scopeParentOf(decl.node)?.id === decl instanceof Param ? scopeParentOf(this.scopeNode)!.id : this.scopeNode.id, 'node added to scope must be in that scope, not a parent or child scope')
-    assert(allowParams || !(decl instanceof Param), 'added a param outside of setting params')
-    this.hoisted.set(decl.name.node.text, decl)
-  }
-
-  getHoisted (name: string): HoistedAstBinding | null {
-    return this.hoisted.get(name) ?? null
-  }
-
-  addSequential (decl: ValueDecl): void {
-    assert(scopeParentOf(decl.node)?.id === this.scopeNode.id, 'node added to scope must be in that scope, not a parent or child scope')
-    const name = decl.name.node.text
-    if (!this.sequential.has(name)) {
-      this.sequential.set(name, [])
-    }
-    this.sequential.get(name)!.push(decl)
-  }
-
-  hasAny (name: string): boolean {
-    return this.sequential.has(name) || this.hoisted.has(name)
-  }
-
-  getLast (name: string): AstBinding | null {
-    return this.getSequentialLast(name) ?? this.getHoisted(name)
-  }
-
-  private getSequentialLast (name: string): ValueDecl | null {
-    if (!this.sequential.has(name)) {
-      return null
-    }
-    const decls = this.sequential.get(name)!
-    return decls[decls.length - 1]
-  }
-
-  has (name: string, posNode: TSNode): boolean {
-    return this.get(name, posNode) !== null
-  }
-
-  get (name: string, posNode: TSNode): AstBinding | null {
-    assert(GeneratorUtil.any(scopeParentsOf(posNode), parent => parent.id === this.scopeNode.id), 'Scope#get position node must be in that scope, not a parent or child scope')
-    return this.getSequential(name, posNode) ?? this.getHoisted(name)
-  }
-
-  private getSequential (name: string, posNode: TSNode): ValueDecl | null {
-    if (!this.sequential.has(name)) {
-      return null
-    }
-    const decls = this.sequential.get(name)!
-    return ArrayUtil.findLast(decls, decl => decl.node.startIndex <= posNode.node.startIndex)
-  }
-
-  getExactSequential (name: string, posNode: TSNode): ValueDecl {
-    if (!this.sequential.has(name)) {
-      throw new Error(`no sequential declaration for ${name} in scope:\n${this.scopeNode.text}`)
-    }
-    const decls = this.sequential.get(name)!
-    const result = ArrayUtil.findLast(decls, decl => (
-      decl.node.startIndex <= posNode.node.startIndex && decl.node.endIndex >= posNode.node.endIndex
-    ))
-    if (result === null) {
-      throw new Error(`no sequential declaration for ${name} in scope:\n${this.scopeNode.text}`)
-    }
-    return result
-  }
-
-  returnType (typedExprs: TypedExprs): NominalReturnTypeInferred {
-    if (this.throwValue !== null) {
-      return {
-        shape: NominalTypeShape.NEVER,
-        return: this.throwStmt,
-        typeAst: null
-      }
-    } else if (this.returnValue !== null) {
-      const expr = typedExprs.get(this.returnValue)
-      return {
-        shape: expr?.shape ?? null,
-        return: this.returnStmt,
-        typeAst: expr?.ast ?? null
-      }
-    } else {
-      return {
-        shape: NominalTypeShape.VOID,
-        return: this.returnStmt,
-        typeAst: null
-      }
-    }
-  }
-}
- */
+}*/

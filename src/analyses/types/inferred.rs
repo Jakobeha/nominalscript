@@ -2,6 +2,7 @@ use crate::analyses::types::{FatType, ReturnType};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::AstType;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferredType<'tree> {
     pub type_: FatType,
     pub inferred_from: TSNode<'tree>,
@@ -10,6 +11,7 @@ pub struct InferredType<'tree> {
     pub explicit_type: Option<AstType<'tree>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferredReturnType<'tree> {
     pub type_: ReturnType<FatType>,
     pub return_node: Option<TSNode<'tree>>,

@@ -137,6 +137,14 @@ pub enum Optionality {
 }
 
 impl ThinType {
+    pub fn never() -> Self {
+        Self::Never { nullability: Nullability::NonNullable }
+    }
+
+    pub fn null() -> Self {
+        Self::Never { nullability: Nullability::Nullable }
+    }
+
     pub fn ident(name: &str) -> Self {
         Self::Nominal {
             nullability: Nullability::NonNullable,
@@ -236,6 +244,13 @@ impl ThinType {
 }
 
 impl<T> OptionalType<T> {
+    pub fn new(type_: T, is_optional: bool) -> Self {
+        Self {
+            optionality: Optionality::from(is_optional),
+            type_,
+        }
+    }
+
     pub fn required(type_: T) -> Self {
         Self {
             optionality: Optionality::Required,
@@ -257,6 +272,12 @@ impl<T> ReturnType<Box<T>> {
     }
 }
 
+impl<T: Default> Default for ReturnType<T> {
+    fn default() -> Self {
+        Self::Type(Default::default())
+    }
+}
+
 impl PartialOrd for Variance {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -274,8 +295,22 @@ impl PartialOrd for Variance {
     }
 }
 
-impl<T: Default> Default for ReturnType<T> {
-    fn default() -> Self {
-        Self::Type(Default::default())
+impl From<bool> for Optionality {
+    fn from(is_optional: bool) -> Self {
+        if is_optional {
+            Self::Optional
+        } else {
+            Self::Required
+        }
+    }
+}
+
+impl From<bool> for Nullability {
+    fn from(is_nullable: bool) -> Self {
+        if is_nullable {
+            Self::Nullable
+        } else {
+            Self::NonNullable
+        }
     }
 }

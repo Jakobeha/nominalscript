@@ -2,38 +2,58 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use smol_str::SmolStr;
-use crate::analyses::types::FatType;
+use crate::analyses::types::{FatType, FatTypeDecl};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::AstValueIdent;
+use crate::ast::typed_nodes::{AstNode, AstValueIdent};
 use crate::misc::lazy::{Lazy, LazyError};
 
-/// Declares an identifier which can be referenced:
+/// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
-pub trait Binding {
+pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn resolve_type(&self) -> Lazy<&FatType>;
+    fn resolve_type(&self) -> Lazy<FatType>;
 }
 
-/// Binding inside the file. We track its local uses for type inference.
+/// Declares a type identifier which can be referenced:
+/// imported types, type declarations, type parameters, predefined globals, etc.
+pub trait TypeBinding {
+    fn name(&self) -> &TypeName;
+    fn resolve_decl(&self) -> Lazy<FatTypeDecl>;
+}
+
+/// [ValueBinding] inside the file. We track its local uses for type inference.
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
-pub trait LocalBinding<'tree>: Binding {
+pub trait LocalValueBinding<'tree>: AstNode<'tree> + ValueBinding {
     fn local_uses(&self) -> &LocalUses<'tree>;
 }
 
-/// Binding which can be referenced in its scope before when it was declared:
+/// [TypeBinding] inside the file. We do not track uses for inference.
+pub trait LocalTypeBinding<'tree>: AstNode<'tree> + TypeBinding {}
+
+/// [ValueBinding] which can be referenced in its scope before when it was declared:
 /// this includes type and function declarations, but not variable or "lexical" declarations.
 ///
-/// [HoistedBinding] and [LocalBinding] are not related,
-/// (although all imported bindings are currently hoisted unless `require` becomes supported)
-pub trait HoistedBinding: Binding {}
+/// [HoistedValueBinding] and [LocalValueBinding] are not related,
+/// (although all imported bindings are currently hoisted unless `require` becomes supported).
+///
+/// Also, all [TypeBinding]s are hoisted so this kind of trait doesn't make sense for them.
+pub trait HoistedValueBinding: ValueBinding {}
 
-/// Binding which is implicitly available to the file (available and not imported).
+/// [ValueBinding] which is implicitly available to the file (available and not imported).
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
-pub struct GlobalBinding {
+pub struct GlobalValueBinding {
     pub name: ValueName,
     pub type_: FatType
+}
+
+/// [TypeBinding] which is implicitly available to the file (available and not imported).
+///
+/// There are 3 kinds of bindings: local, imported, and global.
+pub struct GlobalTypeBinding {
+    pub name: TypeName,
+    pub decl: FatTypeDecl
 }
 
 pub struct LocalUses<'tree> {
@@ -52,17 +72,27 @@ pub struct ValueName(SmolStr);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeName(SmolStr);
 
-impl Binding for GlobalBinding {
+impl ValueBinding for GlobalValueBinding {
     fn name(&self) -> &ValueName {
         &self.name
     }
 
-    fn resolve_type(&self) -> Lazy<&FatType> {
-        Lazy::immediate(&self.type_)
+    fn resolve_type(&self) -> Lazy<FatType> {
+        Lazy::immediate(self.type_.clone())
     }
 }
 
-impl HoistedBinding for GlobalBinding {}
+impl TypeBinding for GlobalTypeBinding {
+    fn name(&self) -> &TypeName {
+        &self.name
+    }
+
+    fn resolve_decl(&self) -> Lazy<FatTypeDecl> {
+        Lazy::immediate(self.decl.clone())
+    }
+}
+
+impl HoistedValueBinding for GlobalValueBinding {}
 
 impl<'tree> LocalUses<'tree> {
     pub fn new() -> Self {

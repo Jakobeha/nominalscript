@@ -3,8 +3,8 @@ use crate::ast::tree_sitter::TSTree;
 
 pub struct ModuleCtx<'tree> {
     tree: &'tree TSTree,
-    scopes: ModuleScopes<'tree>,
-    typed_exprs: ExprTypeMap<'tree>,
+    pub scopes: ModuleScopes<'tree>,
+    pub typed_exprs: ExprTypeMap<'tree>,
 }
 
 impl<'tree> ModuleCtx<'tree> {
