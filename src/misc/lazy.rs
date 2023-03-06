@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use derive_more::{Display, Error};
+use derive_more::{Deref, Display, Error};
 use parking_lot::lock_api::RwLockReadGuard;
 use parking_lot::{MappedRwLockReadGuard, RwLock};
 use replace_with::replace_with_and_return;
@@ -20,7 +20,8 @@ pub trait LazyTrait<T> {
     fn get(&self) -> Result<LazyDeref<'_, T>, LazyError>;
 }
 
-pub struct LazyDeref<'a, T>(MappedRwLockReadGuard<'a, RwLock<LazyState<T, F>>, T>)
+#[derive(Debug, Deref)]
+pub struct LazyDeref<'a, T>(MappedRwLockReadGuard<'a, T>);
 
 pub type RcLazy<T> = Rc<dyn LazyTrait<T>>;
 
@@ -40,7 +41,25 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
         Lazy { state: RwLock::new(LazyState::Value { value }) }
     }
 
-    pub fn get(&self) -> Result<LazyDeref<'a, T>, LazyError> {
+    pub fn map<'a, U: 'a, G: FnOnce(T) -> U + 'a>(self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + 'a> {
+        Lazy::new(move || self.get().map(|x| transform(&*x)))
+    }
+
+    pub fn and_then<'a, U: 'a, G: FnOnce(T) -> Result<U, LazyError> + 'a>(self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + 'a> {
+        Lazy::new(move || self.get().and_then(|x| transform(&*x)))
+    }
+
+    pub fn map_ref<'a, U: 'a, G: FnOnce(T) -> U + 'a>(&'a self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + 'a> {
+        Lazy::new(move || self.get().map(|x| transform(&*x)))
+    }
+
+    pub fn and_then_ref<'a, U: 'a, G: FnOnce(T) -> Result<U, LazyError> + 'a>(&'a self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + 'a> {
+        Lazy::new(move || self.get().and_then(|x| transform(&*x)))
+    }
+}
+
+impl<T, F: FnOnce() -> Result<T, LazyError>> LazyTrait<T> for Lazy<T, F> {
+    fn get(&self) -> Result<LazyDeref<'_, T>, LazyError> {
         let mut error = None;
         if let Some(result) = RwLockReadGuard::try_map(self.state.read(), |state| match state {
             LazyState::Value { value } => Some(value),
@@ -55,7 +74,7 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
             // Need to get a write lock to force
             LazyState::Thunk { .. } => None
         }) {
-            return Ok(result);
+            return Ok(LazyDeref(result));
         } else if let Some(error) = error {
             return Err(error);
         }
@@ -68,7 +87,9 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
         // which is a mapped read lock value (stable deref >> deref with branches)
         self.get()
     }
+}
 
+impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
     fn force(&self) -> bool {
         let Some(thunk) = replace_with_and_return(&mut *self.state.write(), LazyState::ForcePanicked, |lock| {
             let LazyState::Thunk { thunk } = lock else {
@@ -90,20 +111,5 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
             Err(LazyError::ForcePanicked) => LazyState::ForcePanicked,
         };
         true
-    }
-
-    pub fn map<U, G: FnOnce(T) -> U>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
-        Lazy::new(|| self.get().map(|x| transform(&*x)))
-    }
-
-    pub fn and_then<U, G: FnOnce(T) -> Result<U, LazyError>>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
-        Lazy::new(|| self.get().and_then(|x| transform(&*x)))
-    }
-}
-
-// impl<'a, T> Lazy<T, Box<dyn FnOnce() -> Result<T, LazyError> + 'a>>
-impl<'a, T> DynLazy<'a, T> {
-    fn into_static(self) -> Result<DynLazy<'static, T>, LazyError> {
-        Ok(DynLazy::immediate(self.get()?))
     }
 }

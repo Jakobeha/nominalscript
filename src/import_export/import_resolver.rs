@@ -1,12 +1,13 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fmt::{Display, Formatter};
+use std::path::{Path, PathBuf};
 use nonempty::NonEmpty;
 
 /// Module resolution strategy *and* source root.
 /// Usually generated from `ImportResolveCtx.regular`,
 /// which takes a module root path and parses the tsconfig to load the other info.
 /// But it's also customizable, probably moreso than necessary.
-pub struct ImportResolution {
+pub struct ImportResolver {
     /// Whether to resolve absolute paths from `moduleRootPath`/node_modules,
     /// *and* resolve node module cached imports in `moduleRootPath`/node_modules/`module`/out/nominal/`remainderPath`
     pub resolve_node_modules: bool,
@@ -31,6 +32,7 @@ pub struct ResolvedNodeModulePath {
     pub remainder_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedPath {
     Regular { path: PathBuf },
     NodeModule {
@@ -39,6 +41,7 @@ pub enum ResolvedPath {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct ResolvedFatPath {
     /// Path to .ns or .d.ns. If .ns then all other paths are null
     pub nominalscript_path: Option<PathBuf>,
@@ -48,6 +51,110 @@ pub struct ResolvedFatPath {
     pub javascript_path: Option<PathBuf>,
     /// Path if this is an arbitrary file which is not js/ts/ns (e.g. json). If non-null then javascript_path is null
     pub arbitrary_path: Option<PathBuf>,
+}
+
+impl ResolvedFatPath {
+    pub fn ns(nominalscript_path: PathBuf) -> Self {
+        assert_eq!(nominalscript_path.extension(), Some("ns".as_ref()));
+        Self {
+            nominalscript_path: Some(nominalscript_path),
+            ..Default::default()
+        }
+    }
+
+    pub fn ts(
+        nominalscript_path: Option<PathBuf>,
+        typescript_path: PathBuf
+    ) -> Self {
+        if let Some(nominalscript_path) = nominalscript_path.as_deref() {
+            assert!(nominalscript_path.ends_with("d.ns"));
+        }
+        assert_eq!(typescript_path.extension(), Some("ts".as_ref()));
+        Self {
+            nominalscript_path,
+            typescript_path: Some(typescript_path),
+            ..Default::default()
+        }
+    }
+
+    pub fn js(
+        nominalscript_path: Option<PathBuf>,
+        typescript_path: Option<PathBuf>,
+        javascript_path: PathBuf
+    ) -> Self {
+        if let Some(nominalscript_path) = nominalscript_path.as_deref() {
+            assert!(nominalscript_path.ends_with("d.ns"));
+        }
+        if let Some(typescript_path) = typescript_path.as_deref() {
+            assert!(typescript_path.ends_with("d.ts"));
+        }
+        assert_eq!(javascript_path.extension(), Some("js".as_ref()));
+        Self {
+            nominalscript_path,
+            typescript_path,
+            javascript_path: Some(javascript_path),
+            ..Default::default()
+        }
+    }
+
+    pub fn arbitrary(
+        nominalscript_path: Option<PathBuf>,
+        typescript_path: Option<PathBuf>,
+        arbitrary_path: PathBuf
+    ) -> Self {
+        if let Some(nominalscript_path) = nominalscript_path.as_deref() {
+            assert!(nominalscript_path.ends_with("d.ns"));
+        }
+        if let Some(typescript_path) = typescript_path.as_deref() {
+            assert!(typescript_path.ends_with("d.ts"));
+        }
+        Self {
+            nominalscript_path,
+            typescript_path,
+            javascript_path: None,
+            arbitrary_path: Some(arbitrary_path)
+        }
+    }
+
+    pub fn null() -> Self {
+        Default::default()
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.nominalscript_path.is_none()
+            && self.typescript_path.is_none()
+            && self.javascript_path.is_none()
+            && self.arbitrary_path.is_none()
+    }
+}
+
+impl Display for ResolvedFatPath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut did_write = false;
+        if let Some(nominalscript_path) = self.nominalscript_path.as_ref() {
+            write!(f, "nominalscript @ {}", nominalscript_path.display())?;
+            did_write = true;
+        }
+        if let Some(typescript_path) = self.typescript_path.as_ref() {
+            if did_write { write!(", ")?; }
+            write!(f, "typescript @ {}", typescript_path.display())?;
+            did_write = true;
+        }
+        if let Some(javascript_path) = self.javascript_path.as_ref() {
+            if did_write { write!(", ")?; }
+            write!(f, "javascript @ {}", javascript_path.display())?;
+            did_write = true;
+        }
+        if let Some(arbitrary_path) = self.arbitrary_path.as_ref() {
+            if did_write { write!(", ")?; }
+            write!(f, "arbitrary @ {}", arbitrary_path.display())?;
+            did_write = true;
+        }
+        if !did_write {
+            write!(f, "null")?;
+        }
+        Ok(())
+    }
 }
 
 /*
