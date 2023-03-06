@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use smol_str::SmolStr;
+use derive_more::Display;
 use crate::analyses::types::{FatType, FatTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
@@ -65,11 +66,11 @@ struct Use<'tree> {
 }
 
 /// The string type used for all value names
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
 pub struct ValueName(SmolStr);
 
 /// The string type used for all type names
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
 pub struct TypeName(SmolStr);
 
 impl ValueBinding for GlobalValueBinding {

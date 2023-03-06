@@ -113,6 +113,27 @@ impl<'a> IntoIterator for &'a FileDiagnostics {
     }
 }
 
+impl FileDiagnostic {
+    pub fn from_global(global: GlobalDiagnostic, location: TSRange) -> Self {
+        Self {
+            level: global.level,
+            message: global.message,
+            additional_info: global.additional_info,
+            location
+        }
+    }
+
+    pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo>) {
+        self.additional_info.extend(info);
+    }
+}
+
+impl GlobalDiagnostic {
+    pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo>) {
+        self.additional_info.extend(info);
+    }
+}
+
 // region display
 impl Display for ProjectDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

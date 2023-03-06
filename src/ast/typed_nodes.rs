@@ -2,7 +2,7 @@ use std::any::Any;
 use enquote::unquote;
 use once_cell::unsync::OnceCell;
 use smol_str::SmolStr;
-use crate::analyses::bindings::{ValueBinding, LocalValueBinding, TypeName, ValueName, LocalTypeBinding, LocalUses, TypeBinding};
+use crate::analyses::bindings::{ValueBinding, LocalValueBinding, TypeName, ValueName, LocalTypeBinding, LocalUses, TypeBinding, HoistedValueBinding};
 use crate::analyses::types::{FatType, FatTypeDecl, Field, InferredType, NominalGuard, OptionalType, ReturnType, ThinType, TypeParam, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
@@ -416,6 +416,8 @@ impl<'tree> LocalValueBinding<'tree> for AstParameter<'tree> {
     }
 }
 
+impl<'tree> HoistedValueBinding<'tree> for AstParameter<'tree> {}
+
 impl_ast_node_common!(AstReturn, ["return_statement"]);
 impl<'tree> AstReturn<'tree> {
     fn _new(node: TSNode<'tree>) -> Self {
@@ -446,6 +448,27 @@ impl<'tree> AstValueDecl<'tree> {
             inferred_type: OnceCell::new(),
             value: node.field_child("value"),
         }
+    }
+}
+
+
+impl<'tree> ValueBinding<'tree> for AstValueDecl<'tree> {
+    fn name(&self) -> &ValueName {
+        self.name.name()
+    }
+
+    fn resolve_type(&self) -> Lazy<FatType> {
+        match (self.inferred_type.get(), &self.type_) {
+            (Some(inferred_type), _) => Lazy::immediate(inferred_type.type_.clone()),
+            (None, None) => Lazy::immediate(FatType::Any),
+            (None, Some(type_)) => todo!()
+        }
+    }
+}
+
+impl<'tree> LocalValueBinding<'tree> for AstValueDecl<'tree> {
+    fn local_uses(&self) -> &LocalUses<'tree> {
+        todo!()
     }
 }
 

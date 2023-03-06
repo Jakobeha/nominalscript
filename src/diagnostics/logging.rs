@@ -1,10 +1,12 @@
 use std::path::Path;
+use std::ptr::NonNull;
+use smallvec::SmallVec;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
 use crate::misc::lazy::LazyError;
 
 /// Allows you to log project (global or file) diagnostics.
 ///
-/// Methods which can log project diagnostics take this as a parameter named `e`.
+/// Methods which can log project diagnostics take this as a parameter named `e: &mut ProjectLogger<'_>`.
 /// They should not take [ProjectDiagnostics] in order to separate logging from printing,
 /// though the separation isn't actually necessary or used for anything.
 #[derive(Debug)]
@@ -12,11 +14,32 @@ pub struct ProjectLogger<'a>(&'a mut ProjectDiagnostics);
 
 /// Allows you to log file diagnostics.
 ///
-/// Methods which can log file diagnostics take this as a parameter named `e`.
-/// They should not take [ProjectDiagnostics] in order to separate logging from printing,
+/// Methods which can log file diagnostics take this as a parameter `e: &mut FileLogger<'_>`.
+/// They should not take [FileDiagnostics] in order to separate logging from printing,
 /// though the separation isn't actually necessary or used for anything.
 #[derive(Debug)]
 pub struct FileLogger<'a>(&'a mut FileDiagnostics);
+
+/// Allows you to log diagnostics for a type.
+///
+/// Type methods which can log diagnostics (e.g. unification) take this as a parameter named `e: TypeLogger` or
+/// `mut e: TypeLogger`. Instead of passing `e` directly to multiple children, you must use `e.with_context(...)`
+#[derive(Debug)]
+pub struct TypeLogger<'a, 'b: 'a, 'c: 'b>(_TypeLogger<'a, 'b, 'c>);
+
+#[derive(Debug)]
+enum _TypeLogger<'a, 'b: 'a, 'c: 'b> {
+    Base { base: TypeLoggerBase<'b, 'c> },
+    Derived { base: &'a mut TypeLoggerBase<'b, 'c> }
+}
+
+#[derive(Debug)]
+struct TypeLoggerBase<'b, 'c: 'b> {
+    file: &'b mut FileLogger<'c>,
+    inferred_loc: TSNode<'b>,
+    // RULE A: these are always active references (though may have different lifetimes)
+    context: SmallVec<[TypeLocPtr; 2]>
+}
 
 impl<'a> ProjectLogger<'a> {
     pub fn new(diagnostics: &'a mut ProjectDiagnostics) -> Self {
@@ -27,7 +50,7 @@ impl<'a> ProjectLogger<'a> {
         FileLogger(self.0.file(path))
     }
 
-    pub fn log_global(&mut self, diagnostic: GlobalDiagnostic) {
+    pub fn log(&mut self, diagnostic: GlobalDiagnostic) {
         self.0.insert_global(diagnostic)
     }
 }
@@ -63,10 +86,67 @@ impl<'a> FileLogger<'a> {
     }
 }
 
+impl<'c> FileLogger<'c> {
+    pub fn type_<'b>(&'b mut self, inferred_loc: TSNode<'b>) -> TypeLogger<'b, 'b, 'c> {
+        TypeLogger(_TypeLogger::Base { base: TypeLoggerBase {
+            file: self,
+            inferred_loc,
+            context: SmallVec::new()
+        } })
+    }
+}
+
+impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
+    pub fn with_context<'a2>(
+        &'a2 mut self,
+        context: TypeLoc<'_>
+    ) -> TypeLogger<'a2, 'b, 'c> {
+        // ^ RULE A -> will pop context on derived drop
+        self.base().context.push(context.as_ptr());
+        TypeLogger(_TypeLogger::Derived { base })
+    }
+
+    fn base(&mut self) -> &mut TypeLoggerBase<'b, 'c> {
+        match &mut self.0 {
+            _TypeLogger::Base { base } => base,
+            _TypeLogger::Derived { base } => base
+        }
+    }
+
+    pub fn log(&mut self, diagnostic: GlobalDiagnostic) {
+        let base = self.base();
+        let mut diagnostic = FileDiagnostic::from_global(
+            diagnostic,
+            base.inferred_loc.range()
+        );
+        for context in &base.context {
+            // v RULE A
+            let context = unsafe { context.as_ref() };
+            diagnostic.add_info(note!("in {}", context));
+        }
+        base.file.log(diagnostic)
+    }
+}
+
+impl<'a, 'b: 'a, 'c: 'b> Drop for _TypeLogger<'a, 'b, 'c> {
+    fn drop(&mut self) {
+        match self {
+            _TypeLogger::Base { base } => {
+                // Sanity check
+                debug_assert!(base.context.is_empty());
+            },
+            _TypeLogger::Derived { base } => {
+                // ^ RULE A: Must pop top context as it's no longer live
+                base.context.pop();
+            }
+        }
+    }
+}
+
 macro_rules! log {
     ($e:expr, $level:expr, $format:literal $(, $arg:expr)* $(,)? $(;
          $additional_info:expr)* $(;)?) => {
-        $e.log_global($crate::diagnostics::GlobalDiagnostic {
+        $e.log($crate::diagnostics::GlobalDiagnostic {
             level: $level,
             message: format!($format $(, $arg)*),
             additional_info: $crate::misc::chain![
@@ -176,6 +256,7 @@ macro_rules! note_if {
     };
 }
 pub(crate) use note_if;
+use crate::analyses::types::{TypeLoc, TypeLocPtr};
 
 #[cfg(test)]
 mod tests {

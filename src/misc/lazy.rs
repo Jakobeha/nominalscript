@@ -1,7 +1,7 @@
-use std::ops::Deref;
-use parking_lot::{RwLock};
+use std::rc::Rc;
 use derive_more::{Display, Error};
 use parking_lot::lock_api::RwLockReadGuard;
+use parking_lot::{MappedRwLockReadGuard, RwLock};
 use replace_with::replace_with_and_return;
 
 #[derive(Debug, Display, Error)]
@@ -12,30 +12,35 @@ pub enum LazyError {
     ForcePanicked,
 }
 
-pub struct Lazy<T, Origin> {
-    state: RwLock<LazyState<T, Origin>>
+pub struct Lazy<T, F: FnOnce() -> Result<T, LazyError>> {
+    state: RwLock<LazyState<T, F>>
 }
 
-enum LazyState<T, Origin> {
+pub trait LazyTrait<T> {
+    fn get(&self) -> Result<LazyDeref<'_, T>, LazyError>;
+}
+
+pub struct LazyDeref<'a, T>(MappedRwLockReadGuard<'a, RwLock<LazyState<T, F>>, T>)
+
+pub type RcLazy<T> = Rc<dyn LazyTrait<T>>;
+
+enum LazyState<T, F: FnOnce() -> Result<T, LazyError>> {
     Value { value: T },
     IsBeingForced,
     ForcePanicked,
-    Thunk {
-        origin: Origin,
-        compute: fn(Origin) -> Result<T, LazyError>
-    },
+    Thunk { thunk: F },
 }
 
-impl<T, Origin> Lazy<T, Origin> {
-    pub fn new(origin: Origin, compute: fn(Origin) -> Result<T, LazyError>) -> Lazy<T, Origin> {
-        Lazy { state: RwLock::new(LazyState::Thunk { origin, compute }) }
+impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
+    pub fn new(thunk: F) -> Lazy<T, F> {
+        Lazy { state: RwLock::new(LazyState::Thunk { thunk }) }
     }
 
-    pub fn immediate(value: T) -> Lazy<T, Origin> {
+    pub fn immediate(value: T) -> Lazy<T, F> {
         Lazy { state: RwLock::new(LazyState::Value { value }) }
     }
 
-    pub fn get(&self) -> Result<impl Deref<Target=T> + Send + Sync, LazyError> {
+    pub fn get(&self) -> Result<LazyDeref<'a, T>, LazyError> {
         let mut error = None;
         if let Some(result) = RwLockReadGuard::try_map(self.state.read(), |state| match state {
             LazyState::Value { value } => Some(value),
@@ -66,10 +71,10 @@ impl<T, Origin> Lazy<T, Origin> {
 
     fn force(&self) -> bool {
         let Some(thunk) = replace_with_and_return(&mut *self.state.write(), LazyState::ForcePanicked, |lock| {
-            let LazyState::Thunk { origin, compute } = lock else {
+            let LazyState::Thunk { thunk } = lock else {
                 return (None, lock);
             };
-            (Some(|| compute(origin)), LazyState::IsBeingForced)
+            (Some(thunk), LazyState::IsBeingForced)
         }) else {
             // Already forced or is being forced
             return false
@@ -87,15 +92,12 @@ impl<T, Origin> Lazy<T, Origin> {
         true
     }
 
-    pub fn and_then<U, AuxOrigin>(
-        self,
-        aux_origin: AuxOrigin,
-        new_compute: fn(T, AuxOrigin) -> Result<U, LazyError>
-    ) -> Lazy<U, (Origin, fn(Origin) -> Result<T, LazyError>, AuxOrigin)> {
-        Lazy::new((self.state, self.compute, aux_origin), |(origin, compute, aux_origin)| {
-            let value = compute(origin)?;
-            new_compute(value, aux_origin)
-        })
+    pub fn map<U, G: FnOnce(T) -> U>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
+        Lazy::new(|| self.get().map(|x| transform(&*x)))
+    }
+
+    pub fn and_then<U, G: FnOnce(T) -> Result<U, LazyError>>(&self, transform: G) -> Lazy<U, impl FnOnce() -> Result<U, LazyError> + '_> {
+        Lazy::new(|| self.get().and_then(|x| transform(&*x)))
     }
 }
 

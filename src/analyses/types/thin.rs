@@ -1,7 +1,28 @@
 use std::cmp::Ordering;
 use smol_str::SmolStr;
-use crate::analyses::bindings::TypeName;
-use crate::ast::tree_sitter::TSNode;
+use crate::analyses::bindings::{TypeName, ValueName};
+use crate::ast::tree_sitter::TSSubTree;
+
+/// Type declaration before we've resolved the supertypes
+#[derive(Debug, Clone)]
+pub struct ThinTypeDecl {
+    pub name: TypeName,
+    pub type_params: Vec<TypeParam<ThinType>>,
+    pub supertypes: Vec<ThinType>,
+    pub typescript_supertype: Option<TSSubTree>,
+    pub guard: Option<NominalGuard>,
+}
+
+/// A nominal guard is a special function which is called after a nominal wrap expression,
+/// and checks that the value is of the correct type.
+/// If it returns false, the program will throw a TypeError.
+#[derive(Debug, Clone)]
+pub struct NominalGuard {
+    /// The parameter binding
+    pub param: ValueName,
+    /// The body of the guard.
+    pub body: TSSubTree
+}
 
 /// Thin type = type reference which is parsed from a string or AST node
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,9 +64,13 @@ pub struct TypeParam<Type> {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Variance {
+    /// `lhs` must be equivalent to `rhs`, i.e. `lhs` and `rhs` must be subtypes of each other
     Invariant,
+    /// `lhs` must be a subtype of `rhs`
     Covariant,
+    /// `lhs` must be a supertype of `rhs`
     Contravariant,
+    /// `lhs` and `rhs` must not be incompatible, i.e. if `lhs` and `rhs` are inhabited `lhs & rhs` must be inhabited
     #[default]
     Bivariant,
 }
@@ -57,19 +82,8 @@ pub enum Variance {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeStructure<Type> {
     Fn {
-        /// Type parameters if polymorphic
-        type_params: Vec<TypeParam<Type>>,
-        /// The type of `this` in the function
-        this_type: Box<Type>,
-        // Remember: these don't need to be boxed because they are in a vec
-        /// The types of the arguments
-        arg_types: Vec<OptionalType<Type>>,
-        /// The type of the rest argument, pass `[]` for no rest argument
-        rest_arg_type: Box<Type>,
-        /// The type of the return value
-        ///
-        /// The inner type is boxed because otherwise it's an inline field of `TypeStructure`
-        return_type: ReturnType<Box<Type>>,
+        /// Function type. Boxed because it's large
+        fn_type: Box<FnType<Type>>,
     },
     Array {
         /// The type of the elements
@@ -80,9 +94,32 @@ pub enum TypeStructure<Type> {
         element_types: Vec<OptionalType<Type>>,
     },
     Object {
-        /// The type of the properties
-        property_types: Vec<Field<OptionalType<Type>>>,
+        /// The type of the fields
+        field_types: Vec<Field<OptionalType<Type>>>,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureKind {
+    Fn,
+    Array,
+    Tuple,
+    Object,
+}
+
+/// Function type structure
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnType<Type> {
+    /// Type parameters if polymorphic
+    pub type_params: Vec<TypeParam<Type>>,
+    /// The type of `this` in the function
+    pub this_type: Type,
+    /// The types of the arguments
+    pub arg_types: Vec<OptionalType<Type>>,
+    /// The type of the rest argument, pass `[]` for no rest argument
+    pub rest_arg_type: Type,
+    /// The type of the return value
+    pub return_type: ReturnType<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,16 +207,18 @@ impl ThinType {
         this_type: Self,
         arg_types: impl Iterator<Item=OptionalType<Self>>,
         rest_arg_type: Self,
-        return_type: ReturnType<Box<Self>>
+        return_type: ReturnType<Self>
     ) -> Self {
         Self::Structural {
             nullability: Nullability::NonNullable,
             structure: TypeStructure::Fn {
-                type_params: type_params.collect(),
-                this_type: Box::new(this_type),
-                arg_types: arg_types.collect(),
-                rest_arg_type: Box::new(rest_arg_type),
-                return_type,
+                fn_type: Box::new(FnType::new(
+                    type_params,
+                    this_type,
+                    arg_types,
+                    rest_arg_type,
+                    return_type
+                ))
             }
         }
     }
@@ -206,7 +245,7 @@ impl ThinType {
         Self::Structural {
             nullability: Nullability::NonNullable,
             structure: TypeStructure::Object {
-                property_types: property_types.collect(),
+                field_types: property_types.collect(),
             }
         }
     }
@@ -243,22 +282,51 @@ impl ThinType {
     }
 }
 
-impl<T> OptionalType<T> {
-    pub fn new(type_: T, is_optional: bool) -> Self {
+impl<Type> TypeStructure<Type> {
+    pub fn kind(&self) -> StructureKind {
+        match self {
+            TypeStructure::Fn { .. } => StructureKind::Fn,
+            TypeStructure::Array { .. } => StructureKind::Array,
+            TypeStructure::Tuple { .. } => StructureKind::Tuple,
+            TypeStructure::Object { .. } => StructureKind::Object,
+        }
+    }
+}
+
+impl<Type> FnType<Type> {
+    pub fn new(
+        type_params: impl Iterator<Item=TypeParam<Type>>,
+        this_type: Type,
+        arg_types: impl Iterator<Item=OptionalType<Type>>,
+        rest_arg_type: Type,
+        return_type: ReturnType<Type>
+    ) -> Self {
+        FnType {
+            type_params: type_params.collect(),
+            this_type,
+            arg_types: arg_types.collect(),
+            rest_arg_type,
+            return_type,
+        }
+    }
+}
+
+impl<Type> OptionalType<Type> {
+    pub fn new(type_: Type, is_optional: bool) -> Self {
         Self {
             optionality: Optionality::from(is_optional),
             type_,
         }
     }
 
-    pub fn required(type_: T) -> Self {
+    pub fn required(type_: Type) -> Self {
         Self {
             optionality: Optionality::Required,
             type_,
         }
     }
 
-    pub fn optional(type_: T) -> Self {
+    pub fn optional(type_: Type) -> Self {
         Self {
             optionality: Optionality::Required,
             type_,
@@ -266,15 +334,47 @@ impl<T> OptionalType<T> {
     }
 }
 
-impl<T> ReturnType<Box<T>> {
-    pub fn boxed(type_: T) -> Self {
-        Self::Type(Box::new(type_))
-    }
-}
-
-impl<T: Default> Default for ReturnType<T> {
+impl<Type: Default> Default for ReturnType<Type> {
     fn default() -> Self {
         Self::Type(Default::default())
+    }
+}
+
+impl Variance {
+    pub fn new(is_covariant: bool, is_contravariant: bool) -> Self {
+        match (is_covariant, is_contravariant) {
+            (true, true) => Variance::Bivariant,
+            (true, false) => Variance::Covariant,
+            (false, true) => Variance::Contravariant,
+            (false, false) => Variance::Invariant,
+        }
+    }
+
+    pub fn reversed(self) -> Self {
+        match self {
+            Variance::Bivariant => Variance::Bivariant,
+            Variance::Covariant => Variance::Contravariant,
+            Variance::Contravariant => Variance::Covariant,
+            Variance::Invariant => Variance::Invariant,
+        }
+    }
+
+    pub fn is_covariant(self) -> bool {
+        match self {
+            Variance::Bivariant => true,
+            Variance::Covariant => true,
+            Variance::Contravariant => false,
+            Variance::Invariant => false,
+        }
+    }
+
+    pub fn is_contravariant(self) -> bool {
+        match self {
+            Variance::Bivariant => true,
+            Variance::Covariant => false,
+            Variance::Contravariant => true,
+            Variance::Invariant => false,
+        }
     }
 }
 
@@ -291,6 +391,26 @@ impl PartialOrd for Variance {
             (Variance::Covariant, Variance::Contravariant) => None,
             (Variance::Contravariant, Variance::Contravariant) => Some(Ordering::Equal),
             (Variance::Contravariant, Variance::Covariant) => None,
+        }
+    }
+}
+
+impl StructureKind {
+    pub fn display(self) -> &'static str {
+        match self {
+            StructureKind::Fn => "function",
+            StructureKind::Array => "array",
+            StructureKind::Tuple => "tuple",
+            StructureKind::Object => "object",
+        }
+    }
+
+    pub fn a_display(self) -> &'static str {
+        match self {
+            StructureKind::Fn => "a function",
+            StructureKind::Array => "an array",
+            StructureKind::Tuple => "a tuple",
+            StructureKind::Object => "an object",
         }
     }
 }

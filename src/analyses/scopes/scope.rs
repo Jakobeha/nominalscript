@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use crate::analyses::bindings::{LocalTypeBinding, LocalValueBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
-use crate::analyses::types::{FatType, InferredReturnType, Nullability, ReturnType};
+use crate::analyses::types::{FatType, FatTypeDecl, InferredReturnType, Nullability, ReturnType, ThinType};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstNode, AstParameter, AstReturn, AstThrow, AstValueDecl};
+use crate::ast::typed_nodes::{AstNode, AstParameter, AstReturn, AstThrow, AstTypeDecl, AstValueDecl};
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -35,7 +35,7 @@ struct _ValueScope<'tree> {
 pub struct TypeScope<'tree>(RefCell<_TypeScope<'tree>>);
 
 struct _TypeScope<'tree> {
-    hoisted: HashMap<TypeName, Rc<dyn LocalTypeBinding<'tree>>>,
+    hoisted: HashMap<TypeName, Rc<AstTypeDecl<'tree>>>,
 }
 
 impl<'tree> Scope<'tree> {
@@ -163,35 +163,47 @@ impl<'tree> TypeScope<'tree> {
             hoisted: HashMap::new(),
         }))
     }
+
+    pub fn has_any(&self, name: &TypeName) -> bool {
+        let this = self.0.borrow();
+        this.hoisted.contains_key(name)
+    }
+
+    pub fn get(&self, name: &TypeName) -> Option<Rc<AstTypeDecl<'tree>>> {
+        let this = self.0.borrow();
+        this.hoisted.get(name).cloned()
+    }
+
+    pub fn set(&self, decl: AstTypeDecl<'tree>) {
+        let mut this = self.0.borrow_mut();
+        this.hoisted.insert(decl.name().clone(), Rc::new(decl));
+    }
+
+    pub fn immediate_supertypes(&self, type_: ThinType) -> FatType {
+        let ThinType::Nominal { id, nullability } = type_ else {
+            Vec::new()
+        };
+        self.ident_supertypes(id, ty)
+    }
+
+    fn ident_supertypes(&self, type_: ThinType) -> Vec<Rc<AstTypeDecl<'tree>>> {
+
+        let this = self.0.borrow();
+        let mut supertypes = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(name);
+        while let Some(name) = queue.pop_front() {
+            if let Some(decl) = this.hoisted.get(name) {
+                supertypes.push(decl.clone());
+                queue.extend(decl.supertypes().iter().map(|x| x.name()));
+            }
+        }
+        supertypes
+    }
 }
 
 /*
 export class NominalTypeDeclMap {
-  private readonly map: Map<string, NominalTypeDecl | NominalImportSpecifier> = new Map()
-
-  has (name: string): boolean {
-    return this.map.has(name)
-  }
-
-  get (name: string): NominalTypeDecl | NominalImportSpecifier | null {
-    return this.map.get(name) ?? null
-  }
-
-  async getShape (name: string, use: TSNode | null): Promise<
-  { shape: null, loc: TSNode | null } |
-  { shape: NominalTypeDeclShape, loc: TSNode }
-  > {
-    const decl = this.get(name)
-    if (decl === null) {
-      return { shape: null, loc: null }
-    }
-    const shape = unwrapImportResult(await decl.resolveNominal?.get(), decl.node, use)
-    return { shape, loc: decl.node }
-  }
-
-  set (name: string, decl: NominalTypeDecl | NominalImportSpecifier): void {
-    this.map.set(name, decl)
-  }
 
   async * getSupertypes (type: NominalTypeShape, use: TSNode): AsyncGenerator<NominalTypeShape> {
     if (!NominalTypeShape.isIdent(type)) {

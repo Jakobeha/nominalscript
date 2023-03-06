@@ -86,6 +86,8 @@ pub enum TreeCreateError {
     NotUtf8 { actual_index: usize, error: Utf8Error }
 }
 
+pub type TSSubTree = TSTree;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TraversalState {
     Start,
@@ -326,10 +328,10 @@ impl<'tree> TSNode<'tree> {
         TSCursor::new(self.node.walk(), self.tree)
     }
 
-    /// NOTE: If tree-sitter has a way to convert a node into a sub-tree that will be really helpful...
+    /// NOTE: If tree-sitter has a better way to convert a node into a sub-tree that would be great...
     ///   we cannot and don't really want to store a reference to a node here, and currently
     ///   we need to re-parse the node's text to get a sub-tree.
-    pub fn into_tree(self, parser: &mut TSParser) -> Result<TSTree, TreeCreateError> {
+    pub fn into_subtree(self, parser: &mut TSParser) -> Result<TSSubTree, TreeCreateError> {
         parser.parse_bytes(self.byte_text().into_vec())
     }
 
