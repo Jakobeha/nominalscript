@@ -1,25 +1,26 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use smol_str::SmolStr;
 use derive_more::Display;
 use crate::analyses::types::{FatType, FatTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
-use crate::misc::lazy::{Lazy, LazyError};
+use crate::misc::lazy::{Lazy, LazyError, RcLazy};
 
 /// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
 pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn resolve_type(&self) -> Lazy<FatType>;
+    fn resolve_type(&self) -> &RcLazy<FatType>;
 }
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
 pub trait TypeBinding {
     fn name(&self) -> &TypeName;
-    fn resolve_decl(&self) -> Lazy<FatTypeDecl>;
+    fn resolve_decl(&self) -> &RcLazy<FatTypeDecl>;
 }
 
 /// [ValueBinding] inside the file. We track its local uses for type inference.
@@ -46,7 +47,8 @@ pub trait HoistedValueBinding: ValueBinding {}
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalValueBinding {
     pub name: ValueName,
-    pub type_: FatType
+    pub type_: FatType,
+    resolved_type: RcLazy<FatType>
 }
 
 /// [TypeBinding] which is implicitly available to the file (available and not imported).
@@ -54,7 +56,8 @@ pub struct GlobalValueBinding {
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalTypeBinding {
     pub name: TypeName,
-    pub decl: FatTypeDecl
+    pub decl: FatTypeDecl,
+    resolved_decl: RcLazy<FatTypeDecl>
 }
 
 pub struct LocalUses<'tree> {
@@ -73,13 +76,33 @@ pub struct ValueName(SmolStr);
 #[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
 pub struct TypeName(SmolStr);
 
+impl GlobalValueBinding {
+    pub fn new(name: ValueName, type_: FatType) -> Self {
+        Self {
+            name,
+            type_: type_.clone(),
+            resolved_type: Rc::new(Lazy::immediate(type_)),
+        }
+    }
+}
+
 impl ValueBinding for GlobalValueBinding {
     fn name(&self) -> &ValueName {
         &self.name
     }
 
-    fn resolve_type(&self) -> Lazy<FatType> {
-        Lazy::immediate(self.type_.clone())
+    fn resolve_type(&self) -> RcLazy<FatType> {
+        Rc::new(Lazy::immediate(self.type_.clone()))
+    }
+}
+
+impl GlobalTypeBinding {
+    pub fn new(name: TypeName, decl: FatTypeDecl) -> Self {
+        Self {
+            name,
+            decl: decl.clone(),
+            resolved_decl: Rc::new(Lazy::immediate(decl)),
+        }
     }
 }
 
@@ -88,8 +111,8 @@ impl TypeBinding for GlobalTypeBinding {
         &self.name
     }
 
-    fn resolve_decl(&self) -> Lazy<FatTypeDecl> {
-        Lazy::immediate(self.decl.clone())
+    fn resolve_decl(&self) -> RcLazy<FatTypeDecl> {
+        Rc::new(Lazy::immediate(self.decl.clone()))
     }
 }
 

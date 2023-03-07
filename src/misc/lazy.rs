@@ -21,6 +21,7 @@ pub trait LazyTrait<T> {
 }
 
 #[derive(Debug, Deref)]
+#[deref(forward)]
 pub struct LazyDeref<'a, T>(MappedRwLockReadGuard<'a, T>);
 
 pub type RcLazy<T> = Rc<dyn LazyTrait<T>>;
@@ -90,6 +91,19 @@ impl<T, F: FnOnce() -> Result<T, LazyError>> LazyTrait<T> for Lazy<T, F> {
 }
 
 impl<T, F: FnOnce() -> Result<T, LazyError>> Lazy<T, F> {
+    /// Immediately sets this to resolved.
+    /// If the lazy was already forced returns the old value, otherwise does not force and returns `None`.
+    /// If the lazy was in a cycle or panic it will no longer be and return `None`.
+    pub fn replace(&self, value: T) -> Option<T> {
+        replace_with_and_return(&mut *self.state.write(), LazyState::ForcePanicked, |lock| {
+            let old_value = match lock {
+                LazyState::Value { value: old_value } => Some(old_value),
+                _ => None
+            };
+            (old_value, LazyState::Value { value })
+        })
+    }
+
     fn force(&self) -> bool {
         let Some(thunk) = replace_with_and_return(&mut *self.state.write(), LazyState::ForcePanicked, |lock| {
             let LazyState::Thunk { thunk } = lock else {

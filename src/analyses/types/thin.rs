@@ -282,6 +282,19 @@ impl ThinType {
     }
 }
 
+impl<Type> TypeParam<Type> {
+    pub fn map<F, NewType>(self, f: F) -> TypeParam<NewType>
+    where
+        F: FnMut(Type) -> NewType
+    {
+        TypeParam {
+            variance_bound: self.variance_bound,
+            name: self.name,
+            supers: self.supers.into_iter().map(f).collect(),
+        }
+    }
+}
+
 impl<Type> TypeStructure<Type> {
     pub fn kind(&self) -> StructureKind {
         match self {
