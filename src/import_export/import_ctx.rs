@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use derive_more::{Display, Error};
 use crate::import_export::export::TranspileOutHeader;
-use crate::import_export::import_resolver::{ImportResolver, ResolvedFatPath};
+use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError, ResolvedFatPath, ResolveFailure};
 
 #[derive(Debug, Clone, Display, Error, PartialEq, Eq)]
 pub enum ImportError {
@@ -12,6 +12,8 @@ pub enum ImportError {
     CouldNotResolve { #[error(not(source))] module_path: String },
     #[display(fmt = "cannot transpile located module because it it not nominalscript and has no nominalscript declaration ({})", fat_path)]
     NoNominalScript { #[error(not(source))] fat_path: ResolvedFatPath },
+    #[display(fmt = "file not found at path {}", "path.display()")]
+    CouldNotResolvePath { path: PathBuf, resolve_failure: ResolveFailure },
     #[display(fmt = "cannot transpile file at path because it's not nominalscript", "path.display()")]
     NotNominalScriptPath { #[error(not(source))] path: PathBuf },
     #[display(fmt = "could not load file at path {}: {}", "path.display()", error)]
@@ -35,12 +37,12 @@ impl ImportCache {
     fn cache_resolve_module(
         this: &RefCell<Self>,
         module: &str,
-        resolve: impl FnOnce() -> ResolvedFatPath
+        resolve: impl FnOnce() -> Result<ResolvedFatPath, ResolveFailure>
     ) -> Ref<'_, ResolvedFatPath> {
         if let Ok(fat_path) = Ref::filter_map(this.borrow(), |this| this.module_to_fat_path.get(module)) {
             fat_path
         } else {
-            let fat_path = resolve();
+            let fat_path = resolve().unwrap_or_default();
             this.borrow_mut().module_to_fat_path.insert(module.to_string(), fat_path);
             Ref::map(this.borrow(), |this| this.module_to_fat_path.get(module).unwrap())
         }
@@ -118,7 +120,7 @@ impl ImportCtx {
         let fat_path = ImportCache::cache_resolve_module(
             &self.cache,
             module_path,
-            || self.resolver.locate(&module_path, importer_path.as_ref())
+            || self.resolver.locate(&module_path, importer_path)
         );
         if fat_path.is_null() {
             return Err(ImportError::CouldNotResolve { module_path: module_path.to_string() });
@@ -143,7 +145,9 @@ impl ImportCtx {
         script_path: &Path,
         transpile: impl FnOnce() -> Result<TranspileOutHeader, ImportError>
     ) -> Result<Rc<TranspileOutHeader>, ImportError> {
-        let fat_path = self.resolver.locate_from_script_path(script_path)?;
+        let fat_path = self.resolver
+            .fat_script_path(script_path)
+            .map_err(|resolve_failure| ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure })?;
         if fat_path.nominalscript_path.is_none() {
             return Err(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() });
         }

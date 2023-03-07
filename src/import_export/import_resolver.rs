@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::iter::once;
 use std::path::{Path, PathBuf};
 use nonempty::NonEmpty;
+use derive_more::{Display, Error, From};
+use globset::{Glob, GlobSet, GlobSetBuilder};
+use tsconfig::TsConfig;
+use crate::misc::{chain, path};
 
 /// Module resolution strategy *and* source root.
 /// Usually generated from `ImportResolveCtx.regular`,
@@ -25,18 +30,16 @@ pub struct ImportResolver {
     pub module_root_path: PathBuf,
 }
 
-pub type GlobPaths = HashMap<String, NonEmpty<String>>;
-
-pub struct ResolvedNodeModulePath {
-    pub node_module: PathBuf,
-    pub remainder_path: String,
+pub struct GlobPaths {
+    pub globs: GlobSet,
+    pub glob_paths: Vec<NonEmpty<PathBuf>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedPath {
     Regular { path: PathBuf },
     NodeModule {
-        node_module: PathBuf,
+        node_module: String,
         remainder_path: String,
     }
 }
@@ -51,6 +54,203 @@ pub struct ResolvedFatPath {
     pub javascript_path: Option<PathBuf>,
     /// Path if this is an arbitrary file which is not js/ts/ns (e.g. json). If non-null then javascript_path is null
     pub arbitrary_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Display, Error, From)]
+pub enum ImportResolverCreateError {
+    #[display(fmt = "Failed to parse tsconfig.json: {}", error)]
+    TSConfigError { error: tsconfig::ConfigError },
+    IOError { error: std::io::Error },
+}
+
+#[derive(Debug, Clone, Display, Error)]
+pub struct ResolveFailure;
+
+impl ImportResolver {
+    pub fn regular(module_root_path: PathBuf) -> Result<ImportResolver, ImportResolverCreateError> {
+        let mut tsconfig_path = module_root_path;
+        tsconfig_path.push("tsconfig.json");
+        let tsconfig = match TsConfig::parse_file(&tsconfig_path) {
+            Ok(tsconfig) => Some(tsconfig),
+            Err(tsconfig::ConfigError::CouldNotFindFile(io_error))
+            if io_error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(ImportResolverCreateError::TSConfigError { error }),
+        };
+        let mut module_root_path = tsconfig_path;
+        module_root_path.pop();
+
+        Ok(ImportResolver {
+            resolve_node_modules: tsconfig
+                .and_then(|tsconfig| tsconfig.compiler_options)
+                .and_then(|compiler_options| compiler_options.module_resolution)
+                .filter(|module_resolution| matches!(module_resolution, tsconfig::ModuleResolutionMode::Node))
+                .is_some(),
+            absolute_import_source_paths: tsconfig
+                .and_then(|tsconfig| tsconfig.compiler_options)
+                .and_then(|compiler_options| compiler_options.paths)
+                .map(GlobPaths::from)
+                .unwrap_or_default(),
+            absolute_import_base_path: module_root_path.join(
+                tsconfig
+                    .and_then(|tsconfig| tsconfig.compiler_options)
+                    .and_then(|compiler_options| compiler_options.base_url)
+                    .unwrap_or_default()
+            ),
+            module_root_path,
+        })
+    }
+
+    pub fn locate(
+        &self,
+        module_path: &str,
+        importer_path: Option<&Path>
+    ) -> Result<ResolvedFatPath, ResolveFailure> {
+        let candidates = self.resolve_candidates_for_module_path(module_path, importer_path);
+        self.locate_from_resolved_candidates(candidates)
+    }
+
+    /// Resolves declaration files to get the fat version of `script_path`.
+    pub fn fat_script_path(
+        &self,
+        script_path: &Path
+    ) -> Result<ResolvedFatPath, ResolveFailure> {
+        self.locate_from_resolved_candidates(once(script_path.with_extension("")))
+    }
+
+    fn locate_from_resolved_candidates(
+        &self,
+        candidates: impl Iterator<Item=ResolvedPath>
+    ) -> Result<ResolvedFatPath, ResolveFailure> {
+        for candidate in candidates {
+            match candidate {
+                ResolvedPath::Regular { path } => {
+                    if let Ok(fat_path) = Self::locate_from_regular_candidate(path) {
+                        return Ok(fat_path);
+                    }
+                },
+                ResolvedPath::NodeModule { node_module, remainder_path } => {
+                    let node_module_path = path!(self.module_root_path.clone(), "node_modules", node_module);
+                    let d_ns_path = if_exists(path!(node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
+                    let d_ts_path = if_exists(path!(node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
+                    let js_path = if_exists(path!(node_module_path, "out", "lib", remainder_path).with_extension("js"));
+                    let arbitrary_path = if js_path.is_some() {
+                        None
+                    } else {
+                        if_exists(path!(node_module_path, "out", "resources", remainder_path));
+                    };
+                    if d_ns_path.is_none() || d_ts_path.is_none() || js_path.is_none() || arbitrary_path.is_none() {
+                        Ok(ResolvedFatPath {
+                            nominalscript_path: d_ns_path,
+                            typescript_path: d_ts_path,
+                            javascript_path: js_path,
+                            arbitrary_path,
+                        })
+                    } else if let Ok(fat_path) = Self::locate_from_regular_candidate(path!(node_module_path, "lib", remainder_path)) {
+                        return Ok(fat_path);
+                    }
+                }
+            }
+        }
+        Err(ResolveFailure)
+    }
+
+    fn locate_from_regular_candidate(path: PathBuf) -> Result<ResolvedFatPath, ResolveFailure> {
+        let d_ns_path = if_exists(path.with_extension("d.ns"));
+        let d_ts_path = if_exists(path.with_extension("d.ts"));
+        if let Some(extension) = path.extension().map(|extension| extension.to_str().unwrap_or("?")) {
+            // resolve path directly, we don't want to e.g. resolve a .ts into a .js
+            if path.exists() {
+                return match extension {
+                    "ns" => Ok(ResolvedFatPath::ns(path)),
+                    "ts" => Ok(ResolvedFatPath::ts(d_ns_path, path)),
+                    "js" => Ok(ResolvedFatPath::js(d_ns_path, d_ts_path, path)),
+                    _ => Ok(ResolvedFatPath::arbitrary(d_ns_path, d_ts_path, path)),
+                }
+            }
+            Err(ResolveFailure)
+        } else {
+            // try to infer extension
+            if let Some(ns_path) = if_exists(path.with_extension("ns")) {
+                return Ok(ResolvedFatPath::ns(ns_path))
+            } else if let Some(ts_path) = if_exists(path.with_extension("ts")) {
+                return Ok(ResolvedFatPath::ts(d_ns_path, ts_path))
+            } else if let Some(js_path) = if_exists(path.with_extension("js")) {
+                return Ok(ResolvedFatPath::js(d_ns_path, d_ts_path, js_path))
+            }
+            // TypeScript doesn't infer arbitrary extensions so neither do we
+            Err(ResolveFailure)
+        }
+    }
+
+    fn resolve_candidates_for_module_path(
+        &self,
+        module_path: &str,
+        importer_path: Option<&Path>
+    ) -> impl Iterator<Item=ResolvedPath> {
+        let importer_dir = importer_path.and_then(|importer_path| importer_path.parent());
+        let relative = importer_dir.map(|importer_dir| importer_dir.join(module_path));
+        let is_only_relative = module_path.starts_with("./") || module_path.starts_with("../");
+        let from_paths = if is_only_relative {
+            None
+        } else {
+            Some(self.absolute_import_source_paths.resolve(&self.absolute_import_base_path, module_path))
+        }.into_iter().flatten();
+        let from_node_modules = if is_only_relative || !self.resolve_node_modules {
+            None
+        } else {
+            Some(Self::resolve_node_module_candidates(module_path))
+        }.into_iter().flatten();
+        chain!(relative, from_paths, from_node_modules)
+    }
+
+    fn resolve_node_module_candidates(module_path: &str) -> impl Iterator<Item=ResolvedPath> {
+        module_path.split_once("/").map(|(node_module, remainder_path)| {
+            ResolvedPath::NodeModule {
+                node_module: node_module.to_string(),
+                remainder_path: remainder_path.to_string()
+            }
+        }).into_iter()
+    }
+}
+
+impl GlobPaths {
+    pub fn resolve(&self, base_path: &Path, path: &str) -> impl Iterator<Item=PathBuf> {
+        self.globs.matches(path).into_iter().flat_map(|match_idx| {
+            self.glob_paths[match_idx].map(|resolved_path| {
+                path!(base_path.clone(), resolved_path.clone(), path)
+            })
+        })
+    }
+}
+
+impl From<HashMap<String, Vec<String>>> for GlobPaths {
+    fn from(value: HashMap<String, Vec<String>>) -> Self {
+        value.into_iter().collect()
+    }
+}
+
+impl FromIterator<(String, Vec<String>)> for GlobPaths {
+    fn from_iter<T: IntoIterator<Item=(String, Vec<String>)>>(iter: T) -> Self {
+        iter.into_iter()
+            .filter(|(_, paths)| !paths.is_empty())
+            .map(|(glob, paths)| (Glob::new(glob), NonEmpty::from_vec(paths).unwrap().map(PathBuf::from)))
+            .collect()
+    }
+}
+
+impl FromIterator<(Glob, NonEmpty<PathBuf>)> for GlobPaths {
+    fn from_iter<T: IntoIterator<Item=(Glob, NonEmpty<PathBuf>)>>(iter: T) -> Self {
+        let mut globs = GlobSetBuilder::new();
+        let mut glob_paths = Vec::new();
+        for (glob, paths) in iter {
+            globs.add(glob);
+            glob_paths.push(paths);
+        }
+        Self {
+            globs: GlobSet::from_iter(globs).unwrap(),
+            glob_paths,
+        }
+    }
 }
 
 impl ResolvedFatPath {
@@ -157,177 +357,10 @@ impl Display for ResolvedFatPath {
     }
 }
 
-/*
-
-export module ImportResolveCtx {
-  export async function regular (moduleRootPath: string): Promise<ImportResolveCtx> {
-    let tsConfig!: any
-    try {
-      tsConfig = await fs.readJson(pathlib.join(moduleRootPath, 'tsconfig.json'))
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') {
-        throw e
-      }
-      tsConfig = {}
+fn if_exists(path: PathBuf) -> Option<PathBuf> {
+    if path.exists() {
+        Some(path)
+    } else {
+        None
     }
-
-    return {
-      resolveNodeModules: tsConfig?.compilerOptions?.moduleResolution?.toLowerCase()?.contains('node') ?? false,
-      absoluteImportSourcePaths: tsConfig?.compilerOptions?.paths ?? {},
-      absoluteImportBasePath: pathlib.join(moduleRootPath, tsConfig?.compilerOptions?.baseUrl ?? '.'),
-      moduleRootPath,
-      useCaches: true
-    }
-  }
-
-  export async function locateFromModulePath (
-    ctx: ImportResolveCtx,
-    modulePath: string,
-    importerPath: string | null = null
-  ): Promise<ResolvedFatPath | null> {
-    return await locateFromResolvedCandidates(ctx, resolveCandidatesForModulePath(ctx, modulePath, importerPath))
-  }
-
-  export async function locateFromScriptPath (
-    ctx: ImportResolveCtx,
-    scriptPath: string
-  ): Promise<ResolvedFatPath | null> {
-    return await locateFromResolvedCandidates(ctx, [removeExtension(scriptPath)])
-  }
-
-  export async function locateFromResolvedCandidates (ctx: ImportResolveCtx, candidates: ResolvedPath[]): Promise<ResolvedFatPath | null> {
-    let nominalscriptDeclPath: `${string}.d.ns` | null = null
-    let typescriptDeclPath: `${string}.d.ts` | null = null
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string') {
-        const scriptPathBase = candidate
-        if (await fs.pathExists(scriptPathBase)) {
-          // Don't check for .d.*s because if we resolve an absolute declaration,
-          // we only want to import the declaration anyways
-          if (scriptPathBase.endsWith('.ns')) {
-            return {
-              nominalscriptPath: scriptPathBase as `${string}.ns`,
-              typescriptPath: null,
-              javascriptPath: null,
-              arbitraryPath: null
-            }
-          } else if (scriptPathBase.endsWith('.ts')) {
-            return {
-              nominalscriptPath: nominalscriptDeclPath,
-              typescriptPath: scriptPathBase as `${string}.ts`,
-              javascriptPath: null,
-              arbitraryPath: null
-            }
-          } else if (scriptPathBase.endsWith('.js')) {
-            return {
-              nominalscriptPath: nominalscriptDeclPath,
-              typescriptPath: typescriptDeclPath,
-              javascriptPath: scriptPathBase as `${string}.js`,
-              arbitraryPath: null
-            }
-          } else {
-            return {
-              nominalscriptPath: nominalscriptDeclPath,
-              typescriptPath: typescriptDeclPath,
-              javascriptPath: null,
-              arbitraryPath: scriptPathBase
-            }
-          }
-        }
-        if (await fs.pathExists(`${scriptPathBase}.ns`)) {
-          return {
-            nominalscriptPath: `${scriptPathBase}.ns`,
-            typescriptPath: null,
-            javascriptPath: null,
-            arbitraryPath: null
-          }
-        } else if (await fs.pathExists(`${scriptPathBase}.d.ns`)) {
-          nominalscriptDeclPath = `${scriptPathBase}.d.ns`
-        }
-        if (await fs.pathExists(`${scriptPathBase}.ts`)) {
-          return {
-            nominalscriptPath: nominalscriptDeclPath,
-            typescriptPath: `${scriptPathBase}.ts`,
-            javascriptPath: null,
-            arbitraryPath: null
-          }
-        } else if (await fs.pathExists(`${scriptPathBase}.d.ts`)) {
-          typescriptDeclPath = `${scriptPathBase}.d.ts`
-        }
-        if (await fs.pathExists(`${scriptPathBase}.js`)) {
-          return {
-            nominalscriptPath: nominalscriptDeclPath,
-            typescriptPath: typescriptDeclPath,
-            javascriptPath: `${scriptPathBase}.js`,
-            arbitraryPath: null
-          }
-        }
-        // Failed to resolve (we don't check arbitrary extensions)
-      } else {
-        const { nodeModule, remainderPath } = candidate
-        const nodeModulePath = pathlib.join(ctx.moduleRootPath, 'node_modules', nodeModule)
-        const nominalscriptDeclTestPath = pathlib.join(nodeModulePath, 'out', 'nominal', 'lib', `${remainderPath}.d.ns`) as `${string}.d.ns`
-        const typescriptDeclTestPath = pathlib.join(nodeModulePath, 'out', 'types', 'lib', `${remainderPath}.d.ts`) as `${string}.d.ts`
-        const javascriptTestPath = pathlib.join(nodeModulePath, 'out', 'lib', `${remainderPath}.js`) as `${string}.js`
-        const arbitraryTestPath = pathlib.join(nodeModulePath, 'out', 'resources', remainderPath)
-        const nominalscriptPath = await fs.pathExists(nominalscriptDeclTestPath) ? nominalscriptDeclTestPath : nominalscriptDeclPath
-        const typescriptPath = await fs.pathExists(typescriptDeclTestPath) ? typescriptDeclTestPath : typescriptDeclPath
-        const javascriptPath = await fs.pathExists(javascriptTestPath) ? javascriptTestPath : null
-        const arbitraryPath = javascriptPath === null && await fs.pathExists(arbitraryTestPath) ? arbitraryTestPath : null
-        if (nominalscriptPath !== null || typescriptPath !== null || javascriptPath !== null || arbitraryPath !== null) {
-          // Can prove that this satisfies ResolvedFatPath's extra constraints but TypeScript can't
-          // TODO: remove lint disable and uncomment satisfies when esbuild supports it
-          // eslint-disable-next-line @typescript-eslint/consistent-type-assertions
-          return {
-            nominalscriptPath,
-            typescriptPath,
-            javascriptPath,
-            arbitraryPath
-          } as ResolvedFatPath
-          // } satisfies _ResolvedFatPath as ResolvedFatPath
-        }
-        // Failed to resolve a node module path
-      }
-    }
-    return null
-  }
-
-  function resolveCandidatesForModulePath (
-    ctx: ImportResolveCtx,
-    modulePath: string,
-    importerPath: string | null = null
-  ): ResolvedPath[] {
-    const importerDir = importerPath === null ? null : pathlib.dirname(importerPath)
-    const relative = importerDir === null ? [] : [pathlib.join(importerDir, modulePath)]
-
-    const isOnlyRelative = modulePath.startsWith('./') || modulePath.startsWith('../')
-    const fromPaths = isOnlyRelative
-      ? []
-      : GlobPaths.resolve(ctx.absoluteImportSourcePaths, ctx.absoluteImportBasePath, modulePath)
-    const fromNodeModules = isOnlyRelative || !ctx.resolveNodeModules
-      ? []
-      : resolveNodeModuleCandidates(modulePath)
-
-    return [...relative, ...fromPaths, ...fromNodeModules]
-  }
-
-  function resolveNodeModuleCandidates (path: string): ResolvedNodeModulePath[] {
-    const [nodeModule, ...remainder] = path.split('/')
-    const remainderPath = remainder.join('/')
-    return [{ nodeModule, remainderPath }]
-  }
 }
-
-export module GlobPaths {
-  export function resolve (globPaths: GlobPaths, basePath: string, path: string): string[] {
-    const resolved: string[] = []
-    for (const glob in globPaths) {
-      if (minimatch(path, glob)) {
-        resolved.push(...globPaths[glob].map(globPath => pathlib.join(basePath, globPath.replace('*', path))))
-      }
-    }
-    return resolved
-  }
-}
-
- */
