@@ -6,6 +6,7 @@ use nonempty::NonEmpty;
 use derive_more::{Display, Error, From};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use tsconfig::TsConfig;
+use crate::import_export::export::ModulePath;
 use crate::misc::{chain, path};
 
 /// Module resolution strategy *and* source root.
@@ -102,7 +103,7 @@ impl ImportResolver {
 
     pub fn locate(
         &self,
-        module_path: &str,
+        module_path: &ModulePath,
         importer_path: Option<&Path>
     ) -> Result<ResolvedFatPath, ResolveFailure> {
         let candidates = self.resolve_candidates_for_module_path(module_path, importer_path);
@@ -184,7 +185,7 @@ impl ImportResolver {
 
     fn resolve_candidates_for_module_path(
         &self,
-        module_path: &str,
+        module_path: &ModulePath,
         importer_path: Option<&Path>
     ) -> impl Iterator<Item=ResolvedPath> {
         let importer_dir = importer_path.and_then(|importer_path| importer_path.parent());
@@ -203,7 +204,7 @@ impl ImportResolver {
         chain!(relative, from_paths, from_node_modules)
     }
 
-    fn resolve_node_module_candidates(module_path: &str) -> impl Iterator<Item=ResolvedPath> {
+    fn resolve_node_module_candidates(module_path: &ModulePath) -> impl Iterator<Item=ResolvedPath> {
         module_path.split_once("/").map(|(node_module, remainder_path)| {
             ResolvedPath::NodeModule {
                 node_module: node_module.to_string(),

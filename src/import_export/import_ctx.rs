@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use derive_more::{Display, Error};
-use crate::import_export::export::TranspileOutHeader;
+use crate::import_export::export::{ModulePath, TranspileOutHeader};
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError, ResolvedFatPath, ResolveFailure};
 
 /// Caches and resolves imports.
@@ -32,7 +32,7 @@ pub enum ImportError {
 
 /// Caches imports
 struct ImportCache {
-    module_to_fat_path: HashMap<String, ResolvedFatPath>,
+    module_to_fat_path: HashMap<ModulePath, ResolvedFatPath>,
     fat_path_to_transpile_out: HashMap<ResolvedFatPath, Result<Rc<TranspileOutHeader>, ImportError>>
 }
 
@@ -53,7 +53,7 @@ impl ImportCtx {
     /// Otherwise, calls `transpile` with the actual script path
     pub fn resolve_and_cache_transpile(
         &self,
-        module_path: &str,
+        module_path: &ModulePath,
         importer_path: Option<&Path>,
         transpile: impl FnOnce(&Path) -> Result<TranspileOutHeader, ImportError>
     ) -> Result<Rc<TranspileOutHeader>, ImportError> {
@@ -109,14 +109,14 @@ impl ImportCache {
 
     fn cache_resolve_module(
         this: &RefCell<Self>,
-        module: &str,
+        module: &ModulePath,
         resolve: impl FnOnce() -> Result<ResolvedFatPath, ResolveFailure>
     ) -> Ref<'_, ResolvedFatPath> {
         if let Ok(fat_path) = Ref::filter_map(this.borrow(), |this| this.module_to_fat_path.get(module)) {
             fat_path
         } else {
             let fat_path = resolve().unwrap_or_default();
-            this.borrow_mut().module_to_fat_path.insert(module.to_string(), fat_path);
+            this.borrow_mut().module_to_fat_path.insert(module.clone(), fat_path);
             Ref::map(this.borrow(), |this| this.module_to_fat_path.get(module).unwrap())
         }
     }
