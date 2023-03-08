@@ -4,7 +4,7 @@ use enquote::unquote;
 use once_cell::unsync::OnceCell;
 use smol_str::SmolStr;
 use crate::analyses::bindings::{ValueBinding, LocalValueBinding, TypeName, ValueName, LocalTypeBinding, LocalUses, TypeBinding, HoistedValueBinding};
-use crate::analyses::types::{FatType, FatTypeDecl, Field, InferredType, NominalGuard, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::analyses::types::{FatType, FatTypeDecl, Field, InferredType, NominalGuard, OptionalType, ResolvedType, ResolvedTypeParam, ResolvedReturnType, ReturnType, ThinType, ThinTypeDecl, TypeParam, Variance, Resolved};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
@@ -130,19 +130,19 @@ pub struct AstTypeParameter<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstTypeIdent<'tree>,
     pub nominal_supertypes: Vec<AstType<'tree>>,
-    pub shape: Lazy<TypeParam<ThinType>, FatTypeDecl>
+    pub shape: ResolvedTypeParam
 }
 
 #[derive(Debug)]
 pub struct AstType<'tree> {
     pub node: TSNode<'tree>,
-    pub shape: Lazy<ThinType, FatType>,
+    pub shape: ResolvedType,
 }
 
 #[derive(Debug)]
 pub struct AstReturnType<'tree> {
     pub node: TSNode<'tree>,
-    pub shape: Lazy<ReturnType<ThinType>, ReturnType<FatType>>,
+    pub shape: ResolvedReturnType,
 }
 
 #[derive(Debug)]
@@ -153,7 +153,7 @@ pub struct AstParameter<'tree> {
     pub is_rest_param: bool,
     pub type_: Option<AstType<'tree>>,
     pub value: Option<TSNode<'tree>>,
-    pub type_shape: Inferred<FatType>,
+    pub type_shape: InferredType,
     pub local_uses: LocalUses<'tree>,
 }
 
@@ -174,8 +174,8 @@ pub struct AstValueDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
     pub type_: Option<AstType<'tree>>,
-    pub value: Option<TSNode<'tree>>
-    pub type_shape: Inferred<FatType>,
+    pub value: Option<TSNode<'tree>>,
+    pub type_shape: InferredType,
     pub local_uses: LocalUses<'tree>,
 }
 
@@ -186,7 +186,7 @@ pub struct AstFunctionDecl<'tree> {
     pub nominal_params: Vec<AstTypeIdent<'tree>>,
     pub formal_params: Vec<AstParameter<'tree>>,
     pub return_type: Option<AstReturnType<'tree>>,
-    pub type_shape: Inferred<FatType>,
+    pub type_shape: InferredType,
     pub local_uses: LocalUses<'tree>,
 }
 
@@ -206,7 +206,7 @@ pub struct AstTypeDecl<'tree> {
     pub nominal_supertypes: Vec<AstType<'tree>>,
     pub typescript_supertype: Option<TSNode<'tree>>,
     pub guard: Option<AstNominalGuard<'tree>>,
-    pub shape: Lazy<ThinTypeDecl, FatTypeDecl>,
+    pub shape: ResolvedTypeDecl,
 }
 
 #[derive(Debug)]
@@ -214,7 +214,7 @@ pub struct AstValueImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstValueIdent<'tree>,
     pub alias: AstValueIdent<'tree>,
-    pub shape: Lazy<(ModulePath, ValueName), FatType>,
+    pub shape: Resolved<(ModulePath, ValueName), FatType>,
 }
 
 #[derive(Debug)]
@@ -222,7 +222,7 @@ pub struct AstTypeImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstTypeIdent<'tree>,
     pub alias: AstTypeIdent<'tree>,
-    pub shape: Lazy<(ModulePath, TypeName), FatTypeDecl>,
+    pub shape: Resolved<(ModulePath, TypeName), FatTypeDecl>,
 }
 
 #[derive(Debug)]

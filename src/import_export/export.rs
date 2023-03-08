@@ -1,11 +1,13 @@
 use std::collections::HashMap;
-use derive_more::{From, Into, AsRef, Deref, DerefMut};
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{FatType, FatTypeDecl};
 use crate::misc::lazy::RcLazy;
 
+use derive_more::{From, Into, AsRef, Deref, DerefMut};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From, Into, AsRef, Deref, DerefMut)]
 pub struct ModulePath(String);
+
 
 #[derive(Debug)]
 pub struct Exports {

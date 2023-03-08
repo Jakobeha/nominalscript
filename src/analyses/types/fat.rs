@@ -18,7 +18,7 @@ pub struct FatTypeDecl {
 /// Fat type = type after we've resolved the supertypes so that they are also in this structure,
 /// and fat types can be compared / unified directly
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum FatType {
+pub enum FatType<Hole: FatTypeHoleTrait = NoHole> {
     /// Top = type of untyped values
     #[default]
     Any,
@@ -31,15 +31,15 @@ pub enum FatType {
     /// This also means there is no typescript type or guard
     Structural {
         nullability: Nullability,
-        structure: TypeStructure<FatType>,
+        structure: TypeStructure<FatType<Hole>>,
     },
     /// Type with at least one nominal id, so all instances are nominally wrapped.
     /// There may be an additional typescript type and guards as well
     Nominal {
         nullability: Nullability,
-        id: TypeIdent<FatType>,
+        id: TypeIdent<FatType<Hole>>,
         /// Boxed because it's large
-        inherited: Box<FatTypeInherited>
+        inherited: Box<FatTypeInherited<Hole>>
     },
     /// Uninstantiated generic: equivalent to `Never` if never unified,
     /// but when unified, it becomes the type it was unified with and stays that way.
@@ -48,7 +48,7 @@ pub enum FatType {
     /// It will be a subtype / supertype though
     Hole {
         nullability: Nullability,
-        hole: FatTypeHole
+        hole: Hole
     }
 }
 
@@ -59,19 +59,36 @@ pub enum FatType {
 /// - super typescript types
 /// - guards
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FatTypeInherited {
-    pub super_ids: Vec<TypeIdent<FatType>>,
-    pub structure: Option<TypeStructure<FatType>>,
+pub struct FatTypeInherited<Hole: FatTypeHoleTrait = NoHole> {
+    pub super_ids: Vec<TypeIdent<FatType<Hole>>>,
+    pub structure: Option<TypeStructure<FatType<Hole>>>,
     pub typescript_types: Vec<TSTree>,
     pub guards: Vec<NominalGuard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FatTypeHole {
-    upper_bound: Rc<RefCell<FatType>>
+    upper_bound: Rc<RefCell<FatType<FatTypeHole>>>
 }
 
-impl FatType {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoHole {}
+
+pub trait FatTypeHoleTrait {}
+
+/// [FatType] which supports type-holes, for local expressions.
+///
+/// Holes are not thread-safe.
+/// Global (exported) types cannot have holes and they are thread-safe.
+pub type LocalFatType = FatType<FatTypeHole>;
+
+/// [FatTypeInherited] which supports type-holes, for local expressions.
+///
+/// Holes are not thread-safe.
+/// Global (exported) types cannot have holes and they are thread-safe.
+pub type LocalFatTypeInherited = GenFatTypeInherited<FatTypeHole>;
+
+impl<Hole: FatTypeHoleTrait> FatType<Hole> {
     pub fn never() -> Self {
         Self::Never { nullability: Nullability::NonNullable }
     }
@@ -121,7 +138,7 @@ impl FatType {
     }
 
     pub fn collapse_supers(
-        supers: impl IntoIterator<Item=FatType>,
+        supers: impl IntoIterator<Item=Self>,
         mut e: TypeLogger<'_, '_, '_>
     ) -> FatTypeInherited {
         let mut inherited = FatTypeInherited::empty();
@@ -168,8 +185,8 @@ impl FatType {
     }
 
     pub fn unify_structure(
-        this: &mut Option<TypeStructure<FatType>>,
-        other: Option<TypeStructure<FatType>>,
+        this: &mut Option<TypeStructure<Self>>,
+        other: Option<TypeStructure<Self>>,
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -190,8 +207,8 @@ impl FatType {
     }
 
     pub fn unify_structure2(
-        this: &mut TypeStructure<FatType>,
-        mut other: TypeStructure<FatType>,
+        this: &mut TypeStructure<Self>,
+        mut other: TypeStructure<Self>,
         bias: Variance,
         mut e: TypeLogger<'_, '_, '_>
     ) {
@@ -255,7 +272,7 @@ impl FatType {
     }
 }
 
-impl FatTypeInherited {
+impl<Hole: FatTypeHoleTrait> FatTypeInherited<Hole> {
     /// Also = `default()`
     pub fn empty() -> Self {
         Self {
@@ -266,7 +283,7 @@ impl FatTypeInherited {
         }
     }
 
-    pub fn merge(&mut self, other: FatTypeInherited, e: TypeLogger<'_, '_, '_>) {
+    pub fn merge(&mut self, other: Self<>, e: TypeLogger<'_, '_, '_>) {
         FatType::unify_structure(&mut self.structure, other.structure, Variance::Bivariant, e);
         self.super_ids.extend(other.super_ids);
         self.typescript_types.extend(other.typescript_types);
@@ -274,8 +291,8 @@ impl FatTypeInherited {
     }
 }
 
-impl TypeParam<FatType> {
-    pub fn into_type(self, e: TypeLogger<'_, '_, '_>) -> FatType {
+impl<Hole: FatTypeHoleTrait> TypeParam<FatType<Hole>> {
+    pub fn into_type(self, e: TypeLogger<'_, '_, '_>) -> FatType<Hole> {
         let inherited = FatType::collapse_supers(self.supers, e);
         FatType::Nominal {
             nullability: Nullability::NonNullable,
@@ -286,7 +303,9 @@ impl TypeParam<FatType> {
             inherited: Box::new(inherited)
         }
     }
+}
 
+impl TypeParam<FatType> {
     pub fn into_decl(self, e: TypeLogger<'_, '_, '_>) -> FatTypeDecl {
         let inherited = FatType::collapse_supers(self.supers, e);
         FatTypeDecl {
@@ -297,3 +316,7 @@ impl TypeParam<FatType> {
         }
     }
 }
+
+impl FatTypeHoleTrait for FatTypeHole {}
+
+impl FatTypeHoleTrait for NoHole {}
