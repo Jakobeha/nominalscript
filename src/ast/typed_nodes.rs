@@ -1,15 +1,15 @@
 use std::any::Any;
 use std::rc::Rc;
 use enquote::unquote;
-use once_cell::unsync::OnceCell;
+use once_cell::unsync::{Lazy, OnceCell};
 use smol_str::SmolStr;
-use crate::analyses::bindings::{ValueBinding, LocalValueBinding, TypeName, ValueName, LocalTypeBinding, LocalUses, TypeBinding, HoistedValueBinding};
-use crate::analyses::types::{FatType, FatTypeDecl, Field, InferredType, NominalGuard, OptionalType, ResolvedType, ResolvedTypeParam, ResolvedReturnType, ReturnType, ThinType, ThinTypeDecl, TypeParam, Variance, Resolved};
+use crate::analyses::bindings::{HoistedValueBinding, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::scopes::ExprTypeMap;
+use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, ReImportedTypeDecl, ReImportedValueType, ReLazy, ReReturnType, ReType, ReTypeDecl, ReTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, DynReType, LocalFatType, TypeStructure, ResolveCtx, ReLazyTrait, Nullability};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
 use crate::import_export::export::ModulePath;
-use crate::misc::lazy::{Lazy, LazyError, RcLazy};
 
 pub trait AstNode<'tree> {
     fn node(&self) -> TSNode<'tree>;
@@ -49,19 +49,14 @@ macro_rules! impl_ast_node_common {
 macro_rules! impl_ast_node_value_binding {
     ($($Type:ident),*) => {
         $(
-            impl<'tree> TypedAstNode for $Type<'tree> {
-                fn _infer_type(&self) -> &RcLazy<FatType> {
-                    &self.resolved_type
-                }
-            }
-
             impl<'tree> ValueBinding for $Type<'tree> {
                 fn name(&self) -> &ValueName {
                     self.name.name()
                 }
 
-                fn resolve_type(&self) -> &RcLazy<FatType> {
-                    &self.resolved_type
+                fn resolve_type(&self) -> &DynReType {
+                    <Self as TypedAstNode>::infer_type(self, None)
+
                 }
             }
         )*
@@ -74,9 +69,9 @@ macro_rules! impl_ast_node_local_value_binding {
             impl_ast_node_value_binding!($Type)
 
             impl<'tree> LocalValueBinding<'tree> for $Type<'tree> {
-                fn local_uses(&self) -> &LocalUses<'tree> {
-                    &self.local_uses
-                }
+                // fn local_uses(&self) -> &LocalUses<'tree> {
+                //     &self.local_uses
+                // }
             }
         )*
     }
@@ -90,8 +85,8 @@ macro_rules! impl_ast_node_type_binding {
                     self.name.name()
                 }
 
-                fn resolve_decl(&self) -> &RcLazy<FatTypeDecl> {
-                    &self.resolved_decl
+                fn resolve_decl(&self) -> &DynReTypeDecl {
+                    &self.shape
                 }
             }
         )*
@@ -99,14 +94,7 @@ macro_rules! impl_ast_node_type_binding {
 }
 
 pub trait TypedAstNode<'tree>: AstNode<'tree> {
-    fn _infer_type(&self) -> &RcLazy<FatType>;
-    fn infer_type_for(&self, use_: TSNode<'tree>, e: &mut FileLogger<'_>) -> FatType {
-        e
-            .unwrap_import_result(self._infer_type().get(), self.node(), Some(use_))
-            .as_deref()
-            .cloned()
-            .unwrap_or(FatType::Any)
-    }
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'tree>>) -> &DynReType;
 }
 
 pub trait AstBinding<'tree>: TypedAstNode<'tree> + LocalValueBinding<'tree> {
@@ -130,19 +118,19 @@ pub struct AstTypeParameter<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstTypeIdent<'tree>,
     pub nominal_supertypes: Vec<AstType<'tree>>,
-    pub shape: ResolvedTypeParam
+    pub shape: ReTypeParam
 }
 
 #[derive(Debug)]
 pub struct AstType<'tree> {
     pub node: TSNode<'tree>,
-    pub shape: ResolvedType,
+    pub shape: ReType,
 }
 
 #[derive(Debug)]
 pub struct AstReturnType<'tree> {
     pub node: TSNode<'tree>,
-    pub shape: ResolvedReturnType,
+    pub shape: ReReturnType,
 }
 
 #[derive(Debug)]
@@ -153,8 +141,8 @@ pub struct AstParameter<'tree> {
     pub is_rest_param: bool,
     pub type_: Option<AstType<'tree>>,
     pub value: Option<TSNode<'tree>>,
-    pub type_shape: InferredType,
-    pub local_uses: LocalUses<'tree>,
+    backwards_hole: Option<Lazy<ReLazy<(), LocalFatType>>>,
+    // pub local_uses: LocalUses<'tree>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -175,19 +163,18 @@ pub struct AstValueDecl<'tree> {
     pub name: AstValueIdent<'tree>,
     pub type_: Option<AstType<'tree>>,
     pub value: Option<TSNode<'tree>>,
-    pub type_shape: InferredType,
-    pub local_uses: LocalUses<'tree>,
+    // pub local_uses: LocalUses<'tree>,
 }
 
 #[derive(Debug)]
 pub struct AstFunctionDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
-    pub nominal_params: Vec<AstTypeIdent<'tree>>,
+    pub nominal_params: Vec<AstTypeParameter<'tree>>,
     pub formal_params: Vec<AstParameter<'tree>>,
     pub return_type: Option<AstReturnType<'tree>>,
-    pub type_shape: InferredType,
-    pub local_uses: LocalUses<'tree>,
+    fn_type: ReType,
+    // pub local_uses: LocalUses<'tree>,
 }
 
 #[derive(Debug)]
@@ -206,7 +193,7 @@ pub struct AstTypeDecl<'tree> {
     pub nominal_supertypes: Vec<AstType<'tree>>,
     pub typescript_supertype: Option<TSNode<'tree>>,
     pub guard: Option<AstNominalGuard<'tree>>,
-    pub shape: ResolvedTypeDecl,
+    pub shape: ReTypeDecl,
 }
 
 #[derive(Debug)]
@@ -214,7 +201,7 @@ pub struct AstValueImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstValueIdent<'tree>,
     pub alias: AstValueIdent<'tree>,
-    pub shape: Resolved<(ModulePath, ValueName), FatType>,
+    pub shape: ReImportedValueType,
 }
 
 #[derive(Debug)]
@@ -222,7 +209,7 @@ pub struct AstTypeImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstTypeIdent<'tree>,
     pub alias: AstTypeIdent<'tree>,
-    pub shape: Resolved<(ModulePath, TypeName), FatTypeDecl>,
+    pub shape: ReImportedTypeDecl,
 }
 
 #[derive(Debug)]
@@ -274,13 +261,13 @@ impl<'tree> AstTypeParameter<'tree> {
                 .map(Self::variance_from)
                 .unwrap_or_default(),
             name: name.name.clone(),
-            supers: nominal_supertypes.iter().map(|t| t.shape.clone()).collect(),
+            supers: nominal_supertypes.iter().map(|t| t.shape.thin.clone()).collect(),
         };
         Self {
             node,
             name,
             nominal_supertypes,
-            shape: Lazy::new(thin, |ctx, thin| ctx.resolve_param(thin))
+            shape: ReTypeParam::new(thin)
         }
     }
 
@@ -316,10 +303,10 @@ impl<'tree> AstType<'tree> {
     }
 
     fn _new(node: TSNode<'tree>) -> Self {
-        let shape = Self::parse(node);
+        let thin = Self::parse(node);
         Self {
             node,
-            shape: Lazy::new(shape, |ctx, shape| ctx.resolve_type(shape)),
+            shape: ReType::new(thin),
         }
     }
 
@@ -439,10 +426,10 @@ impl<'tree> AstReturnType<'tree> {
     }
 
     fn _new(node: TSNode<'tree>) -> Self {
-        let shape = AstType::parse_return(node);
+        let thin = AstType::parse_return(node);
         Self {
             node,
-            shape: Lazy::new(shape, |ctx, shape| ctx.resolve_return_type(shape)),
+            shape: ReReturnType::new(thin),
         }
     }
 }
@@ -450,10 +437,10 @@ impl<'tree> AstReturnType<'tree> {
 impl_ast_node_common_trait!(AstParameter);
 impl_ast_node_local_value_binding!(AstParameter);
 impl<'tree> AstParameter<'tree> {
-    pub fn formal(node: TSNode<'tree>) -> Self {
+    pub fn formal(node: TSNode<'tree>, is_arrow: bool) -> Self {
         impl_ast_node_common_kind_guard!(node, ["required_parameter", "optional_parameter"]);
         let name_node = node.named_child(0).unwrap();
-        let type_ = node.field_child("nominal_type").map(AstType::of_annotation)
+        let type_ = node.field_child("nominal_type").map(AstType::of_annotation);
         Self {
             node,
             name: AstValueIdent::new(name_node),
@@ -461,12 +448,15 @@ impl<'tree> AstParameter<'tree> {
             is_rest_param: name_node.kind() == "rest_pattern",
             type_,
             value: node.field_child("value"),
-            type_shape: Inferred::new(type_.map(|type_| type_.shape.clone())),
-            local_uses: LocalUses::new(),
+            backwards_hole: if is_arrow {
+                Some(Lazy::new(|| ReLazy::resolved(LocalFatType::hole())))
+            } else {
+                None
+            },
         }
     }
 
-    pub fn arrow(node: TSNode<'tree>) -> Self {
+    pub fn single_arrow(node: TSNode<'tree>) -> Self {
         impl_ast_node_common_kind_guard!(node, ["identifier"]);
         Self {
             node,
@@ -475,8 +465,35 @@ impl<'tree> AstParameter<'tree> {
             is_rest_param: false,
             type_: None,
             value: None,
-            type_shape: Inferred::new(None),
-            local_uses: LocalUses::new(),
+            backwards_hole: Some(Lazy::new(|| ReLazy::resolved(LocalFatType::hole()))),
+        }
+    }
+
+    /// Whether this is a parameter of an arrow function. Arrow functions use backwards inference
+    /// if the parameter type is not specified, whereas other functions assign `Any` type.
+    pub fn is_arrow(&self) -> bool {
+        self.backwards_hole.is_some()
+    }
+    
+    /// Gets the actual thin type, which does not lookup the default value or assign a hole.
+    ///
+    /// **Important:** this returns `ThinType::NEVER` if the parameter is not typed,
+    /// since parameters are contravariant, unless it's a declaration, in which case no
+    /// explicit annotation implies `Any`.
+    pub fn thin(&self) -> ThinType {
+        self.type_.map(|param_type| param_type.shape.thin.clone())
+            .unwrap_or(if self.is_arrow() { ThinType::NEVER } else { ThinType::Any })
+    }
+}
+
+impl<'tree> TypedAstNode for AstParameter<'tree> {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynReType {
+        match (&self.type_, self.value, typed_exprs) {
+            (Some(type_), _, _) => &type_.shape,
+            (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
+                .map(|determined_type| &determined_type.type_)
+                .unwrap_or(&ReType::ANY),
+            (None, _, _) => &self.backwards_hole
         }
     }
 }
@@ -513,38 +530,73 @@ impl<'tree> AstValueDecl<'tree> {
             name: AstValueIdent::new(node.named_child(0).unwrap()),
             type_,
             value: node.field_child("value"),
-            type_shape: Inferred::new(type_.map(|type_| type_.shape.clone())),
-            local_uses: LocalUses::new(),
         }
     }
 }
 
-impl_ast_node_common!(AstFunctionDecl, ["function_declaration", "function_signature"]);
+impl<'tree> TypedAstNode for AstValueDecl<'tree> {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynReType {
+        match (&self.type_, self.value, typed_exprs) {
+            (Some(type_), _, _) => &type_.shape,
+            (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
+                .map(|determined_type| &determined_type.type_)
+                .unwrap_or(&ReType::ANY),
+            (None, _, _) => &ReType::ANY
+        }
+    }
+}
+
+impl_ast_node_common!(AstFunctionDecl, [
+    "function_declaration",
+    "generator_function_declaration",
+    "function_signature"
+]);
 impl_ast_node_local_value_binding!(AstFunctionDecl);
 impl<'tree> AstFunctionDecl<'tree> {
     fn _new(node: TSNode<'tree>) -> Self {
+        let nominal_params = Self::nominal_params(node);
+        let formal_params = node.field_child("parameters").unwrap()
+            .named_children(&mut node.walk())
+            .map(AstParameter::formal)
+            .collect();
+        let return_type = node.field_child("nominal_return_type").map(AstReturnType::of_annotation);
+        let fn_type = ReLazy::new(ThinType::func(
+            nominal_params.iter().map(|param| param.shape.thin.clone()).collect(),
+            formal_params.iter().find(|param| param.is_this_param)
+                .map(AstParameter::thin)
+                .unwrap_or_default(),
+            formal_params.iter().filter(|param| !param.is_this_param && !param.is_rest_param)
+                .map(AstParameter::thin)
+                .collect(),
+            formal_params.iter().find(|param| param.is_rest_param)
+                .map(AstParameter::thin)
+                .unwrap_or(ThinType::empty_rest_arg()),
+            return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
+                .unwrap_or_default()
+        ));
         Self {
             node,
             name: AstValueIdent::new(node.named_child(0).unwrap()),
-            nominal_params: Self::nominal_params(node),
-            formal_params: node.field_child("parameters").unwrap()
-                .named_children(&mut node.walk())
-                .map(AstParameter::formal)
-                .collect(),
-            return_type: node.field_child("nominal_return_type").map(AstReturnType::of_annotation),
-            // TODO type_shape
-            type_shape: Inferred::new(None),
-            local_uses: LocalUses::new(),
+            nominal_params,
+            formal_params,
+            return_type,
+            fn_type,
         }
     }
 
-    pub fn nominal_params(node: TSNode<'tree>) -> Vec<AstTypeIdent<'tree>> {
+    pub fn nominal_params(node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
         node.field_child("type_parameters").map(|node| {
             node.named_children(&mut node.walk())
                 .filter(|node| node.kind() == "nominal_type_parameter")
                 .map(AstTypeParameter::new)
                 .collect()
         }).unwrap_or_default()
+    }
+}
+
+impl<'tree> TypedAstNode for AstFunctionDecl<'tree> {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynReType {
+        &self.fn_type
     }
 }
 
@@ -585,10 +637,9 @@ impl<'tree> AstTypeDecl<'tree> {
         }).unwrap_or_default();
         let typescript_supertype = node.field_child("type");
         let guard = node.field_child("guard").map(AstNominalGuard::new);
-        // TODO shape
-        let shape = ThinTypeDecl {
+        let thin = ThinTypeDecl {
             name: name.name.clone(),
-            type_params: nominal_params.map(|param| param.name.clone()),
+            type_params: nominal_params.iter().map(|x| x.shape.thin.clone()).collect(),
             supertypes: vec![],
             typescript_supertype: None,
             guard: None,
@@ -600,7 +651,7 @@ impl<'tree> AstTypeDecl<'tree> {
             nominal_supertypes,
             typescript_supertype,
             guard,
-            shape: Lazy::new(shape, |ctx, shape| ctx.resolve_decl(shape)),
+            shape: ReTypeDecl::new(thin),
         }
     }
 }
@@ -615,12 +666,19 @@ impl<'tree> AstValueImportSpecifier<'tree> {
             || original_name.clone(),
             AstValueIdent::new
         );
+        let shape = ReImportedValueType::new((module_path.clone(), original_name.name.clone()));
         Self {
             node,
             original_name,
             alias,
-            shape: Lazy::new((module_path.clone(), original_name.name.clone()), |ctx, (module, name)| ctx.resolve_value_import(module, name))
+            shape,
         }
+    }
+}
+
+impl<'tree> TypedAstNode for AstValueImportSpecifier<'tree> {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynReType {
+        &self.shape
     }
 }
 
@@ -635,11 +693,12 @@ impl<'tree> AstTypeImportSpecifier<'tree> {
             || original_name.clone(),
             AstTypeIdent::new
         );
+        let shape = ReImportedType::new((module_path.clone(), original_name.name.clone()));
         Self {
             node,
             original_name,
             alias,
-            shape: Lazy::new((module_path.clone(), original_name.name.clone()), |ctx, (module, name)| ctx.resolve_type_import(module, name))
+            shape,
         }
     }
 }

@@ -1,16 +1,18 @@
 use std::rc::Rc;
-use crate::analyses::scopes::{ModuleCtx, Scope, scope_parent_of};
+use crate::analyses::bindings::{GlobalValueBinding, LocalValueBinding, ValueBinding, ValueName};
+use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, Scope, scope_parent_of};
+use crate::analyses::types::ReType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 use crate::ast::typed_nodes::AstValueDecl;
+use crate::diagnostics::{error, FileLogger};
 
-pub struct ScopeChain<'a, 'tree> {
-    ctx: &'a ModuleCtx<'tree>,
+pub struct ScopeChain<'tree> {
     scopes: Vec<(TSNode<'tree>, Rc<Scope<'tree>>)>,
 }
 
-impl<'a, 'tree> ScopeChain {
+impl<'tree> ScopeChain {
     //noinspection RsUnreachableCode (this inspection is bugged for IntelliJ with let-else statements)
-    pub fn new(ctx: &'a ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
+    pub fn new(ctx: &ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
         let mut scopes = Vec::new();
         let mut scope_parent = scope_parent;
         loop {
@@ -22,7 +24,7 @@ impl<'a, 'tree> ScopeChain {
             scope_parent = next_scope_parent;
         }
         scopes.reverse();
-        Self { ctx, scopes }
+        Self { scopes }
     }
 
     pub fn push(&mut self, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) {
@@ -34,132 +36,78 @@ impl<'a, 'tree> ScopeChain {
         self.scopes.pop()
     }
 
-    pub fn top(&self) -> Option<&(TSNode<'tree>, Rc<Scope<'tree>>)> {
+    fn top(&self) -> Option<&(TSNode<'tree>, Rc<Scope<'tree>>)> {
         self.scopes.last()
     }
 
-    pub fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, Rc<Scope<'tree>>)> {
+    fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, Rc<Scope<'tree>>)> {
         self.scopes.last_mut()
     }
 
     pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, c: &mut TSCursor<'tree>) {
         self.top_mut().expect("ScopeChain is empty").1.add_sequential(decl, c);
     }
+
+    pub fn add_return(&mut self, stmt: TSNode<'tree>, value: Option<TSNode<'tree>>) {
+        self.top_mut().expect("ScopeChain is empty").1.add_return(stmt, value);
+    }
+
+    pub fn add_throw(&mut self, stmt: TSNode<'tree>, value: Option<TSNode<'tree>>) {
+        self.top_mut().expect("ScopeChain is empty").1.add_throw(stmt, value);
+    }
+
+    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
+        self.top().expect("ScopeChain is empty").1.hoisted(name)
+    }
+
+    pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
+        let mut top_to_bottom = self.scopes.iter().rev();
+        if let Some((_, top)) = top_to_bottom.next() {
+            if top.has_at_pos(name, pos_node) {
+                return true
+            }
+        }
+        top_to_bottom.any(|(_, scope)| scope.has_any(name)) ||
+            GlobalValueBinding::has(name)
+    }
+
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+        let mut top_to_bottom = self.scopes.iter().rev();
+        if let Some((_, top)) = top_to_bottom.next() {
+            if let Some(decl) = top.at_pos(name, pos_node) {
+                return Some(decl)
+            }
+        }
+        top_to_bottom.find_map(|(_, scope)| scope.last(name))
+            .or_else(|| GlobalValueBinding::get)
+    }
+
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+        self.top().expect("ScopeChain is empty").1.at_exact_pos(name, pos_node)
+    }
+
+    /// Finds up type of an identifier by looking up its binding and returning its inferred type.
+    ///
+    /// A declaration's inferred type is its annotation if it has one, otherwise its initial value's
+    /// type if it has an initial value, otherwise `Any`.
+    ///
+    /// A parameter's inferred type is its annotation if it has one, otherwise its initial value's
+    /// type if it has an initial value, otherwise *a type hole* which is saved in the parameter
+    /// for subsequent calls (backwards inference).
+    ///
+    /// If the identifier has no binding, then logs an error and returns `NEVER`.
+    pub fn lookup<'a>(
+        use_id: &ValueName,
+        use_node: TSNode<'_>,
+        scope: &'a ScopeChain,
+        typed_exprs: &'a ExprTypeMap,
+        e: &mut FileLogger<'_>,
+    ) -> &'a ReType {
+        scope.at_pos(use_id, use_node)
+            .and_then(|def| def.infer_type(typed_exprs))
+            .unwrap_or_else(|| {
+                error!(e, "undeclared identifier `{}`", use_id => use_node);
+                &ReType::NEVER
+            })
+    }
 }
-
-/*
-export class ScopeChain {
-  private readonly scopeParents: TSNode[] = []
-  private readonly scopes: Scope[] = []
-  private topScopeNode: TSNode | null = null
-  private topScope: Scope | null = null
-
-  constructor (private readonly ctx: ModuleCtx, scopeParent: TSNode | null = null) {
-    if (scopeParent !== null) {
-      do {
-        this.scopeParents.push(scopeParent)
-        this.scopes.push(ctx.scopes.get(scopeParent))
-        scopeParent = scopeParentOf(scopeParent)
-      } while (scopeParent !== null)
-      this.topScopeNode = this.scopeParents[0] ?? null
-      this.topScope = this.scopes[0] ?? null
-      this.scopeParents.reverse()
-      this.scopes.reverse()
-    }
-  }
-
-  push (scopeParent: TSNode): void {
-    const scope = this.ctx.scopes.get(scopeParent)
-    this.scopeParents.push(scopeParent)
-    this.scopes.push(scope)
-    this.topScopeNode = scopeParent
-    this.topScope = scope
-  }
-
-  pop (): TSNode | null {
-    const popped = this.scopeParents.pop() ?? null
-    this.scopes.pop()
-    this.topScopeNode = this.scopeParents[this.scopeParents.length - 1] ?? null
-    this.topScope = this.scopes[this.scopes.length - 1] ?? null
-    return popped
-  }
-
-  addSequential (decl: ValueDecl): void {
-    assert(this.topScope !== null, 'cannot add sequential to empty scope chain')
-    this.topScope.addSequential(decl)
-  }
-
-  getHoistedInTopScope (name: string): HoistedAstBinding | null {
-    assert(this.topScope !== null, 'cannot getHoistedInTopScope from empty scope chain')
-    return this.topScope.getHoisted(name)
-  }
-
-  get (name: string, posNode: TSNode): Binding | null {
-    for (const scope of this.topToBottom()) {
-      const found = scope.get(name, posNode)
-      if (found !== null) {
-        return found
-      }
-    }
-    return GlobalBinding.tryGet(name) ?? null
-  }
-
-  getExactSequential (name: string, posNode: TSNode): ValueDecl {
-    assert(this.topScope !== null, 'cannot getExactSequential from empty scope chain')
-    return this.topScope.getExactSequential(name, posNode)
-  }
-
-  addReturn (stmt: TSNode, value: TSNode | null): void {
-    assert(this.topScope !== null && this.topScopeNode !== null, 'cannot addReturn in empty scope chain')
-    if (this.topScope.returnStmt !== null) {
-      logError(
-        'cannot return/throw multiple times in the same scope', this.topScopeNode,
-        ['note: first return', this.topScope.returnStmt],
-        ['note: second return', stmt]
-      )
-    }
-    if (this.topScope.throwStmt !== null) {
-      logError(
-        'cannot return/throw multiple times in the same scope', this.topScopeNode,
-        ['note: first throw', this.topScope.throwStmt],
-        ['note: second return', stmt]
-      )
-    }
-    this.topScope.returnStmt = stmt
-    this.topScope.returnValue = value
-  }
-
-  addThrow (stmt: TSNode, value: TSNode | null): void {
-    assert(this.topScope !== null && this.topScopeNode !== null, 'cannot addThrow in empty scope chain')
-    if (this.topScope.returnStmt !== null) {
-      logError(
-        'cannot return/throw multiple times in the same scope', this.topScopeNode,
-        ['note: first return', this.topScope.returnStmt],
-        ['note: second throw', stmt]
-      )
-    }
-    if (this.topScope.throwStmt !== null) {
-      logError(
-        'cannot return/throw multiple times in the same scope', this.topScopeNode,
-        ['note: first throw', this.topScope.throwStmt],
-        ['note: second throw', stmt]
-      )
-    }
-    this.topScope.returnStmt = stmt
-    this.topScope.throwValue = value
-  }
-
-  inferType (node: TSNode): NominalTypeInferred | null {
-    return this.ctx.typedExprs.get(node)
-  }
-
-  // This may be inefficient, but there's no builtin on array to do reverse iteration
-  // and I don't want to have to write this every time
-  private * topToBottom (): Generator<Scope> {
-    for (let i = this.scopes.length - 1; i >= 0; i--) {
-      yield this.scopes[i]
-    }
-  }
-}
-
- */

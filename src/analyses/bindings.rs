@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use smol_str::SmolStr;
 use derive_more::Display;
-use crate::analyses::types::{FatType, FatTypeDecl};
+use crate::analyses::types::{FatType, FatTypeDecl, DynReType, DynReTypeDecl, ReType, ReTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
 use crate::misc::lazy::{Lazy, LazyError, RcLazy};
@@ -13,21 +13,23 @@ use crate::misc::lazy::{Lazy, LazyError, RcLazy};
 /// imports, declarations, parameters, predefined globals, etc.
 pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn resolve_type(&self) -> &RcLazy<FatType>;
+    fn resolve_type(&self) -> &DynReType;
 }
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
 pub trait TypeBinding {
     fn name(&self) -> &TypeName;
-    fn resolve_decl(&self) -> &RcLazy<FatTypeDecl>;
+    fn resolve_decl(&self) -> &DynReTypeDecl;
 }
 
 /// [ValueBinding] inside the file. We track its local uses for type inference.
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
 pub trait LocalValueBinding<'tree>: AstNode<'tree> + ValueBinding {
-    fn local_uses(&self) -> &LocalUses<'tree>;
+    // Currently it doesn't seem we need this, since we only use them for backwards inference
+    // and we can do backwards inference for type holes. Maybe in the future...
+    // fn local_uses(&self) -> &LocalUses<'tree>;
 }
 
 /// [TypeBinding] inside the file. We do not track uses for inference.
@@ -47,8 +49,7 @@ pub trait HoistedValueBinding: ValueBinding {}
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalValueBinding {
     pub name: ValueName,
-    pub type_: FatType,
-    resolved_type: RcLazy<FatType>
+    pub type_: ReType,
 }
 
 /// [TypeBinding] which is implicitly available to the file (available and not imported).
@@ -56,17 +57,16 @@ pub struct GlobalValueBinding {
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalTypeBinding {
     pub name: TypeName,
-    pub decl: FatTypeDecl,
-    resolved_decl: RcLazy<FatTypeDecl>
+    pub decl: ReTypeDecl,
 }
 
-pub struct LocalUses<'tree> {
-    uses: RefCell<BTreeSet<Use<'tree>>>
-}
-
-struct Use<'tree> {
-    node: TSNode<'tree>
-}
+// pub struct LocalUses<'tree> {
+//     uses: RefCell<BTreeSet<Use<'tree>>>
+// }
+//
+// struct Use<'tree> {
+//     node: TSNode<'tree>
+// }
 
 /// The string type used for all value names
 #[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
@@ -80,8 +80,7 @@ impl GlobalValueBinding {
     pub fn new(name: ValueName, type_: FatType) -> Self {
         Self {
             name,
-            type_: type_.clone(),
-            resolved_type: Rc::new(Lazy::immediate(type_)),
+            type_: ReType::resolved(type_),
         }
     }
 }
@@ -91,8 +90,8 @@ impl ValueBinding for GlobalValueBinding {
         &self.name
     }
 
-    fn resolve_type(&self) -> RcLazy<FatType> {
-        Rc::new(Lazy::immediate(self.type_.clone()))
+    fn resolve_type(&self) -> &DynReType {
+        &self.type_
     }
 }
 
@@ -100,8 +99,7 @@ impl GlobalTypeBinding {
     pub fn new(name: TypeName, decl: FatTypeDecl) -> Self {
         Self {
             name,
-            decl: decl.clone(),
-            resolved_decl: Rc::new(Lazy::immediate(decl)),
+            decl: ReTypeDecl::resolved(decl),
         }
     }
 }
@@ -111,42 +109,42 @@ impl TypeBinding for GlobalTypeBinding {
         &self.name
     }
 
-    fn resolve_decl(&self) -> RcLazy<FatTypeDecl> {
-        Rc::new(Lazy::immediate(self.decl.clone()))
+    fn resolve_decl(&self) -> &DynReTypeDecl {
+        &self.decl
     }
 }
 
 impl HoistedValueBinding for GlobalValueBinding {}
 
-impl<'tree> LocalUses<'tree> {
-    pub fn new() -> Self {
-        Self { uses: RefCell::new(BTreeSet::new()) }
-    }
-
-    pub fn insert(&self, node: TSNode<'tree>) {
-        self.uses.borrow_mut().insert(Use { node });
-    }
-}
-
-impl<'tree> PartialEq<Use<'tree>> for Use<'tree> {
-    fn eq(&self, other: &Self) -> bool {
-        self.node.start_byte() == other.node.start_byte()
-    }
-}
-
-impl<'tree> Eq for Use<'tree> {}
-
-impl<'tree> PartialOrd<Use<'tree>> for Use<'tree> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'tree> Ord for Use<'tree> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.node.start_byte().cmp(&other.node.start_byte())
-    }
-}
+// impl<'tree> LocalUses<'tree> {
+//     pub fn new() -> Self {
+//         Self { uses: RefCell::new(BTreeSet::new()) }
+//     }
+//
+//     pub fn insert(&self, node: TSNode<'tree>) {
+//         self.uses.borrow_mut().insert(Use { node });
+//     }
+// }
+//
+// impl<'tree> PartialEq<Use<'tree>> for Use<'tree> {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.node.start_byte() == other.node.start_byte()
+//     }
+// }
+//
+// impl<'tree> Eq for Use<'tree> {}
+//
+// impl<'tree> PartialOrd<Use<'tree>> for Use<'tree> {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+//
+// impl<'tree> Ord for Use<'tree> {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         self.node.start_byte().cmp(&other.node.start_byte())
+//     }
+// }
 
 impl TypeName {
     pub const RESERVED: [&'static str; 4] = [

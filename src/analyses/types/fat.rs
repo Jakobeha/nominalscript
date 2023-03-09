@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use replace_with::replace_with_or_default;
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{InferInfo, NominalGuard, Nullability, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
+use crate::analyses::types::{FnType, InferInfo, NominalGuard, Nullability, OptionalType, ReturnType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance, impl_structural_type_constructors};
 use crate::ast::tree_sitter::TSTree;
 use crate::diagnostics::{error, note, TypeLogger};
 
@@ -71,7 +71,7 @@ pub struct FatTypeHole {
     upper_bound: Rc<RefCell<FatType<FatTypeHole>>>
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoHole {}
 
 pub trait FatTypeHoleTrait {}
@@ -89,13 +89,11 @@ pub type LocalFatType = FatType<FatTypeHole>;
 pub type LocalFatTypeInherited = GenFatTypeInherited<FatTypeHole>;
 
 impl<Hole: FatTypeHoleTrait> FatType<Hole> {
-    pub fn never() -> Self {
-        Self::Never { nullability: Nullability::NonNullable }
-    }
+    pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
 
-    pub fn null() -> Self {
-        Self::Never { nullability: Nullability::Nullable }
-    }
+    pub const NULL: Self = Self::Never { nullability: Nullability::Nullable };
+
+    impl_structural_type_constructors!();
 
     pub fn nullable(self) -> Self {
         match self {
@@ -272,6 +270,15 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
     }
 }
 
+impl<Hole: Default + FatTypeHoleTrait> FatType<Hole> {
+    pub fn hole() -> Self {
+        Self::Hole {
+            nullability: Nullability::NonNullable,
+            hole: Hole::default()
+        }
+    }
+}
+
 impl<Hole: FatTypeHoleTrait> FatTypeInherited<Hole> {
     /// Also = `default()`
     pub fn empty() -> Self {
@@ -317,6 +324,26 @@ impl TypeParam<FatType> {
     }
 }
 
+impl FatTypeHole {
+    pub fn new() -> Self {
+        Self {
+            upper_bound: Rc::new(RefCell::new(LocalFatType::NEVER)),
+        }
+    }
+}
+
+impl Default for FatTypeHole {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FatTypeHoleTrait for FatTypeHole {}
+
+impl NoHole {
+    pub fn unreachable<T>(self) -> T {
+        match self {}
+    }
+}
 
 impl FatTypeHoleTrait for NoHole {}

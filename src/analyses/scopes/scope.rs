@@ -1,11 +1,12 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use crate::analyses::bindings::{LocalTypeBinding, LocalValueBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::bindings::{LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
-use crate::analyses::types::{FatType, FatTypeDecl, InferredReturnType, Nullability, ReturnType, ThinType};
+use crate::analyses::types::{FatType, FatTypeDecl, DeterminedReturnType, Nullability, ReturnType, ThinType, ReReturnType, ReType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstParameter, AstReturn, AstThrow, AstTypeDecl, AstValueDecl};
+use crate::diagnostics::{error, hint, FileLogger};
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -64,10 +65,6 @@ impl<'tree> ValueScope<'tree> {
         }))
     }
 
-    pub fn params(&self) -> Ref<'_, [Rc<AstParameter<'tree>>]> {
-        Ref::map(self.0.borrow(), |this| this.params.as_ref())
-    }
-
     pub fn set_params(&self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
         let mut this = self.0.borrow_mut();
         debug_assert!(this.params.is_empty());
@@ -82,13 +79,55 @@ impl<'tree> ValueScope<'tree> {
         this.hoisted.add_hoisted(decl)
     }
 
-    pub fn hoisted(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
-        self.0.borrow().hoisted.get(name).cloned()
-    }
-
     pub fn add_sequential(&self, decl: Rc<AstValueDecl<'tree>>) {
         let mut this = self.0.borrow_mut();
         this.sequential.entry(decl.name().clone()).or_default().push(decl)
+    }
+
+    pub fn add_return(&self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
+        let mut this = self.0.borrow_mut();
+        if let Some(old_return) = this.return_ {
+            error!(e,
+                "cannot return/throw multiple times in the same scope" => return_.node;
+                hint!("first return" => old_return.node)
+            )
+        }
+        if let Some(old_throw) = this.throw {
+            error!(e,
+                "cannot return/throw multiple times in the same scope" => return_.node;
+                hint!("first throw" => old_throw.node)
+            )
+        }
+        if !matches!(this.return_, Some(old_return) if old_return.node.start_byte() > return_.node.start_byte()) {
+            this.return_ = Some(return_)
+        }
+    }
+
+    pub fn add_throw(&self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
+        let mut this = self.0.borrow_mut();
+        if let Some(old_return) = this.return_ {
+            error!(e,
+                "cannot return/throw multiple times in the same scope" => throw.node;
+                hint!("first return" => old_return.node)
+            )
+        }
+        if let Some(old_throw) = this.throw {
+            error!(e,
+                "cannot return/throw multiple times in the same scope" => throw.node;
+                hint!("first throw" => old_throw.node)
+            )
+        }
+        if !matches!(this.throw, Some(old_throw) if old_throw.node.start_byte() > throw.node.start_byte()) {
+            this.throw = Some(throw)
+        }
+    }
+
+    pub fn params(&self) -> Ref<'_, [Rc<AstParameter<'tree>>]> {
+        Ref::map(self.0.borrow(), |this| this.params.as_ref())
+    }
+
+    pub fn hoisted(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
+        self.0.borrow().hoisted.get(name).cloned()
     }
 
     pub fn has_any(&self, name: &ValueName) -> bool {
@@ -96,7 +135,7 @@ impl<'tree> ValueScope<'tree> {
         this.sequential.contains_key(name) || this.hoisted.contains_key(name)
     }
 
-    pub fn get_last(&self, name: &ValueName) -> Option<Rc<dyn ValueBinding<'tree>>> {
+    pub fn last(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
         let this = self.0.borrow();
         if let Some(sequential) = this.sequential.get(name) {
             return Some(sequential.last()
@@ -110,7 +149,7 @@ impl<'tree> ValueScope<'tree> {
         self.get(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
         let this = self.0.borrow();
         return this.sequential.get(name).and_then(|sequential| {
             sequential.iter()
@@ -118,7 +157,7 @@ impl<'tree> ValueScope<'tree> {
         }).or_else(|| this.hoisted.get(name)).cloned()
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
         let this = self.0.borrow();
         this.sequential.get(name).and_then(|sequential| {
             sequential.iter()
@@ -127,28 +166,30 @@ impl<'tree> ValueScope<'tree> {
         }).cloned()
     }
 
-    pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> InferredReturnType<'tree> {
+    pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> DeterminedReturnType<'tree> {
         let this = self.0.borrow();
         match (this.return_.as_ref(), this.throw.as_ref()) {
-            (None, None) => InferredReturnType {
-                type_: ReturnType::Void,
+            (None, None) => DeterminedReturnType {
+                type_: ReReturnType::resolved_void(),
                 return_node: None,
                 explicit_type: None,
             },
             (return_, Some(throw))
-            if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => InferredReturnType {
-                type_: ReturnType::Type(FatType::never()),
+            if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => DeterminedReturnType {
+                type_: ReReturnType::resolved_type(FatType::never()),
                 return_node: Some(throw.node),
                 explicit_type
             },
+            (None, Some(_)) => unreachable!("guard succeeds if return_.is_none()"),
             (Some(return_), _) => {
                 let expr = return_.returned_value.and_then(|x| typed_exprs.get(x));
                 let (type_, explicit_type) = match expr {
-                    None => (FatType::Any, None),
-                    Some(expr) => (expr.type_, expr.explicit_type)
+                    None => (ReType::any(), None),
+                    Some(expr) => (expr.type_.clone(), expr.explicit_type)
                 };
-                InferredReturnType {
-                    type_: ReturnType::Type(type_),
+                DeterminedReturnType {
+                    // SAFETY: These are the same function, they are bijective
+                    type_: unsafe { type_.bimap(ReturnType::Type, ReturnType::Type) },
                     return_node: Some(return_.node),
                     explicit_type
                 }
@@ -183,11 +224,11 @@ impl<'tree> TypeScope<'tree> {
         let ThinType::Nominal { id, nullability } = type_ else {
             Vec::new()
         };
-        self.ident_supertypes(id, ty)
+        self.ident_supertypes(id, nullability)
     }
 
-    fn ident_supertypes(&self, type_: ThinType) -> Vec<Rc<AstTypeDecl<'tree>>> {
-
+    fn ident_supertypes(&self, id: TypeIdent<ThinType>, nullability: Nullability) -> Vec<Rc<AstTypeDecl<'tree>>> {
+        // TODO this is wrong
         let this = self.0.borrow();
         let mut supertypes = Vec::new();
         let mut queue = VecDeque::new();

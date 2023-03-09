@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::iter::once;
 use std::rc::Rc;
 use crate::analyses::scopes::Scope;
-use crate::analyses::types::InferredReturnType;
+use crate::analyses::types::DeterminedReturnType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 
 /// The hierarchy of scopes within a file or module (including submodules)
@@ -48,7 +48,7 @@ impl<'tree> ModuleScopes<'tree> {
         SeenLexicalDescendantsOf::new(self, node)
     }
 
-    pub fn seen_return_types(&self, node: TSNode<'tree>) -> impl Iterator<Item=InferredReturnType<'tree>> {
+    pub fn seen_return_types(&self, node: TSNode<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> {
         once(node).chain(seen_lexical_descendants_of(node))
             .map(|node| self.0.borrow().scopes[&node].return_type())
     }

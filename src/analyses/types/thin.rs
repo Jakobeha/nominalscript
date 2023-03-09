@@ -173,35 +173,8 @@ pub enum Optionality {
     Required,
 }
 
-impl ThinType {
-    pub fn never() -> Self {
-        Self::Never { nullability: Nullability::NonNullable }
-    }
-
-    pub fn null() -> Self {
-        Self::Never { nullability: Nullability::Nullable }
-    }
-
-    pub fn ident(name: &str) -> Self {
-        Self::Nominal {
-            nullability: Nullability::NonNullable,
-            id: TypeIdent {
-                name: TypeName::new(name),
-                generic_args: Vec::new(),
-            }
-        }
-    }
-
-    pub fn generic(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
-        Self::Nominal {
-            nullability: Nullability::NonNullable,
-            id: TypeIdent {
-                name: TypeName::new(name),
-                generic_args: generic_args.collect(),
-            }
-        }
-    }
-
+macro_rules! impl_structural_type_constructors {
+    () => {
     pub fn func(
         type_params: impl Iterator<Item=TypeParam<Self>>,
         this_type: Self,
@@ -253,6 +226,36 @@ impl ThinType {
     pub fn empty_rest_arg() -> Self {
         Self::tuple(std::iter::empty())
     }
+    }
+}
+pub(crate) use impl_structural_type_constructors;
+
+impl ThinType {
+    pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
+
+    pub const NULL: Self = Self::Never { nullability: Nullability::Nullable };
+
+    pub fn ident(name: &str) -> Self {
+        Self::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: TypeName::new(name),
+                generic_args: Vec::new(),
+            }
+        }
+    }
+
+    pub fn generic(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
+        Self::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: TypeName::new(name),
+                generic_args: generic_args.collect(),
+            }
+        }
+    }
+
+    impl_structural_type_constructors!();
 
     pub fn nullable(self) -> Self {
         match self {
@@ -282,11 +285,17 @@ impl ThinType {
     }
 }
 
+impl<Type> TypeIdent<Type> {
+    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeIdent<NewType> {
+        TypeIdent {
+            name: self.name,
+            generic_args: self.generic_args.into_iter().map(f).collect(),
+        }
+    }
+}
+
 impl<Type> TypeParam<Type> {
-    pub fn map<F, NewType>(self, f: F) -> TypeParam<NewType>
-    where
-        F: FnMut(Type) -> NewType
-    {
+    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeParam<NewType> {
         TypeParam {
             variance_bound: self.variance_bound,
             name: self.name,
@@ -302,6 +311,23 @@ impl<Type> TypeStructure<Type> {
             TypeStructure::Array { .. } => StructureKind::Array,
             TypeStructure::Tuple { .. } => StructureKind::Tuple,
             TypeStructure::Object { .. } => StructureKind::Object,
+        }
+    }
+
+    pub fn map<F, NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
+        match self {
+            TypeStructure::Fn { fn_type } => TypeStructure::Fn {
+                fn_type: Box::new(fn_type.map(f)),
+            },
+            TypeStructure::Array { element_type } => TypeStructure::Array {
+                element_type: Box::new(f(*element_type)),
+            },
+            TypeStructure::Tuple { element_types } => TypeStructure::Tuple {
+                element_types: element_types.into_iter().map(|elem| elem.map(f)).collect(),
+            },
+            TypeStructure::Object { field_types } => TypeStructure::Object {
+                field_types: field_types.into_iter().map(|field| field.map(f)).collect(),
+            },
         }
     }
 }
@@ -320,6 +346,16 @@ impl<Type> FnType<Type> {
             arg_types: arg_types.collect(),
             rest_arg_type,
             return_type,
+        }
+    }
+
+    pub fn map<F, NewType>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
+        FnType {
+            type_params: self.type_params.into_iter().map(|param| param.map(&mut f)).collect(),
+            this_type: f(self.this_type),
+            arg_types: self.arg_types.into_iter().map(|arg| arg.map(&mut f)).collect(),
+            rest_arg_type: f(self.rest_arg_type),
+            return_type: self.return_type.map(f),
         }
     }
 }
@@ -343,6 +379,22 @@ impl<Type> OptionalType<Type> {
         Self {
             optionality: Optionality::Required,
             type_,
+        }
+    }
+
+    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> OptionalType<NewType> {
+        OptionalType {
+            optionality: self.optionality,
+            type_: f(self.type_),
+        }
+    }
+}
+
+impl<Type> ReturnType<Type> {
+    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> ReturnType<NewType> {
+        match self {
+            ReturnType::Type(type_) => ReturnType::Type(f(type_)),
+            ReturnType::Void => ReturnType::Void,
         }
     }
 }

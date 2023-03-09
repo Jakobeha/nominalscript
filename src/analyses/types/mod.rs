@@ -2,12 +2,16 @@
 mod thin;
 /// Fat (post-resolution, includes supertypes) types + the unification algorithm
 mod fat;
-/// Inferred type = type with AST and other info from where/how it was inferred
-mod inferred;
+/// Type resolution + resolved lazy, which combines thin and fat type to handle cyclic dependencies,
+/// resolution caching, etc.
+mod resolve;
+/// Determined type = type with AST and other info from where/how it was determined, for diagnostics
+mod determined;
 /// Locations in types
 mod loc;
 
 pub use thin::*;
 pub use fat::*;
-pub use inferred::*;
+pub use resolve::*;
+pub use determined::*;
 pub use loc::*;
