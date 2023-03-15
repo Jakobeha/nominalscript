@@ -1,6 +1,4 @@
 mod nice_mutex;
-// Wrapper for a lazily-computed value which can also detect and catch cycles
-// pub mod lazy_alt; (TODO: Move into its own crate, not necessary here)
 /// Roaring bitmaps for ids (particularly node ids but any u64 value is ok)
 pub mod id_maps;
 /// Iterator chain macro
