@@ -2,7 +2,7 @@ use lazy_static::lazy_static;
 use crate::ast::tree_sitter::TSQuery;
 use tree_sitter_nominalscript::language_nominalscript;
 
-const CREATE_ID_STR: &'static str = "
+const EXPORT_ID_STR: &'static str = "
     (export_specifier (nominal_type_identifier) @nominal_export_id alias: (identifier)? @export_alias_id)
     (export_specifier (identifier) @value_export_id alias: (identifier)? @export_alias_id)
     (export_statement (nominal_type_declaration (nominal_type_identifier) @nominal_export_id))
@@ -18,8 +18,8 @@ const NOMINAL_TYPE_STR: &'static str = "
 
 const PROGRAM_TO_EXTRACT_NOMINAL_TYPE_STR: &'static str = "
     (program
-      (nominal_type_declaration
-          (nominal_type_annotation (_) @nominal_type)))
+        (nominal_type_declaration
+            (nominal_type_annotation (_) @nominal_type)))
 ";
 
 const IMPORT_STR: &'static str = "
@@ -30,8 +30,8 @@ const IMPORT_STR: &'static str = "
 // nominal type annotation
 const FUNCTION_STR: &'static str = "
     (function_declaration) @function
-       (generator_function_declaration) @function
-       (function_signature) @function
+    (generator_function_declaration) @function
+    (function_signature) @function
 ";
 
 const VALUE_STR: &'static str = "
@@ -39,7 +39,7 @@ const VALUE_STR: &'static str = "
 ";
 
 lazy_static! {
-    pub static ref CREATE_ID: TSQuery = TSQuery::new(language_nominalscript(), CREATE_ID_STR).unwrap();
+    pub static ref EXPORT_ID: TSQuery = TSQuery::new(language_nominalscript(), EXPORT_ID_STR).unwrap();
     pub static ref NOMINAL_TYPE: TSQuery = TSQuery::new(language_nominalscript(), NOMINAL_TYPE_STR).unwrap();
     pub static ref PROGRAM_TO_EXTRACT_NOMINAL_TYPE: TSQuery = TSQuery::new(language_nominalscript(), PROGRAM_TO_EXTRACT_NOMINAL_TYPE_STR).unwrap();
     pub static ref IMPORT: TSQuery = TSQuery::new(language_nominalscript(), IMPORT_STR).unwrap();

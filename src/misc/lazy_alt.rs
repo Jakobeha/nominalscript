@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 use derive_more::{Deref, Display, Error};
 use parking_lot::lock_api::RwLockReadGuard;
 use parking_lot::{MappedRwLockReadGuard, RwLock};
@@ -24,7 +24,7 @@ pub trait LazyTrait<T> {
 #[deref(forward)]
 pub struct LazyDeref<'a, T>(MappedRwLockReadGuard<'a, T>);
 
-pub type RcLazy<T> = Rc<dyn LazyTrait<T>>;
+pub type ArcLazy<T> = Arc<dyn LazyTrait<T>>;
 
 enum LazyState<T, F: FnOnce() -> Result<T, LazyError>> {
     Value { value: T },

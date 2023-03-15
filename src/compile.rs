@@ -1,312 +1,172 @@
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::Arc;
+use derive_more::{Display, From, Error};
+use crate::import_export::export::{Exports, TranspileOutHeader};
+use crate::{FileCtx, ProjectCtx};
+use crate::analyses::bindings::{Locality, ValueName};
+use crate::analyses::scopes::{ModuleCtx, scope_parent_of};
+use crate::ast::{NOMINALSCRIPT_PARSER, queries};
+use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
+use crate::ast::tree_sitter::{TreeCreateError, TSParser, TSQueryCursor, TSTree};
+use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::diagnostics::{error, issue, hint, FileLogger};
+use crate::import_export::import_ctx::ImportError;
+use crate::misc::lazy_alt::Lazy;
+
+#[derive(Debug, Clone, Display, From, Error)]
+pub enum FatalTranspileError {
+    TreeCreate(TreeCreateError),
+}
+
+/// Transpile (compile) a NominalScript file into TypeScript.
+///
+/// If successful, the transpiled file will be cached in `ctx`,
+/// so calling again will just return the same result
+fn transpile_file<'a>(
+    script_path: &Path,
+    ctx: &'a mut ProjectCtx<'_>
+) -> Result<&'a TranspileOutHeader, ImportError> {
+    _transpile_file(script_path, false, ctx)
+}
+
+/// `transpile_file` but provides a different error based on whether the file is being
+/// standalone transpiled or imported
+fn _transpile_file<'a>(
+    script_path: &Path,
+    is_being_imported: bool,
+    ctx: &'a mut ProjectCtx<'_>
+) -> Result<&'a TranspileOutHeader, ImportError> {
+    let header = ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
+        transpile_file_no_cache(script_path, &mut ProjectCtx {
+            import_ctx: import_ctx.project_ctx,
+            diagnostics: &mut ctx.diagnostics,
+            resolve_cache: &mut ctx.resolve_cache
+        }).map_err(ImportError::from)
+    });
+    if let Err(import_error) = header.as_ref() {
+        error!(ctx.diagnostics, "failed to {} {}: {}", match is_being_imported {
+            false => "transpile",
+            true => "import"
+        }, script_path.display(), import_error);
+    }
+    header
+}
+
+/// `transpile_file` but doesn't cache
+fn transpile_file_no_cache(
+    script_path: &Path,
+    ctx: &mut ProjectCtx<'_>
+) -> Result<TranspileOutHeader, FatalTranspileError> {
+    let ast = NOMINALSCRIPT_PARSER.lock().parse_file(script_path)?;
+    let mut exports = Exports::new();
+    let rest = transpile_ast(ast, &mut exports, script_path, ctx);
+    Ok(TranspileOutHeader { exports, rest })
+}
+
+pub enum Export<'tree> {
+    Type { original_name: AstTypeIdent<'tree>, alias: AstTypeIdent<'tree> },
+    Value { original_name: AstValueIdent<'tree>, alias: AstValueIdent<'tree> },
+}
+
+/// Transpile (compile) NominalScript AST into TypeScript. The AST is modified in-place.
+/// Calling this function only transpiles the header; you must call the thunk to
+/// transpile the rest of the code.
+fn transpile_ast(
+    ast: TSTree,
+    exports: &mut Exports,
+    script_path: &Path,
+    ctx: &mut ProjectCtx<'_>
+) -> FinishTranspile {
+    // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
+    let file_diagnostics = ctx.diagnostics.file(script_path);
+    let mut e = FileLogger::new(file_diagnostics);
+    let mut c = ast.walk();
+    let mut qc = TSQueryCursor::new();
+    let m = ModuleCtx::new(&ast);
+    let root_node = ast.root_node();
+    let root_scope = m.scopes.get(root_node, &mut c);
+    // Query all `nominal_type_declaraton`s and all imports.
+    // Build map of nominal type names to their declarations
+    // In global scope, build value map and map functions to their declarations.
+    // Add imported decls (lazily forward resolved) to the nominal type names and global scope value map
+    // Imports are lazily and narrowly resolved so that we allow inter-woven dependencies,
+    // laziness tracks self-recursion so we explicitly fail on cycles
+    for type_decl_match in qc.matches(&NOMINAL_TYPE, root_node) {
+        let type_decl = AstTypeDecl::new(type_decl_match.capture(0).unwrap().node);
+        let scope = m.scopes.of_node(type_decl.node, &mut c);
+        scope.types.set(Rc::new(type_decl), &mut e);
+    }
+    for function_decl_match in qc.matches(&FUNCTION, root_node) {
+        let func_decl = AstFunctionDecl::new(function_decl_match.capture(0).unwrap().node);
+        let scope = m.scopes.of_node(func_decl.node, &mut c);
+        scope.values.add_hoisted(Rc::new(func_decl), &mut e);
+    }
+    for value_decl_match in qc.matches(&VALUE, root_node) {
+        let value_decl = AstValueDecl::new(value_decl_match.capture(0).unwrap().node);
+        let scope = m.scopes.of_node(value_decl.node, &mut c);
+        scope.values.add_sequential(Rc::new(value_decl), &mut e);
+    }
+    for import_stmt_match in qc.matches(&IMPORT, root_node) {
+        let import_stmt = AstImportStatement::new(import_stmt_match.capture(0).unwrap().node);
+        let scope = m.scopes.of_node(import_stmt.node, &mut c);
+        scope.add_imported(import_stmt)
+    }
+    // Query and prefill exports, and also add to scopes
+    for export_id_match in qc.matches(&EXPORT_ID, root_node) {
+        let value_export_id = export_id_match.capture_named("value_export_id").map(|c| AstValueIdent::new(c.node));
+        let type_export_id = export_id_match.capture_named("nominal_export_id").map(|c| AstTypeIdent::new(c.node));
+        let export_id_node = value_export_id.map(|v| v.node).or_else(|| type_export_id.map(|t| t.node))
+            .expect("export_id_match should have either a value_export_id or a nominal_export_id");
+        let export_alias_id_node = export_id_match.capture_named("export_alias_id").map(|c| c.node);
+
+        let export = match (value_export_id, type_export_id) {
+            (None, None) => panic!("export_id_match should have either value_export_id or nominal_export_id"),
+            (Some(_), Some(_)) => panic!("export_id_match should have either value_export_id or nominal_export_id, not both"),
+            (Some(value_export), None) => {
+                let alias_id = export_alias_id_node.map_or_else(|| value_export.clone(), AstValueIdent::new);
+                Export::Value { original_name: value_export, alias: alias_id }
+            }
+            (None, Some(type_export)) => {
+                let alias_id = export_alias_id_node.map_or_else(|| type_export.clone(), AstTypeIdent::new);
+                Export::Type { original_name: type_export, alias: alias_id }
+            }
+        };
+
+
+        // Add to scope exports, and add to global exports if root scope
+        let scope = m.scopes.of_node(export_id_node, &mut c);
+        match export {
+            Export::Type { original_name, alias } => {
+                if scope == root_scope {
+                    if let Some(decl) = scope.types.get(&original_name.name) {
+                        exports.add_type(alias.name.clone(), decl.resolve_decl());
+                    }
+                    // if no decl, add_exported logs an error
+                }
+                scope.types.add_exported(original_name, alias, &mut e);
+            }
+            Export::Value { original_name, alias } => {
+                if scope == root_scope {
+                    if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
+                        exports.add_value(alias.name.clone(), decl.resolve_type());
+                    }
+                    // if no decl, add_exported logs an error
+                }
+                scope.values.add_exported(original_name, alias, &mut e);
+            }
+        }
+    }
+    FinishTranspile {
+
+    }
+}
+
+pub struct FinishTranspile {
+
+}
+
 /*
-import { TSParser, TSTree, SourceCode, TSNodeId } from 'ast/tree-sitter-wrapper'
-import ns from 'tree-sitter-nominalscript'
-import {
-  ArrowParam,
-  FormalParam,
-  FunctionDecl,
-  ImportStatement,
-  isAtScope,
-  scopeParentOf,
-  NominalImportSpecifier,
-  NominalType,
-  NominalTypeDecl,
-  ValueDecl,
-  ValueImportSpecifier,
-  AstBinding
-} from 'ast/typed-ast'
-import { AdditionalInfoArgs, FileDiagnostics, logError, ProjectDiagnostics } from 'diagnostics'
-import { ImportCtx } from 'import-export/import-ctx'
-import { mapNullable } from 'misc/misc'
-import assert from 'node:assert'
-import { Queries } from 'ast/queries'
-import { ModuleCtx, ScopeChain } from 'analysis/scopes'
-import { NominalFunctionType, NominalReturnTypeInferred, NominalTypeInferred, NominalTypeShape } from 'analysis/nominal-type-shape'
-import { Exports, TranspileOutHeader } from 'import-export/exports'
-import { GlobalBinding } from 'ast/bindings'
-import { ArrayUtil } from 'misc/array-util'
-import { GeneratorUtil } from 'misc/generator-util'
-import { LazyPromise } from 'misc/lazy-promise'
-
-export { ImportResolveCtx } from './import-export/import-resolve-ctx'
-export { FileDiagnostics, ImportCtx, ProjectDiagnostics, SourceCode }
-
-const { nominalscript: NOMINALSCRIPT } = ns
-
-const PARSER = new TSParser(NOMINALSCRIPT)
-
-/**
- * Transpile (compile) a NominalScript file into TypeScript
- *
- * @param scriptPath path to NominalScript you want to transpile
- * @param importCtx Context for resolving and caching imports
- * @param diagnostics Writer for logging errors, warnings, etc.
- * @returns A `Promise` of the header, which has a thunk that may be resumed to get a `Promise` of the TypeScript code as text.
- *          Or `null` and we log a diagnostic if we cannot resolve.
- */
-export async function transpileFile (
-  scriptPath: string,
-  importCtx: ImportCtx,
-  diagnostics: ProjectDiagnostics
-): Promise<TranspileOutHeader | null> {
-  const header = await importCtx.resolveAuxillaryAndCacheTranspile(scriptPath, async () =>
-    await transpileFileNoCache(scriptPath, importCtx, diagnostics))
-  if ('error' in header) {
-    logError(
-      `failed to transpile: ${header.error}`,
-      diagnostics
-    )
-    return null
-  }
-  return header
-}
-
-async function transpileFileNoCache (
-  scriptPath: string,
-  importCtx: ImportCtx,
-  diagnostics: ProjectDiagnostics
-): Promise<TranspileOutHeader> {
-  const code = await SourceCode.fromFile(scriptPath)
-  const fileDiagnostics = diagnostics.get(scriptPath)
-  return await transpileCode(code, scriptPath, importCtx, fileDiagnostics, diagnostics)
-}
-
-/**
- * Transpile (compile) NominalScript code into TypeScript
- *
- * @param code NominalScript code as text you want to transpile
- * @param importerPath For resolving imports: path to the code file, or `null` if nonexistent
- * @param importCtx Context for resolving and caching imports
- * @param fileDiagnostics Writer for logging errors, warnings, etc. for this file
- * @param projectDiagnostics Writer for logging errors, warnings, etc. for imported files
- * @returns a `Promise` of the TypeScript code as text.
- */
-export async function transpileCode (
-  code: SourceCode,
-  importerPath: string | null,
-  importCtx: ImportCtx,
-  fileDiagnostics: FileDiagnostics,
-  projectDiagnostics: ProjectDiagnostics
-): Promise<TranspileOutHeader> {
-  const ast = await PARSER.parse(code, fileDiagnostics)
-  const exports = Exports.create()
-  const finishTranspile = await transpileAstHeader(ast, exports, importerPath, importCtx, projectDiagnostics)
-  return {
-    exports,
-    code: new LazyPromise(async () => {
-      await finishTranspile()
-      return SourceCode.fromString(ast.rootNode.text)
-    })
-  }
-}
-
-/**
- * Transpile (compile) NominalScript AST into TypeScript. The AST is modified in-place.
- * Calling this function only transpiles the header; you must call the thunk to
- * transpile the rest of the code.
- *
- * @param ast NominalScript ast as text you want to transpile, which gets converted into a valid TypeScript ast.
- * @param exports Will append nominal exports to this map
- * @param importerPath For resolving imports: path to the code file, or `null` if nonexistent
- * @param importCtx Context for resolving and caching imports
- * @param projectDiagnostics Writer for logging errors, warnings, etc. for imported files
- *                           (file diagnostics are in the ast)
- * @returns a thunk which transpiles the rest of the code (because we may not need to and
- *          presumably its more efficient to store intermediate values in a closure
- *          than do the redundant computation)
- */
-export async function transpileAstHeader (
-  ast: TSTree,
-  exports: Exports,
-  importerPath: string | null,
-  importCtx: ImportCtx,
-  projectDiagnostics: ProjectDiagnostics
-): Promise<() => Promise<void>> {
-  // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
-  const ctx = ModuleCtx.create()
-  const rootId = ast.rootNode.id
-  // get also creates the root scope
-  const rootScope = ctx.scopes.get(rootId)
-  // Query all `nominal_type_declaraton`s and all imports.
-  // Build map of nominal type names to their declarations
-  // In global scope, build value map and map functions to their declarations.
-  // Add imported decls (lazily forward resolved) to the nominal type names and global scope value map
-  // Imports are lazily and narrowly resolved so that we allow inter-woven dependencies,
-  // laziness tracks self-recursion so we explicitly fail on cycles
-  //
-  // Everything being a closure like this is inefficient but probably required
-  // for us to resolve maximally inter-woven but non-cyclic dependencies.
-  // In an optimal version we'd have a sum type e.g. for instantly resolved,
-  // and perhaps store closure arguments instead of the closure itself.
-  // But here we just need a first impl
-  for (const match of Queries.NOMINAL_TYPE.matches(ast.rootNode)) {
-    const typeDecl = new NominalTypeDecl(match.captures[0].node)
-    const scopeParent = scopeParentOf(typeDecl.node)!
-    if (scopeParent.id !== ast.rootNode.id) {
-      logError(
-        'Currently, nominal-type cannot be declared in modules or other child scopes', typeDecl.node
-      )
-    }
-
-    const typeName = typeDecl.name.text
-    const prevTypeDecl = ctx.nominalTypeDeclMap.get(typeName)
-    if (prevTypeDecl !== null) {
-      logError(
-        `Duplicate nominal type declaration for '${typeName}'`, typeDecl.node,
-        [`note: previous declaration for '${typeName}'`, prevTypeDecl.node]
-      )
-    }
-    ctx.nominalTypeDeclMap.set(typeName, typeDecl)
-  }
-  for (const match of Queries.FUNCTION.matches(ast.rootNode)) {
-    const funcDecl = new FunctionDecl(match.captures[0].node)
-    const scopeParent = scopeParentOf(funcDecl.node)!
-    const scope = ctx.scopes.get(scopeParent)
-    const funcName = funcDecl.name.text
-    const prevFuncDecl = scope.getHoisted(funcName)
-    if (prevFuncDecl !== null) {
-      logError(
-        `Duplicate function declaration for '${funcName}'`, funcDecl.node,
-        [`note: previous declaration for '${funcName}'`, prevFuncDecl.node],
-        ['note: duplicate declaration in same scope', scopeParent]
-      )
-    }
-    scope.addHoisted(funcDecl)
-  }
-  for (const match of Queries.VALUE.matches(ast.rootNode)) {
-    const valueDecl = new ValueDecl(match.captures[0].node)
-    const scopeParent = scopeParentOf(valueDecl.node)!
-    const scope = ctx.scopes.get(scopeParent)
-    scope.addSequential(valueDecl)
-  }
-  for (const match of Queries.IMPORT.matches(ast.rootNode)) {
-    const importStmt = new ImportStatement(match.captures[0].node)
-    const scopeParent = scopeParentOf(importStmt.node)!
-    const scope = ctx.scopes.get(scopeParent)
-
-    const module = new LazyPromise(async () => {
-      const module = await importCtx.resolveAndCacheTranspile(
-        importStmt.importPath,
-        importerPath,
-        async scriptPath => await transpileFileNoCache(scriptPath, importCtx, projectDiagnostics)
-      )
-      if ('error' in module) {
-        logError(
-          `Error importing module '${importStmt.importPath}': ${module.error}`,
-          importStmt.node
-        )
-        return null
-      }
-      return module
-    })
-    for (const importSpec of importStmt.imports) {
-      const originalName = importSpec.originalName.text
-      const alias = importSpec.alias.text
-      switch (importSpec.type) {
-        case 'nominal-type': {
-          assert(importSpec instanceof NominalImportSpecifier)
-          if (scopeParent !== ast.rootNode) {
-            logError(
-              'Currently, nominal-type imports are not allowed in modules or other child scopes, because they are made visible everywhere',
-              importSpec.node
-            )
-          }
-
-          importSpec.nominalExport = module.map(module => {
-            if (module === null) {
-              return null
-            }
-            if (!module.exports.nominal.has(originalName)) {
-              logError(
-                `Imported nominal type '${originalName}' not found in module '${importStmt.importPathNode.text}'`,
-                importSpec.node,
-                ['note: module path is here', importStmt.importPathNode]
-              )
-            }
-            return module.exports.nominal.get(originalName) ?? null
-          })
-          const prevDecl = ctx.nominalTypeDeclMap.get(alias)
-          if (prevDecl !== null) {
-            logError(
-              `Duplicate nominal type declaration for '${alias}'`, importSpec.node,
-              [`note: previous declaration for '${alias}'`, prevDecl.node]
-            )
-          }
-          ctx.nominalTypeDeclMap.set(alias, importSpec)
-          break
-        }
-        case 'value': {
-          assert(importSpec instanceof ValueImportSpecifier)
-
-          importSpec.valueExport = module.map(module => {
-            if (module === null) {
-              return null
-            }
-            if (!module.exports.value.has(originalName)) {
-              logError(
-                `Imported value '${originalName}' not found in module '${importStmt.importPathNode.text}'`,
-                importSpec.node,
-                ['note: module path is here', importStmt.importPathNode]
-              )
-            }
-            return module.exports.value.get(originalName) ?? null
-          })
-          const prevDecl = scope.getHoisted(alias)
-          if (prevDecl !== null) {
-            logError(
-              `Duplicate value declaration for '${alias}'`, importSpec.node,
-              [`note: previous declaration for '${alias}'`, prevDecl.node]
-            )
-          }
-          scope.addHoisted(importSpec)
-          break
-        }
-        default:
-          throw new Error(`Unhandled import specifier type: ${(importSpec as never as any).type as string}`)
-      }
-    }
-  }
-
-  // Query and prefill exports
-  for (const match of Queries.EXPORT_ID.matches(ast.rootNode)) {
-    const valueExportId = match.captureNamed('value_export_id')?.node
-    const nominalExportId = match.captureNamed('nominal_export_id')?.node
-    const isValue = nominalExportId === null
-    const exportId = isValue ? valueExportId! : nominalExportId
-    assert(exportId)
-
-    // Only root scope is actually exported outside of the file, module and namespace
-    // scopes get exported to the module or namespace
-    const scopeParent = scopeParentOf(exportId)!
-    if (scopeParent.id !== ast.rootNode.id) {
-      continue
-    }
-
-    const exportAliasId = match.captureNamed('export_alias_id')?.node
-    const originalName = exportId.text
-    const alias = exportAliasId?.text ?? originalName
-    if (exports.nominal.has(alias)) {
-      logError(`Duplicate export for '${alias}'`, exportId)
-    }
-    if (isValue) {
-      if (!rootScope.hasAny(originalName)) {
-        logError(`No value declaration defined or imported for '${originalName}'`, exportId)
-      }
-      exports.value.set(alias, {
-        originalName,
-        decl: rootScope.getLast(originalName)?.resolveValue ?? LazyPromise.immediate(null)
-      })
-    } else {
-      if (!ctx.nominalTypeDeclMap.has(originalName)) {
-        logError(`No nominal type declaration defined or imported for '${originalName}'`, exportId)
-      }
-      exports.nominal.set(alias, {
-        originalName,
-        decl: ctx.nominalTypeDeclMap.get(originalName)?.resolveNominal ?? LazyPromise.immediate(null)
-      })
-    }
-  }
-
   // Rest of the code is in a thunk: we don't have to run any of this if we're only
   // loading the file to read imported decls
   return async () => {

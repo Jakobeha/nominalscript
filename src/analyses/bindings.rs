@@ -4,23 +4,35 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use smol_str::SmolStr;
 use derive_more::Display;
-use crate::analyses::types::{FatType, FatTypeDecl, DynReType, DynReTypeDecl, ReType, ReTypeDecl};
+use crate::analyses::types::{FatType, FatTypeDecl, DynRlType, DynRlTypeDecl, RlType, RlTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
-use crate::misc::lazy::{Lazy, LazyError, RcLazy};
+use crate::misc::lazy_alt::{Lazy, LazyError, RcLazy};
+
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Locality {
+    #[display(fmt = "global")]
+    Global,
+    #[display(fmt = "imported")]
+    Imported,
+    #[display(fmt = "local")]
+    Local
+}
 
 /// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
 pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn resolve_type(&self) -> &DynReType;
+    fn resolve_type(&self) -> &DynRlType;
+    fn locality(&self) -> Locality;
 }
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
 pub trait TypeBinding {
     fn name(&self) -> &TypeName;
-    fn resolve_decl(&self) -> &DynReTypeDecl;
+    fn resolve_decl(&self) -> &DynRlTypeDecl;
+    fn locality(&self) -> Locality;
 }
 
 /// [ValueBinding] inside the file. We track its local uses for type inference.
@@ -30,6 +42,9 @@ pub trait LocalValueBinding<'tree>: AstNode<'tree> + ValueBinding {
     // Currently it doesn't seem we need this, since we only use them for backwards inference
     // and we can do backwards inference for type holes. Maybe in the future...
     // fn local_uses(&self) -> &LocalUses<'tree>;
+    fn locality(&self) -> Locality {
+        Locality::Local
+    }
 }
 
 /// [TypeBinding] inside the file. We do not track uses for inference.
@@ -49,7 +64,7 @@ pub trait HoistedValueBinding: ValueBinding {}
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalValueBinding {
     pub name: ValueName,
-    pub type_: ReType,
+    pub type_: RlType,
 }
 
 /// [TypeBinding] which is implicitly available to the file (available and not imported).
@@ -57,7 +72,7 @@ pub struct GlobalValueBinding {
 /// There are 3 kinds of bindings: local, imported, and global.
 pub struct GlobalTypeBinding {
     pub name: TypeName,
-    pub decl: ReTypeDecl,
+    pub decl: RlTypeDecl,
 }
 
 // pub struct LocalUses<'tree> {
@@ -80,7 +95,7 @@ impl GlobalValueBinding {
     pub fn new(name: ValueName, type_: FatType) -> Self {
         Self {
             name,
-            type_: ReType::resolved(type_),
+            type_: RlType::resolved(type_),
         }
     }
 }
@@ -90,8 +105,12 @@ impl ValueBinding for GlobalValueBinding {
         &self.name
     }
 
-    fn resolve_type(&self) -> &DynReType {
+    fn resolve_type(&self) -> &DynRlType {
         &self.type_
+    }
+
+    fn locality(&self) -> Locality {
+        Locality::Global
     }
 }
 
@@ -99,7 +118,7 @@ impl GlobalTypeBinding {
     pub fn new(name: TypeName, decl: FatTypeDecl) -> Self {
         Self {
             name,
-            decl: ReTypeDecl::resolved(decl),
+            decl: RlTypeDecl::resolved(decl),
         }
     }
 }
@@ -109,8 +128,12 @@ impl TypeBinding for GlobalTypeBinding {
         &self.name
     }
 
-    fn resolve_decl(&self) -> &DynReTypeDecl {
+    fn resolve_decl(&self) -> &DynRlTypeDecl {
         &self.decl
+    }
+
+    fn locality(&self) -> Locality {
+        Locality::Global
     }
 }
 

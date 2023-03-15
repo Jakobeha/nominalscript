@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use crate::analyses::bindings::{GlobalValueBinding, LocalValueBinding, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, Scope, scope_parent_of};
-use crate::analyses::types::ReType;
+use crate::analyses::types::RlType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 use crate::ast::typed_nodes::AstValueDecl;
 use crate::diagnostics::{error, FileLogger};
@@ -102,12 +102,12 @@ impl<'tree> ScopeChain {
         scope: &'a ScopeChain,
         typed_exprs: &'a ExprTypeMap,
         e: &mut FileLogger<'_>,
-    ) -> &'a ReType {
+    ) -> &'a RlType {
         scope.at_pos(use_id, use_node)
             .and_then(|def| def.infer_type(typed_exprs))
             .unwrap_or_else(|| {
                 error!(e, "undeclared identifier `{}`", use_id => use_node);
-                &ReType::NEVER
+                &RlType::NEVER
             })
     }
 }

@@ -3,17 +3,28 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use derive_more::{Display, Error};
+use crate::analyses::types::ProjectResolveCache;
+use crate::compile::FatalTranspileError;
+use crate::diagnostics::ProjectDiagnostics;
 use crate::import_export::export::{ModulePath, TranspileOutHeader};
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError, ResolvedFatPath, ResolveFailure};
 
 /// Caches and resolves imports.
-/// Typically construct via `ImportCtx.regular` (which is async because it reads tsconfig and other I/O),
-/// but you can call `new` for fine-grained control over module resolution
-pub struct ImportCtx {
+#[derive(Debug)]
+pub struct ProjectImportCtx<'a> {
     /// Caches imports, does change when calling transpile
-    cache: RefCell<ImportCache>,
+    cache: &'a mut ImportCache,
     /// Stateless relative to program (doesn't change when calling transpile)
-    resolver: ImportResolver
+    resolver: &'a ImportResolver
+}
+
+/// Caches and resolves imports for a particular file.
+///
+/// Necessary because the same module path in different files may point to difference modules
+#[derive(Debug)]
+pub struct FileImportCtx<'a> {
+    pub project_ctx: ProjectImportCtx<'a>,
+    importer_path: &'a Path
 }
 
 #[derive(Debug, Clone, Display, Error, PartialEq, Eq)]
@@ -28,79 +39,95 @@ pub enum ImportError {
     NotNominalScriptPath { #[error(not(source))] path: PathBuf },
     #[display(fmt = "could not load file at path {}: {}", "path.display()", error)]
     CouldNotLoad { path: PathBuf, #[error(source)] error: std::io::Error },
+    FailedToTranspile { #[error(source)] error: FatalTranspileError }
+}
+
+impl From<FatalTranspileError> for ImportError {
+    fn from(error: FatalTranspileError) -> Self {
+        ImportError::FailedToTranspile { error }
+    }
 }
 
 /// Caches imports
-struct ImportCache {
-    module_to_fat_path: HashMap<ModulePath, ResolvedFatPath>,
-    fat_path_to_transpile_out: HashMap<ResolvedFatPath, Result<Rc<TranspileOutHeader>, ImportError>>
+#[derive(Debug)]
+pub(crate) struct ImportCache {
+    module_to_fat_path: HashMap<PathBuf, HashMap<ModulePath, ResolvedFatPath>>,
+    fat_path_to_transpile_out: HashMap<ResolvedFatPath, Result<TranspileOutHeader, ImportError>>
 }
 
-impl ImportCtx {
-    pub fn regular(module_path: PathBuf) -> Result<Self, ImportResolverCreateError> {
-        Ok(Self::new(ImportResolver::regular(module_path)?))
+impl<'a> ProjectImportCtx<'a> {
+    pub(crate) fn new(cache: &'a mut ImportCache, resolver: &'a ImportResolver) -> Self {
+        Self { cache, resolver }
     }
 
-    pub fn new(resolver: ImportResolver) -> Self {
-        Self {
-            cache: RefCell::new(ImportCache::new()),
-            resolver
-        }
+    pub(crate) fn file<'b>(&'b mut self, importer_path: &'b Path) -> FileImportCtx<'b> {
+        FileImportCtx { project_ctx: ProjectImportCtx::new(&mut self.cache, &self.resolver), importer_path }
     }
 
     /// Resolves the module path.
     /// If already partially or fully transpiled, returns the cached result.
     /// Otherwise, calls `transpile` with the actual script path
-    pub fn resolve_and_cache_transpile(
-        &self,
+    fn resolve_and_cache_transpile(
+        &mut self,
+        importer_path: &Path,
         module_path: &ModulePath,
-        importer_path: Option<&Path>,
-        transpile: impl FnOnce(&Path) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<Rc<TranspileOutHeader>, ImportError> {
-        let fat_path = ImportCache::cache_resolve_module(
-            &self.cache,
-            module_path,
-            || self.resolver.locate(&module_path, importer_path)
+        transpile: impl FnOnce(&Path, &mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+    ) -> Result<&TranspileOutHeader, ImportError> {
+        let fat_path = self.cache.cache_resolve_module(
+            (importer_path, module_path),
+            || self.resolver.locate(&module_path, Some(importer_path))
         );
         if fat_path.is_null() {
             return Err(ImportError::CouldNotResolve { module_path: module_path.to_string() });
         }
-        ImportCache::cache_transpile(
-            &self.cache,
+        self.cache.cache_transpile(
             fat_path,
-            |fat_path| {
+            |fat_path, cache| {
                 let Some(nominalscript_path) = fat_path.nominalscript_path.as_ref() else {
                     return Err(ImportError::NoNominalScript { fat_path: fat_path.clone() });
                 };
-                transpile(nominalscript_path)
+                transpile(nominalscript_path, &mut ProjectImportCtx::new(cache, &self.resolver))
             }
-        )
+        ).as_ref().map_err(|e| e.clone())
     }
 
     /// Resolves declarations / nominal exports and also checks that `scriptPath` is correct.
     /// If already partially or fully transpiled, returns the cached result.
     /// Otherwise, calls `transpile` with the actual script path
     pub fn resolve_auxillary_and_cache_transpile(
-        &self,
+        &mut self,
         script_path: &Path,
-        transpile: impl FnOnce() -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<Rc<TranspileOutHeader>, ImportError> {
+        transpile: impl FnOnce(&mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+    ) -> Result<&TranspileOutHeader, ImportError> {
         let fat_path = self.resolver
             .fat_script_path(script_path)
             .map_err(|resolve_failure| ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure })?;
         if fat_path.nominalscript_path.is_none() {
             return Err(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() });
         }
-        ImportCache::cache_transpile2(
-            &self.cache,
+        self.cache.cache_transpile2(
             fat_path,
-            |_fat_path| transpile()
-        )
+            |_fat_path, cache| transpile(&mut ProjectImportCtx::new(cache, &self.resolver))
+        ).as_ref().map_err(|e| e.clone())
     }
 }
 
+impl<'a> FileImportCtx<'a> {
+    /// Resolves the module path.
+    /// If already partially or fully transpiled, returns the cached result.
+    /// Otherwise, calls `transpile` with the actual script path
+    pub fn resolve_and_cache_transpile(
+        &mut self,
+        module_path: &ModulePath,
+        transpile: impl FnOnce(&Path, &mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+    ) -> Result<&TranspileOutHeader, ImportError> {
+        self.project_ctx.resolve_and_cache_transpile(self.importer_path, module_path, transpile)
+    }
+}
+
+
 impl ImportCache {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             module_to_fat_path: HashMap::new(),
             fat_path_to_transpile_out: HashMap::new()
@@ -108,17 +135,19 @@ impl ImportCache {
     }
 
     fn cache_resolve_module(
-        this: &RefCell<Self>,
-        module: &ModulePath,
+        &mut self,
+        (importer_path, module_path): (&Path, &ModulePath),
         resolve: impl FnOnce() -> Result<ResolvedFatPath, ResolveFailure>
-    ) -> Ref<'_, ResolvedFatPath> {
-        if let Ok(fat_path) = Ref::filter_map(this.borrow(), |this| this.module_to_fat_path.get(module)) {
-            fat_path
-        } else {
-            let fat_path = resolve().unwrap_or_default();
-            this.borrow_mut().module_to_fat_path.insert(module.clone(), fat_path);
-            Ref::map(this.borrow(), |this| this.module_to_fat_path.get(module).unwrap())
+    ) -> &ResolvedFatPath {
+        if let Ok(fat_path) = self.module_to_fat_path.get(importer_path).and_then(|m| m.get(module_path)) {
+            return fat_path
         }
+        let fat_path = resolve().unwrap_or_default();
+        let module_to_fat_path = self.module_to_fat_path
+            .entry(importer_path.to_path_buf())
+            .or_default();
+        module_to_fat_path.insert(module.clone(), fat_path);
+        module_to_fat_path.get(module_path).unwrap()
     }
 
     /// If the path has already been partially or fully transpiled, returns the cached result.
@@ -126,35 +155,35 @@ impl ImportCache {
     ///
     /// *Panics* if `fat_path` is null
     fn cache_transpile(
-        this: &RefCell<Self>,
-        fat_path: Ref<'_, ResolvedFatPath>,
-        transpile: impl FnOnce(&ResolvedFatPath) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<Rc<TranspileOutHeader>, ImportError> {
+        &mut self,
+        fat_path: &ResolvedFatPath,
+        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<TranspileOutHeader, ImportError>
+    ) -> &Result<TranspileOutHeader, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
-        if let Ok(transpile_result) = Ref::filter_map(this.borrow(), |this| this.fat_path_to_transpile_out.get(&*fat_path)) {
-            transpile_result.clone()
-        } else {
-            // Drop fat_path before transpile, so we can borrow_mut
-            let fat_path = fat_path.clone();
-            let header = transpile(&fat_path).map(Rc::new);
-            this.borrow_mut().fat_path_to_transpile_out.insert(fat_path, header.clone());
-            header
+        if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(fat_path) {
+            return transpile_result
         }
+        let transpiled = transpile(&fat_path, self);
+        let std::collections::hash_map::Entry::Vacant(entry) = self.fat_path_to_transpile_out.entry(fat_path.clone()) else {
+            unreachable!("we just checked that the entry doesn't exist")
+        };
+        entry.insert(transpiled)
     }
 
     /// Same as [cache_transpile] but takes an owned `fat_path` instead of a [Ref].
     fn cache_transpile2(
-        this: &RefCell<Self>,
+        &mut self,
         fat_path: ResolvedFatPath,
-        transpile: impl FnOnce(&ResolvedFatPath) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<Rc<TranspileOutHeader>, ImportError> {
+        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<TranspileOutHeader, ImportError>
+    ) -> &Result<TranspileOutHeader, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
-        if let Ok(transpile_result) = Ref::filter_map(this.borrow(), |this| this.fat_path_to_transpile_out.get(&fat_path)) {
-            transpile_result.clone()
-        } else {
-            let header = transpile(&fat_path).map(Rc::new);
-            this.borrow_mut().fat_path_to_transpile_out.insert(fat_path, header.clone());
-            header
+        if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(&fat_path) {
+            return transpile_result
         }
+        let transpiled = transpile(&fat_path, self);
+        let std::collections::hash_map::Entry::Vacant(entry) = self.fat_path_to_transpile_out.entry(fat_path) else {
+            unreachable!("we just checked that the entry doesn't exist")
+        };
+        entry.insert(transpiled)
     }
 }

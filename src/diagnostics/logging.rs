@@ -2,7 +2,7 @@ use std::path::Path;
 use std::ptr::NonNull;
 use smallvec::SmallVec;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
-use crate::misc::lazy::LazyError;
+use crate::misc::lazy_alt::LazyError;
 
 /// Allows you to log project (global or file) diagnostics.
 ///

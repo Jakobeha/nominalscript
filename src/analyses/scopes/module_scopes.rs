@@ -16,11 +16,11 @@ struct _ModuleScopes<'tree> {
 }
 
 pub fn scope_parent_of(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<TSNode<'_>> {
-    // TODO
+    todo!()
 }
 
 pub fn lexical_scope_parent_of(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<TSNode<'_>> {
-    // TODO
+    todo!()
 }
 
 impl<'tree> ModuleScopes<'tree> {
@@ -32,6 +32,15 @@ impl<'tree> ModuleScopes<'tree> {
         }))
     }
 
+    /// Gets the parent scope containing the node
+    ///
+    /// *Panics* if the node is the tree root
+    pub fn of_node(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> Rc<Scope<'tree>> {
+        let parent = scope_parent_of(node, c).expect("node is root so does not have a parent");
+        self.get(parent, c)
+    }
+
+    /// Gets the scope denoted by the node (which should be a statement block, etc.)
     pub fn get(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> Rc<Scope<'tree>> {
         if !self.0.borrow().scopes.contains_key(&node) {
             let mut this = self.0.borrow_mut();

@@ -13,6 +13,7 @@ use crate::misc::{chain, path};
 /// Usually generated from `ImportResolveCtx.regular`,
 /// which takes a module root path and parses the tsconfig to load the other info.
 /// But it's also customizable, probably moreso than necessary.
+#[derive(Debug, Clone)]
 pub struct ImportResolver {
     /// Whether to resolve absolute paths from `moduleRootPath`/node_modules,
     /// *and* resolve node module cached imports in `moduleRootPath`/node_modules/`module`/out/nominal/`remainderPath`
@@ -31,6 +32,7 @@ pub struct ImportResolver {
     pub module_root_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
 pub struct GlobPaths {
     pub globs: GlobSet,
     pub glob_paths: Vec<NonEmpty<PathBuf>>,

@@ -25,7 +25,7 @@ pub struct NominalGuard {
 }
 
 /// Thin type = type reference which is parsed from a string or AST node
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum ThinType {
     #[default]
     Any,
@@ -43,7 +43,7 @@ pub enum ThinType {
 }
 
 /// An identifier and its generic args
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeIdent<Type> {
     pub name: TypeName,
     // Remember: these don't need to be boxed because they are in a vec
@@ -51,7 +51,7 @@ pub struct TypeIdent<Type> {
 }
 
 /// A generic parameter (generic def)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeParam<Type> {
     /// Note that the actual variance is the intersection of this and the inferred variance.
     /// Furthermore, if this is outside of the actual variance the compiler will log an error
@@ -62,7 +62,7 @@ pub struct TypeParam<Type> {
     pub supers: Vec<Type>
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Variance {
     /// `lhs` must be equivalent to `rhs`, i.e. `lhs` and `rhs` must be subtypes of each other
     Invariant,
@@ -79,7 +79,7 @@ pub enum Variance {
 /// (primitive types have identifiers).
 ///
 /// All inner types are boxed to reduce size and allow recursive definitions
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeStructure<Type> {
     Fn {
         /// Function type. Boxed because it's large
@@ -99,7 +99,7 @@ pub enum TypeStructure<Type> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StructureKind {
     Fn,
     Array,
@@ -108,7 +108,7 @@ pub enum StructureKind {
 }
 
 /// Function type structure
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FnType<Type> {
     /// Type parameters if polymorphic
     pub type_params: Vec<TypeParam<Type>>,
@@ -122,7 +122,7 @@ pub struct FnType<Type> {
     pub return_type: ReturnType<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Type of a function return. Note that `Void` is different (and a subtype) of `Type(Any)`,
 /// which is the default.
 pub enum ReturnType<Type> {
@@ -130,14 +130,14 @@ pub enum ReturnType<Type> {
     Type(Type),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Field<Type> {
     pub name: SmolStr,
     pub type_: Type,
 }
 
 /// A type which may be optional
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OptionalType<Type> {
     pub optionality: Optionality,
     pub type_: Type
@@ -152,7 +152,7 @@ pub struct OptionalType<Type> {
 ///
 /// This type implements `Ord` according to the type lattice: `Nullable` < `NonNullable` because all
 /// instances of a nullable type are instances of the corresponding non-nullable type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Nullability {
     Nullable,
     NonNullable,
@@ -167,7 +167,7 @@ pub enum Nullability {
 ///
 /// This type implements `Ord` according to the type lattice: `Optional` < `Required` because all
 /// instances of a optional type are instances of the corresponding required type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Optionality {
     Optional,
     Required,

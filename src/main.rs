@@ -8,6 +8,8 @@ pub mod diagnostics;
 pub mod ast;
 /// Import resolution, exports. Also includes the compiled output
 pub mod import_export;
+/// Project datastructure which contains everything
+mod project;
 /// Utilities which could go in any crate
 pub mod misc;
 /// This is the file with the one function (+ wrappers) which transpiles everything.
@@ -19,6 +21,8 @@ pub mod misc;
 /// for all of JS/TS's different expressions, but all of the cases are really straightforward
 /// (with the less straightforward stuff in those other modules)
 pub mod compile;
+
+pub use project::*;
 
 /// Run the program
 fn main() {

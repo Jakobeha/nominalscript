@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
 use crate::ast::tree_sitter::{TSParser, TSRange};
-use std::cell::RefCell;
 use std::path::PathBuf;
 use tree_sitter_nominalscript::language_nominalscript;
+use crate::misc::NiceMutex;
 use crate::import_export::export::ModulePath;
 
 /// Wrapper for arbitrary tree-sitter nodes, queries, and other datatypes
@@ -21,6 +21,6 @@ pub struct InProjectLoc {
 }
 
 lazy_static! {
-    pub static ref NOMINALSCRIPT_PARSER: RefCell<TSParser> =
-        RefCell::new(TSParser::new(language_nominalscript()).expect("failed to load NominalScript parser"));
+    pub static ref NOMINALSCRIPT_PARSER: NiceMutex<TSParser> =
+        NiceMutex::new(TSParser::new(language_nominalscript()).expect("failed to load NominalScript parser"));
 }
