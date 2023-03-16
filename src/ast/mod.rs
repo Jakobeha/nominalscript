@@ -3,7 +3,7 @@ use crate::ast::tree_sitter::{TSParser, TSRange};
 use std::path::PathBuf;
 use tree_sitter_nominalscript::language_nominalscript;
 use crate::misc::NiceMutex;
-use crate::import_export::export::ModulePath;
+use crate::import_export::export::ImportPath;
 
 /// Wrapper for arbitrary tree-sitter nodes, queries, and other datatypes
 pub mod tree_sitter;
@@ -11,14 +11,6 @@ pub mod tree_sitter;
 pub mod queries;
 /// Typed nodes for NominalScript (not all nodes get their own type, but some do)
 pub mod typed_nodes;
-
-/// Thread-safe file-independent location.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct InProjectLoc {
-    pub module_path: ModulePath,
-    pub real_path: PathBuf,
-    pub range: TSRange
-}
 
 lazy_static! {
     pub static ref NOMINALSCRIPT_PARSER: NiceMutex<TSParser> =

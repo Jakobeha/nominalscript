@@ -6,7 +6,7 @@ use derive_more::{Display, Error};
 use crate::analyses::types::ProjectResolveCache;
 use crate::compile::FatalTranspileError;
 use crate::diagnostics::ProjectDiagnostics;
-use crate::import_export::export::{ModulePath, TranspileOutHeader};
+use crate::import_export::export::{ImportPath, Module};
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError, ResolvedFatPath, ResolveFailure};
 
 /// Caches and resolves imports.
@@ -51,8 +51,8 @@ impl From<FatalTranspileError> for ImportError {
 /// Caches imports
 #[derive(Debug)]
 pub(crate) struct ImportCache {
-    module_to_fat_path: HashMap<PathBuf, HashMap<ModulePath, ResolvedFatPath>>,
-    fat_path_to_transpile_out: HashMap<ResolvedFatPath, Result<TranspileOutHeader, ImportError>>
+    module_to_fat_path: HashMap<PathBuf, HashMap<ImportPath, ResolvedFatPath>>,
+    fat_path_to_transpile_out: HashMap<ResolvedFatPath, Result<Module, ImportError>>
 }
 
 impl<'a> ProjectImportCtx<'a> {
@@ -74,13 +74,10 @@ impl<'a> ProjectImportCtx<'a> {
     fn resolve_and_cache_transpile(
         &mut self,
         importer_path: &Path,
-        module_path: &ModulePath,
-        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<&TranspileOutHeader, ImportError> {
-        let fat_path = self.cache.cache_resolve_module(
-            (importer_path, module_path),
-            || self.resolver.locate(&module_path, Some(importer_path))
-        );
+        module_path: &ImportPath,
+        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<Module, ImportError>
+    ) -> Result<&Module, ImportError> {
+        let fat_path = self.resolve_and_cache_fat_path(importer_path, module_path);
         if fat_path.is_null() {
             return Err(ImportError::CouldNotResolve { module_path: module_path.to_string() });
         }
@@ -101,8 +98,8 @@ impl<'a> ProjectImportCtx<'a> {
     pub fn resolve_auxillary_and_cache_transpile(
         &mut self,
         script_path: &Path,
-        transpile: impl FnOnce(ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<&TranspileOutHeader, ImportError> {
+        transpile: impl FnOnce(ProjectImportCtx<'_>) -> Result<Module, ImportError>
+    ) -> Result<&Module, ImportError> {
         let fat_path = self.resolver
             .fat_script_path(script_path)
             .map_err(|resolve_failure| ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure })?;
@@ -113,6 +110,20 @@ impl<'a> ProjectImportCtx<'a> {
             fat_path,
             |_fat_path, cache| transpile(ProjectImportCtx::new(cache, &self.resolver))
         ).as_ref().map_err(|e| e.clone())
+    }
+
+    pub fn resolve_and_cache_script_path(&mut self, importer_path: &Path, module_path: &ImportPath) -> Result<&Path, ImportError> {
+        let fat_path = self.resolve_and_cache_fat_path(importer_path, module_path);
+        fat_path.nominalscript_path.as_deref()
+            .ok_or_else(|| ImportError::NoNominalScript { fat_path: fat_path.clone() })
+    }
+
+
+    fn resolve_and_cache_fat_path(&mut self, importer_path: &Path, module_path: &ImportPath) -> &ResolvedFatPath {
+        self.cache.cache_resolve_module(
+            (importer_path, module_path),
+            || self.resolver.locate(&module_path, Some(importer_path))
+        )
     }
 }
 
@@ -133,10 +144,14 @@ impl<'a> FileImportCtx<'a> {
     /// Otherwise, calls `transpile` with the actual script path
     pub fn resolve_and_cache_transpile(
         &mut self,
-        module_path: &ModulePath,
-        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
-    ) -> Result<&TranspileOutHeader, ImportError> {
+        module_path: &ImportPath,
+        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<Module, ImportError>
+    ) -> Result<&Module, ImportError> {
         self.project_ctx.resolve_and_cache_transpile(self.importer_path, module_path, transpile)
+    }
+
+    pub fn resolve_and_cache_script_path(&mut self, module_path: &ImportPath) -> Result<&Path, ImportError> {
+        self.project_ctx.resolve_and_cache_script_path(self.importer_path, module_path)
     }
 }
 
@@ -151,7 +166,7 @@ impl ImportCache {
 
     fn cache_resolve_module(
         &mut self,
-        (importer_path, module_path): (&Path, &ModulePath),
+        (importer_path, module_path): (&Path, &ImportPath),
         resolve: impl FnOnce() -> Result<ResolvedFatPath, ResolveFailure>
     ) -> &ResolvedFatPath {
         if let Ok(fat_path) = self.module_to_fat_path.get(importer_path).and_then(|m| m.get(module_path)) {
@@ -172,8 +187,8 @@ impl ImportCache {
     fn cache_transpile(
         &mut self,
         fat_path: &ResolvedFatPath,
-        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<TranspileOutHeader, ImportError>
-    ) -> &Result<TranspileOutHeader, ImportError> {
+        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<Module, ImportError>
+    ) -> &Result<Module, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
         if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(fat_path) {
             return transpile_result
@@ -189,8 +204,8 @@ impl ImportCache {
     fn cache_transpile2(
         &mut self,
         fat_path: ResolvedFatPath,
-        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<TranspileOutHeader, ImportError>
-    ) -> &Result<TranspileOutHeader, ImportError> {
+        transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<Module, ImportError>
+    ) -> &Result<Module, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
         if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(&fat_path) {
             return transpile_result

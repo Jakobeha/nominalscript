@@ -3,11 +3,10 @@ use serde_json::Value;
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
 use crate::analyses::types::{FatType, FatTypeDecl, RlReturnType, ReturnType, RlType, ThinType, ThinTypeDecl, TypeParam};
-use crate::ast::InProjectLoc;
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::AstType;
 use crate::diagnostics::ProjectDiagnostics;
-use crate::import_export::export::ModulePath;
+use crate::import_export::export::ImportPath;
 use crate::import_export::import_ctx::ProjectImportCtx;
 
 /// Required or assigned type with information on what node it was determined from,

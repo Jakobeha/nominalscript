@@ -1,28 +1,51 @@
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::HashMap;
-use std::path::Path;
+use std::marker::PhantomPinned;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use elsa::{FrozenMap, FrozenVec};
+use elsa::{FrozenIndexMap, FrozenMap, FrozenVec};
+use indexmap::IndexMap;
 use once_cell::unsync::OnceCell;
 use tree_sitter::LogType::Parse;
 use crate::analyses::bindings::{Locality, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
-use crate::analyses::types::{FatType, FatTypeDecl, DeterminedReturnType, Nullability, ReturnType, ThinType, RlReturnType, RlType, TypeIdent};
+use crate::analyses::types::{FatType, FatTypeDecl, DeterminedReturnType, Nullability, ReturnType, ThinType, RlReturnType, RlType, TypeIdent, FileResolveCache, ResolveCache};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeDecl, AstTypeIdent, AstTypeImportSpecifier, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
 use crate::diagnostics::{error, issue, hint, FileLogger};
-use crate::import_export::export::{Exports, TranspileOutHeader};
+use crate::import_export::export::{Exports, Module};
+
+/// Raw pointer to scope which can be derefenced if we know the scope exists
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RawScopePtr(*const Scope<'static>);
+
+/// Pointer to a scope
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScopePtr<'tree>(Pin<Rc<Scope<'tree>>>);
+
+/// Raw pointer to pinned script path which can be dereferenced if we know the scope containing the imported path exists
+pub(crate) struct RawScriptPathPtr(*const (PhantomPinned, Path));
+
+/// Script path which is pinned for [ResolvedLazy]
+pub(crate) struct ScriptPathPtr(Pin<Box<(PhantomPinned, Path)>>);
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
 ///
 /// Not all scopes actually have their own types, params, etc.
 /// but they are all provided for conformity and because it uses negligible effort and resources.
+#[derive(Debug)]
 pub struct Scope<'tree> {
     did_set_params: bool,
+    /// These must be stored in the scope because pointers in [ResolvedLazy] values reference them
+    imported_script_paths: RefCell<Vec<ScriptPathPtr>>,
     pub values: ValueScope<'tree>,
     pub types: TypeScope<'tree>,
-    pub parent: Weak<Scope<'tree>>
+    pub(crate) resolve_cache: ResolveCache,
+    pub parent: Weak<Scope<'tree>>,
+    _pinned: PhantomPinned
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,12 +57,12 @@ struct ExportedId<'tree, Name> {
 /// A local scope: contains all of the value bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.)
 pub struct ValueScope<'tree> {
-    params: FrozenVec<Box<AstParameter<'tree>>>,
+    params: FrozenIndexMap<ValueName, Box<AstParameter<'tree>>>,
     hoisted: FrozenMap<ValueName, Box<dyn ValueBinding<'tree>>>,
     sequential: FrozenMap<ValueName, FrozenVec<Box<AstValueDecl<'tree>>>>,
     exported: RefCell<HashMap<ValueName, ExportedId<'tree, ValueName>>>,
-    return_: OnceCell<AstReturn<'tree>>,
-    throw: OnceCell<AstThrow<'tree>>,
+    return_: Cell<Option<AstReturn<'tree>>>,
+    throw: Cell<Option<AstThrow<'tree>>>,
 }
 
 /// A local scope: contains all of the type bindings in a scope node
@@ -49,13 +72,138 @@ pub struct TypeScope<'tree> {
     exported: RefCell<HashMap<TypeName, ExportedId<'tree, TypeName>>>,
 }
 
+impl RawScopePtr {
+    pub const fn null() -> RawScopePtr {
+        RawScopePtr(std::ptr::null())
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    /// SAFETY: You must statically know that the scope being pointed to is alive.
+    /// This creates a new reference to that scope, incrementing the reference count.
+    ///
+    /// Note that [as_raw] doesn't affect the reference count, so if you call [as_raw] and then
+    /// drop the pointer (decrements the count) and there are no active references, you can't call
+    /// `from_raw` without UB.
+    ///
+    /// Returns `None` (not UB) if this is null.
+    pub(crate) unsafe fn upgrade<'tree>(self) -> Option<ScopePtr<'tree>> {
+        if self.is_null() {
+            return None
+        }
+        unsafe {
+            // SAFETY: Rc::into_raw is equivalent to Rc::as_ptr and then mem::forget.
+            // We don't call forget (letting the reference from as_raw be dropped)
+            // but increment the reference count beforehand (since Rc::from_raw won't).
+            // So this is equivalent to Rc::from_raw and Rc::into_raw.
+            // And the pin is ok because Rc::pin trivially calls Pin::new_unchecked
+            // (Rc is intrinsically Pinned since it's a pointer)
+            let ptr = self.0 as *const Scope<'tree>;
+            Rc::increment_strong_count(ptr);
+            Some(ScopePtr(Pin::new_unchecked(Rc::from_raw(ptr))))
+        }
+    }
+}
+
+impl<'tree> ScopePtr<'tree> {
+    pub(super) fn new(parent: Option<&ScopePtr<'tree>>) -> Self {
+        ScopePtr(Rc::pin(Scope::new(parent)))
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn as_raw(this: &Self) -> RawScopePtr {
+        RawScopePtr(Self::as_ptr(this) as *const Scope<'static>)
+    }
+
+    pub fn downgrade(this: &Self) -> Weak<Scope<'tree>> {
+        // SAFETY: we are not mutating the Rc but creating an (unpinned) clone
+        Rc::downgrade(unsafe { ScopePtr::unpinned(this) })
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn as_ptr(this: &Self) -> *const Scope<'tree> {
+        // SAFETY: we are not mutating the Rc but creating an (unpinned) pointer
+        unsafe { Rc::as_ptr(Self::unpinned(this)) }
+    }
+
+    /// SAFETY: You must ensure that the inner reference remains pinned
+    unsafe fn unpinned(this: &Self) -> &Rc<Scope<'tree>> {
+        // SAFETY: Pin<Rc<_>> = Rc<_> but pinned
+        std::mem::transmute::<&Pin<Rc<Scope<'tree>>>, &Rc<Scope<'tree>>>(&this.0)
+    }
+}
+
+impl<'tree> Deref for ScopePtr<'tree> {
+    type Target = Scope<'tree>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl RawScriptPathPtr {
+    pub const fn null() -> RawScriptPathPtr {
+        RawScriptPathPtr(std::ptr::null())
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    /// SAFETY: You must statically know that the path being pointed to is alive.
+    ///
+    /// Returns `None` (not UB) if this is null.
+    pub(crate) unsafe fn upgrade<'a>(self) -> Option<&'a Path> {
+        unsafe {
+            // SAFETY: (PhantomPinned, Path) == Path and we already "know" it's alive from the above
+            let ptr = self.0 as *const Path;
+            ptr.as_ref()
+        }
+    }
+}
+
+impl ScriptPathPtr {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        // SAFETY: Path == (PhantomPinned, Path)
+        ScriptPathPtr(Box::into_pin(unsafe { std::mem::transmute::<Box<Path>, Box<(PhantomPinned, Path)>>(path.into_boxed_path()) }))
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn as_raw(this: &Self) -> RawScriptPathPtr {
+        // SAFETY: We are not mutating the pinned data but only converting to a reference
+        // (and also the pin doesn't really matter here)
+        RawScriptPathPtr(unsafe { Pin::into_inner(this.0.as_ref()) } as *const (PhantomPinned, Path))
+    }
+}
+
+impl Deref for ScriptPathPtr {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl AsRef<Path> for ScriptPathPtr {
+    fn as_ref(&self) -> &Path {
+        // SAFETY: (PhantomPinned, Path) == Path
+        let inner = unsafe { std::mem::transmute::<Pin<&(PhantomPinned, Path)>, Pin<&Path>>(this.0.as_ref()) };
+        Pin::into_inner(inner)
+    }
+}
+
 impl<'tree> Scope<'tree> {
-    pub(super) fn new(parent: Option<&Rc<Scope<'tree>>>) -> Scope<'tree> {
+    fn new(parent: Option<&ScopePtr<'tree>>) -> Self {
         Scope {
             did_set_params: false,
+            imported_script_paths: RefCell::new(Vec::new()),
             values: ValueScope::new(),
             types: TypeScope::new(),
-            parent: parent.map_or_else(Weak::new, Rc::downgrade)
+            resolve_cache: ResolveCache::new(),
+            parent: parent.map_or_else(Weak::new, ScopePtr::downgrade),
+            _pinned: PhantomPinned
         }
     }
 
@@ -65,37 +213,29 @@ impl<'tree> Scope<'tree> {
     }
 
     pub fn add_imported(&self, import_stmt: AstImportStatement<'tree>) {
+        self.imported_script_paths.borrow_mut().push(import_stmt.script_path);
         for imported_type in import_stmt.imported_types {
-            self.types.add_imported(Rc::new(imported_type), &mut e);
+            self.types.add_imported(imported_type, &mut e);
         }
         for imported_value in import_stmt.imported_values {
-            self.values.add_imported(Rc::new(imported_value), &mut e)
+            self.values.add_imported(imported_value, &mut e)
         }
     }
 }
 
 impl<'tree> ValueScope<'tree> {
     fn new() -> ValueScope<'tree> {
-        ValueScope(RefCell::new(_ValueScope {
-            params: Vec::new(),
-            hoisted: HashMap::new(),
-            sequential: HashMap::new(),
-            exported: HashMap::new(),
-            return_: None,
-            throw: None,
-        }))
-    }
-
-    pub fn set_params(&self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
-        let mut this = self.0.borrow_mut();
-        debug_assert!(this.params.is_empty());
-        this.params = params.collect();
-        for param in &this.params {
-            this.hoisted.insert(param.name().clone(), param.clone());
+        ValueScope {
+            params: FrozenIndexMap::new(),
+            hoisted: FrozenMap::new(),
+            sequential: FrozenMap::new(),
+            exported: RefCell::new(HashMap::new()),
+            return_: Cell::new(None),
+            throw: Cell::new(None),
         }
     }
 
-    pub fn add_imported(&self, imported: Rc<AstValueImportSpecifier<'tree>>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&self, imported: AstValueImportSpecifier<'tree>, e: &mut FileLogger<'_>) {
         let alias = &imported.alias.name;
         if let Some(prev_decl) = self.hoisted(alias) {
             error!(e, "Value '{}' already in scope", alias => imported.node;
@@ -108,132 +248,143 @@ impl<'tree> ValueScope<'tree> {
         self.add_hoisted(imported, e);
     }
 
-    pub fn add_hoisted(&self, decl: Rc<dyn ValueBinding<'tree>>, e: &mut FileLogger<'_>) {
+    pub fn set_params(&self, params: impl Iterator<Item=AstParameter<'tree>>) {
+        debug_assert!(self.params.is_empty());
+        for param in params {
+            self.params.insert(param.name().clone(), Box::new(param));
+        }
+    }
+
+    pub fn add_hoisted(&self, decl: impl ValueBinding<'tree>, e: &mut FileLogger<'_>) {
         if let Some(prev_decl) = self.hoisted(decl.name()) {
             error!(e, "Duplicate value declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
                 hint!("previous declaration" => prev_decl.node()));
         }
-        let mut this = self.0.borrow_mut();
-        this.hoisted.insert(decl.name().clone(), decl);
+        self.hoisted.insert(decl.name().clone(), Box::new(decl));
     }
 
-    pub fn add_sequential(&self, decl: Rc<AstValueDecl<'tree>>, e: &mut FileLogger<'_>) {
+    pub fn add_sequential(&self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
         if let Some(prev_decl) = self.at_pos(decl.name(), decl.node) {
             error!(e, "Duplicate value declaration for '{}'", decl.name() => decl.node;
                 issue!("they are in the same scope");
                 hint!("previous declaration" => prev_decl.node()));
         }
-        let mut this = self.0.borrow_mut();
-        this.sequential.entry(decl.name().clone()).or_default().push(decl)
+        self.sequential.entry(decl.name().clone()).or_default().push(Box::new(decl))
     }
 
     pub fn add_exported(&self, original_name: AstValueIdent, alias: AstValueIdent, e: &mut FileLogger<'_>) {
         if !self.has_any(&original_name.name) {
             error!(e, "Value to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }
-        if let Some(prev_exported) = self.exported(&alias.name) {
+        if let Some(prev_exported) = self.exported.borrow_mut().insert(alias.name, ExportedId {
+            name: original_name.name,
+            alias_node: alias.node
+        }) {
             error!(e, "Duplicate value export '{}'", &alias.name => alias.node;
                 issue!("there are multiple exported values with this name in the same scope");
                 hint!("previous export" => prev_exported.alias_node));
         }
-        let mut this = self.0.borrow_mut();
-        this.exported.set(alias.name, ExportedId {
-            name: original_name.name,
-            alias_node: alias.node
-        });
     }
 
     pub fn add_return(&self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
-        let mut this = self.0.borrow_mut();
-        if let Some(old_return) = this.return_ {
+        if let Some(old_return) = self.return_.get() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => return_.node;
                 hint!("first return" => old_return.node)
             )
         }
-        if let Some(old_throw) = this.throw {
+        if let Some(old_throw) = self.throw.get() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => return_.node;
                 hint!("first throw" => old_throw.node)
             )
         }
-        if !matches!(this.return_, Some(old_return) if old_return.node.start_byte() > return_.node.start_byte()) {
-            this.return_ = Some(return_)
+        if !matches!(self.return_.get(), Some(old_return) if old_return.node.start_byte() > return_.node.start_byte()) {
+            self.return_.set(Some(return_))
         }
     }
 
     pub fn add_throw(&self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
-        let mut this = self.0.borrow_mut();
-        if let Some(old_return) = this.return_ {
+        if let Some(old_return) = self.return_.get() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => throw.node;
                 hint!("first return" => old_return.node)
             )
         }
-        if let Some(old_throw) = this.throw {
+        if let Some(old_throw) = self.throw.get() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => throw.node;
                 hint!("first throw" => old_throw.node)
             )
         }
-        if !matches!(this.throw, Some(old_throw) if old_throw.node.start_byte() > throw.node.start_byte()) {
-            this.throw = Some(throw)
+        if !matches!(self.throw.get(), Some(old_throw) if old_throw.node.start_byte() > throw.node.start_byte()) {
+            self.throw.set(Some(throw))
         }
     }
 
-    pub fn params(&self) -> Ref<'_, [Rc<AstParameter<'tree>>]> {
-        Ref::map(self.0.borrow(), |this| this.params.as_ref())
+    pub fn iter_params(&self) -> impl Iterator<Item=&AstParameter<'tree>> {
+        struct IterScopeParams<'a, 'tree> {
+            index: usize,
+            map: &'a FrozenIndexMap<ValueName, Box<AstParameter<'tree>>>
+        }
+        impl<'a, 'tree> IterScopeParams<'a, 'tree> {
+            fn new(map: &'a FrozenIndexMap<ValueName, Box<AstParameter<'tree>>>) -> IterScopeParams<'a, 'tree> {
+                IterScopeParams {
+                    index: 0,
+                    map
+                }
+            }
+        }
+        impl<'a, 'tree> Iterator for IterScopeParams<'a, 'tree> {
+            type Item = &'a AstParameter<'tree>;
+            fn next(&mut self) -> Option<Self::Item> {
+                let index = self.index;
+                self.index += 1;
+                self.map.get_index(index).map(|(_, v)| v)
+            }
+        }
+
+        IterScopeParams::new(&self.params)
     }
 
-    pub fn hoisted(&self, name: &ValueName) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        self.0.borrow().hoisted.get(name).cloned()
+    pub fn hoisted(&self, name: &ValueName) -> Option<&dyn ValueBinding<'tree>> {
+        self.hoisted.get(name).or_else(|| self.params.get(name))
     }
 
     pub fn has_any(&self, name: &ValueName) -> bool {
-        let this = self.0.borrow();
-        this.sequential.contains_key(name) || this.hoisted.contains_key(name)
+        self.sequential.get(name).is_some() || self.hoisted.get(name).is_some() || self.params.get(name).is_some()
     }
 
-    pub fn last(&self, name: &ValueName) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        let this = self.0.borrow();
-        if let Some(sequential) = this.sequential.get(name) {
-            return Some(sequential.last()
-                .expect("sequential should never be Some(<empty vec>)")
-                .clone())
-        }
-        this.hoisted.get(name).cloned()
+    pub fn last(&self, name: &ValueName) -> Option<&dyn ValueBinding<'tree>> {
+        self.sequential.get(name).and_then(|sequential| {
+            sequential.last().expect("sequential should never be Some(<empty vec>)")
+        }).or_else(|| self.hoisted(name))
     }
 
     pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
         self.get(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        let this = self.0.borrow();
-        return this.sequential.get(name).and_then(|sequential| {
-            sequential.iter()
-                .rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
-        }).or_else(|| this.hoisted.get(name)).cloned()
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn ValueBinding<'tree>> {
+        return self.sequential.get(name).and_then(|sequential| {
+            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
+        }).or_else(|| self.hoisted(name))
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        let this = self.0.borrow();
-        this.sequential.get(name).and_then(|sequential| {
-            sequential.iter()
-                .rfind(|decl| decl.node().start_byte() <= pos_node.start_byte()
-                    && decl.node().end_byte() >= pos_node.end_byte())
-        }).cloned()
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn ValueBinding<'tree>> {
+        self.sequential.get(name).and_then(|sequential| {
+            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte() &&
+                decl.node().end_byte() >= pos_node.end_byte())
+        })
     }
 
     pub fn exported(&self, alias: &ValueName) -> Option<ExportedId<ValueName>> {
-        let this = self.0.borrow();
-        this.exported.get(alias).cloned()
+        self.exported.borrow().get(alias).cloned()
     }
 
     pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> DeterminedReturnType<'tree> {
-        let this = self.0.borrow();
-        match (this.return_.as_ref(), this.throw.as_ref()) {
+        match (self.return_.get(), self.throw.get()) {
             (None, None) => DeterminedReturnType {
                 type_: RlReturnType::resolved_void(),
                 return_node: None,
@@ -254,7 +405,7 @@ impl<'tree> ValueScope<'tree> {
                 };
                 DeterminedReturnType {
                     // SAFETY: These are the same function, they are bijective
-                    type_: unsafe { type_.bimap(ReturnType::Type, ReturnType::Type) },
+                    type_: unsafe { type_.trimap(ReturnType::Type, ReturnType::Type, |x| x) },
                     return_node: Some(return_.node),
                     explicit_type
                 }
@@ -265,13 +416,13 @@ impl<'tree> ValueScope<'tree> {
 
 impl<'tree> TypeScope<'tree> {
     fn new() -> TypeScope<'tree> {
-        TypeScope(RefCell::new(_TypeScope {
-            hoisted: HashMap::new(),
-            exported: HashMap::new()
-        }))
+        TypeScope {
+            hoisted: FrozenMap::new(),
+            exported: RefCell::new(HashMap::new())
+        }
     }
 
-    pub fn add_imported(&self, imported: Rc<AstTypeImportSpecifier<'tree>>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&self, imported: AstTypeImportSpecifier<'tree>, e: &mut FileLogger<'_>) {
         let alias = &imported.alias.name;
         if let Some(prev_decl) = self.get(alias) {
             error!(e, "Nominal type '{}' already in scope", alias => imported.node;
@@ -284,14 +435,13 @@ impl<'tree> TypeScope<'tree> {
         self.set(imported, e)
     }
 
-    pub fn set(&self, decl: Rc<dyn TypeBinding<'tree>>, e: &mut FileLogger<'_>) {
+    pub fn set(&self, decl: impl TypeBinding<'tree>, e: &mut FileLogger<'_>) {
         if let Some(prev_decl) = self.get(decl.name()) {
             error!(e, "Duplicate nominal type declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
                 hint!("previous declaration" => prev_decl.node()));
         }
-        let mut this = self.0.borrow_mut();
-        this.hoisted.insert(decl.name().clone(), decl);
+        self.hoisted.insert(decl.name().clone(), Box::new(decl));
     }
 
     pub fn add_exported(&self, original_name: AstTypeIdent, alias: AstTypeIdent, e: &mut FileLogger<'_>) {
@@ -303,21 +453,18 @@ impl<'tree> TypeScope<'tree> {
                 issue!("there are multiple exported types with this name in the same scope");
                 hint!("previous export" => prev_exported.alias_node));
         }
-        let mut this = self.0.borrow_mut();
-        this.exported.insert(alias.name, ExportedId {
+        self.exported.borrow_mut().insert(alias.name, ExportedId {
             name: original_name.name,
             alias_node: alias.node
         });
     }
 
     pub fn has_any(&self, name: &TypeName) -> bool {
-        let this = self.0.borrow();
-        this.hoisted.contains_key(name)
+        self.hoisted.get(name).is_some()
     }
 
-    pub fn get(&self, name: &TypeName) -> Option<Rc<dyn TypeBinding<'tree>>> {
-        let this = self.0.borrow();
-        this.hoisted.get(name).cloned()
+    pub fn get(&self, name: &TypeName) -> Option<&dyn TypeBinding<'tree>> {
+        self.hoisted.get(name)
     }
 
     pub fn immediate_supertypes(&self, type_: ThinType) -> FatType {
@@ -343,8 +490,7 @@ impl<'tree> TypeScope<'tree> {
     }
 
     pub fn exported(&self, alias: &TypeName) -> Option<ExportedId<TypeName>> {
-        let this = self.0.borrow();
-        this.exported.get(alias).cloned()
+        self.exported.borrow().get(alias).cloned()
     }
 }
 

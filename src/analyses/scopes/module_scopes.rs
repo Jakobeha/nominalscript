@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::iter::{once, zip};
 use std::rc::Rc;
 use smallvec::SmallVec;
-use crate::analyses::scopes::Scope;
+use crate::analyses::scopes::{Scope, ScopePtr};
 use crate::analyses::types::DeterminedReturnType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 
@@ -12,7 +12,7 @@ use crate::ast::tree_sitter::{TSCursor, TSNode};
 pub struct ModuleScopes<'tree>(RefCell<_ModuleScopes<'tree>>);
 
 struct _ModuleScopes<'tree> {
-    scopes: HashMap<TSNode<'tree>, Rc<Scope<'tree>>>,
+    scopes: HashMap<TSNode<'tree>, ScopePtr<'tree>>,
     lexical_parents: HashMap<TSNode<'tree>, TSNode<'tree>>,
     lexical_children: HashMap<TSNode<'tree>, Vec<TSNode<'tree>>>
 }
@@ -50,13 +50,13 @@ impl<'tree> ModuleScopes<'tree> {
     /// Gets the parent scope containing the node
     ///
     /// *Panics* if the node is the tree root
-    pub fn of_node(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> Rc<Scope<'tree>> {
+    pub fn of_node(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> ScopePtr<'tree> {
         let parent = scope_parent_of(node, c).expect("node is root so does not have a parent");
         self.get(parent, c)
     }
 
     /// Gets the scope denoted by the node (which should be a statement block, etc.)
-    pub fn get(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> Rc<Scope<'tree>> {
+    pub fn get(&self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> ScopePtr<'tree> {
         let mut this = self.0.borrow_mut();
         if let Some(scope) = this.scopes.get(&node) {
             return scope.clone()
@@ -80,7 +80,7 @@ impl<'tree> ModuleScopes<'tree> {
         }
         let mut scope = this.scopes.get(&node_or_parent);
         for child in descendants {
-            let child_scope = Rc::new(Scope::new(scope));
+            let child_scope = ScopePtr::new(scope);
             scope = None;
             let std::collections::hash_map::Entry::Vacant(child_entry) = this.scopes.entry(child) else {
                 unreachable!("we just checked that it's not in the map")

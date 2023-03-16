@@ -3,100 +3,15 @@ use enquote::unquote;
 use once_cell::unsync::{Lazy, OnceCell};
 use smol_str::SmolStr;
 use crate::analyses::bindings::{Locality, HoistedValueBinding, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
-use crate::analyses::scopes::ExprTypeMap;
+use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ScriptPathPtr};
 use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, RlImportedTypeDecl, RlImportedValueType, ResolvedLazy, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, LocalFatType, TypeStructure, ResolveCtx, ResolvedLazyTrait, Nullability};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
-use crate::import_export::export::{Exports, ModulePath};
+use crate::import_export::export::{Exports, ImportPath};
 
 pub trait AstNode<'tree> {
     fn node(&self) -> TSNode<'tree>;
-}
-
-macro_rules! impl_ast_node_common_trait {
-    ($AstNode:ident) => {
-        impl<'tree> AstNode<'tree> for $AstNode<'tree> {
-            fn node(&self) -> TSNode<'tree> {
-                self.node
-            }
-        }
-    }
-}
-
-macro_rules! impl_ast_node_common_kind_guard {
-    ($node:ident, [ $($NODE_KIND:literal),* $(,)? ]) => {
-        if ![$($NODE_KIND),*].contains(&$node.kind()) {
-            panic!("Expected {:?} to be one of {:?}, but was {:?}", node, [$($NODE_KIND),*], $node.kind());
-        }
-    }
-}
-
-macro_rules! impl_ast_node_common {
-    ($AstNode:ident, [ $($NODE_KIND:literal),* $(,)? ]) => {
-        impl_ast_node_common_trait!($AstNode);
-
-        impl<'tree> $AstNode<'tree> {
-            pub fn new(node: TSNode<'tree>) -> Self {
-                impl_ast_node_common_kind_guard!(node, [$($NODE_KIND),*]);
-                Self::_new(node)
-            }
-        }
-    };
-}
-
-macro_rules! impl_ast_node_value_binding {
-    ($($Type:ident $locality:ident),*) => {
-        $(
-            impl<'tree> ValueBinding for $Type<'tree> {
-                fn name(&self) -> &ValueName {
-                    self.name.name()
-                }
-
-                fn value_type(&self) -> &RlType {
-                    <Self as TypedAstNode>::infer_type(self, None)
-                }
-
-                fn locality(&self) -> Locality {
-                    Locality::$locality
-                }
-            }
-        )*
-    }
-}
-
-macro_rules! impl_ast_node_local_value_binding {
-    ($($Type:ident),*) => {
-        $(
-            impl_ast_node_value_binding!($Type Local)
-
-            impl<'tree> LocalValueBinding<'tree> for $Type<'tree> {
-                // fn local_uses(&self) -> &LocalUses<'tree> {
-                //     &self.local_uses
-                // }
-            }
-        )*
-    }
-}
-
-macro_rules! impl_ast_node_type_binding {
-    ($($Type:ident $locality:ident),*) => {
-        $(
-            impl<'tree> TypeBinding for $Type<'tree> {
-                fn name(&self) -> &TypeName {
-                    self.name.name()
-                }
-
-                fn type_decl(&self) -> &RlTypeDecl {
-                    &self.shape
-                }
-
-                fn locality(&self) -> Locality {
-                    Locality::$locality
-                }
-            }
-        )*
-    }
 }
 
 pub trait TypedAstNode<'tree>: AstNode<'tree> {
@@ -207,7 +122,7 @@ pub struct AstValueImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstValueIdent<'tree>,
     pub alias: AstValueIdent<'tree>,
-    pub shape: OnceCell<RlImportedValueType>,
+    pub shape: RlImportedValueType,
 }
 
 #[derive(Debug)]
@@ -215,13 +130,13 @@ pub struct AstTypeImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstTypeIdent<'tree>,
     pub alias: AstTypeIdent<'tree>,
-    pub shape: OnceCell<RlImportedTypeDecl>,
+    pub shape: RlImportedTypeDecl,
 }
 
 #[derive(Debug)]
 pub struct AstImportPath<'tree> {
     pub node: TSNode<'tree>,
-    pub module_path: ModulePath,
+    pub module_path: ImportPath,
 }
 
 #[derive(Debug)]
@@ -230,11 +145,91 @@ pub struct AstImportStatement<'tree> {
     pub path: AstImportPath<'tree>,
     pub imported_values: Vec<AstValueImportSpecifier<'tree>>,
     pub imported_types: Vec<AstTypeImportSpecifier<'tree>>,
+    pub(crate) script_path: ScriptPathPtr
 }
 
-impl_ast_node_common!(AstValueIdent, ["identifier"]);
+macro_rules! impl_ast {
+    ($($Type:ident),+) => {
+        $(
+            impl<'tree> AstNode<'tree> for $Type<'tree> {
+                fn node(&self) -> TSNode<'tree> {
+                    self.node
+                }
+            }
+        )+
+    }
+}
+
+macro_rules! assert_kind {
+    ($node:ident, [ $($NODE_KIND:literal),* $(,)? ]) => {
+        if ![$($NODE_KIND),*].contains(&$node.kind()) {
+            panic!("Expected {:?} to be one of {:?}, but was {:?}", node, [$($NODE_KIND),*], $node.kind());
+        }
+    }
+}
+
+macro_rules! impl_ast_value_binding {
+    ($($Type:ident $locality:ident),+) => {
+        $(
+            impl_ast!($Type);
+
+            impl<'tree> ValueBinding for $Type<'tree> {
+                fn name(&self) -> &ValueName {
+                    self.name.name()
+                }
+
+                fn value_type(&self) -> &RlType {
+                    <Self as TypedAstNode>::infer_type(self, None)
+                }
+
+                fn locality(&self) -> Locality {
+                    Locality::$locality
+                }
+            }
+        )+
+    }
+}
+
+macro_rules! impl_ast_local_value_binding {
+    ($($Type:ident),+) => {
+        $(
+            impl_ast_value_binding!($Type Local)
+
+            impl<'tree> LocalValueBinding<'tree> for $Type<'tree> {
+                // fn local_uses(&self) -> &LocalUses<'tree> {
+                //     &self.local_uses
+                // }
+            }
+        )+
+    }
+}
+
+macro_rules! impl_ast_type_binding {
+    ($($Type:ident $locality:ident),+) => {
+        $(
+            impl_ast!($Type);
+
+            impl<'tree> TypeBinding for $Type<'tree> {
+                fn name(&self) -> &TypeName {
+                    self.name.name()
+                }
+
+                fn type_decl(&self) -> &RlTypeDecl {
+                    &self.shape
+                }
+
+                fn locality(&self) -> Locality {
+                    Locality::$locality
+                }
+            }
+        )+
+    }
+}
+
+impl_ast!(AstValueIdent);
 impl<'tree> AstValueIdent<'tree> {
-    pub fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["identifier"]);
         Self {
             node,
             name: ValueName::new(node.text()),
@@ -242,9 +237,10 @@ impl<'tree> AstValueIdent<'tree> {
     }
 }
 
-impl_ast_node_common!(AstTypeIdent, ["nominal_type_identifier"]);
+impl_ast!(AstTypeIdent);
 impl<'tree> AstTypeIdent<'tree> {
-    pub fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_identifier"]);
         Self {
             node,
             name: TypeName::new(node.text()),
@@ -252,14 +248,14 @@ impl<'tree> AstTypeIdent<'tree> {
     }
 }
 
-impl_ast_node_common!(AstTypeParameter, ["nominal_type_parameter"]);
-impl_ast_node_type_binding!(AstTypeParameter Local);
+impl_ast_type_binding!(AstTypeParameter Local);
 impl<'tree> AstTypeParameter<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_parameter"]);
         let name = AstTypeIdent::new(node.named_child(0).unwrap());
         let nominal_supertypes = node.named_child(1).map(|node| {
             node.named_children(&mut node.walk())
-                .map(AstType::of_annotation)
+                .map(|child| AstType::of_annotation(scope, child))
                 .collect::<Vec<_>>()
         }).unwrap_or_default();
         let thin = TypeParam {
@@ -273,7 +269,24 @@ impl<'tree> AstTypeParameter<'tree> {
             node,
             name,
             nominal_supertypes,
-            shape: RlTypeParam::new(thin)
+            shape: RlTypeParam::new(scope, thin)
+        }
+    }
+
+    fn parse(node: TSNode<'tree>) -> TypeParam<ThinType> {
+        assert_kind!(node, ["nominal_type_parameter"]);
+        let name = AstTypeIdent::new(node.named_child(0).unwrap());
+        let nominal_supertypes_thin = node.named_child(1).map(|node| {
+            node.named_children(&mut node.walk())
+                .map(AstType::parse)
+                .collect::<Vec<_>>()
+        }).unwrap_or_default();
+        TypeParam {
+            variance_bound: node.field_child("variance")
+                .map(Self::variance_from)
+                .unwrap_or_default(),
+            name: name.name,
+            supers: nominal_supertypes_thin
         }
     }
 
@@ -290,37 +303,38 @@ impl<'tree> AstTypeParameter<'tree> {
 
 impl<'tree> LocalTypeBinding<'tree> for AstTypeParameter<'tree> {}
 
-impl_ast_node_common!(AstType, [
-    "nominal_type_identifier",
-    "parenthesized_nominal_type",
-    "generic_nominal_type",
-    "object_nominal_type",
-    "array_nominal_type",
-    "tuple_nominal_type",
-    "function_nominal_type",
-    "nullable_nominal_type",
-]);
+impl_ast!(AstType);
 impl<'tree> AstType<'tree> {
     //noinspection DuplicatedCode
-    pub fn of_annotation(node: TSNode<'tree>) -> Self {
-        impl_ast_node_common_kind_guard!(node, ["nominal_type_annotation"]);
+    pub fn of_annotation(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_annotation"]);
         node.mark();
-        Self::new(node.named_child(0).unwrap())
+        Self::new(scope, node.named_child(0).unwrap())
     }
 
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, [
+            "nominal_type_identifier",
+            "parenthesized_nominal_type",
+            "generic_nominal_type",
+            "object_nominal_type",
+            "array_nominal_type",
+            "tuple_nominal_type",
+            "function_nominal_type",
+            "nullable_nominal_type",
+        ]);
         let thin = Self::parse(node);
         Self {
             node,
-            shape: RlType::new(thin),
+            shape: RlType::new(scope, thin),
         }
     }
 
     fn parse(node: TSNode<'tree>) -> ThinType {
         match node.kind() {
-            "nominal_type_identifier" => ThinType::ident(node.text()),
+            "nominal_type_identifier" => ThinType::ident2(node.text()),
             "parenthesized_nominal_type" => Self::parse(node.named_child(0).unwrap()),
-            "generic_nominal_type" => ThinType::generic(
+            "generic_nominal_type" => ThinType::generic2(
                 node.named_child(0).unwrap().text(),
                 node.named_child(1).unwrap().named_children(&mut node.walk()).map(Self::parse),
             ),
@@ -331,7 +345,7 @@ impl<'tree> AstType<'tree> {
                 ThinType::func(
                     node.field_child("nominal_type_parameters").unwrap()
                         .named_children(&mut node.walk())
-                        .map(|x| AstTypeParameter::new(x).thin),
+                        .map(AstTypeParameter::parse),
                     this_param.map_or(ThinType::Any, Self::parse),
                     parameters
                         .named_children(&mut node.walk())
@@ -378,7 +392,7 @@ impl<'tree> AstType<'tree> {
                 let method_type = ThinType::func(
                     node.named_child(1).unwrap()
                         .named_children(&mut node.walk())
-                        .map(|x| AstTypeParameter::new(x).thin),
+                        .map(AstTypeParameter::parse),
                     this_param.map_or(ThinType::Any, Self::parse),
                     node.named_child(2).unwrap()
                         .named_children(&mut node.walk())
@@ -413,40 +427,41 @@ impl<'tree> AstType<'tree> {
     }
 }
 
-impl_ast_node_common!(AstReturnType, [
-    "nominal_type_identifier",
-    "parenthesized_nominal_type",
-    "generic_nominal_type",
-    "object_nominal_type",
-    "array_nominal_type",
-    "tuple_nominal_type",
-    "function_nominal_type",
-    "nullable_nominal_type",
-]);
+impl_ast!(AstReturnType);
 impl<'tree> AstReturnType<'tree> {
     //noinspection DuplicatedCode
-    pub fn of_annotation(node: TSNode<'tree>) -> Self {
-        impl_ast_node_common_kind_guard!(node, ["nominal_type_annotation"]);
+    pub fn of_annotation(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_annotation"]);
         node.mark();
-        Self::new(node.named_child(0).unwrap())
+        Self::new(scope, node.named_child(0).unwrap())
     }
 
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, [
+            "nominal_type_identifier",
+            "parenthesized_nominal_type",
+            "generic_nominal_type",
+            "object_nominal_type",
+            "array_nominal_type",
+            "tuple_nominal_type",
+            "function_nominal_type",
+            "nullable_nominal_type",
+        ]);
         let thin = AstType::parse_return(node);
         Self {
             node,
-            shape: RlReturnType::new(thin),
+            shape: RlReturnType::new(scope, thin),
         }
     }
 }
 
-impl_ast_node_common_trait!(AstParameter);
-impl_ast_node_local_value_binding!(AstParameter);
+impl_ast_local_value_binding!(AstParameter);
 impl<'tree> AstParameter<'tree> {
-    pub fn formal(node: TSNode<'tree>, is_arrow: bool) -> Self {
-        impl_ast_node_common_kind_guard!(node, ["required_parameter", "optional_parameter"]);
+    pub fn formal(scope: &ScopePtr<'tree>, node: TSNode<'tree>, is_arrow: bool) -> Self {
+        assert_kind!(node, ["required_parameter", "optional_parameter"]);
         let name_node = node.named_child(0).unwrap();
-        let type_ = node.field_child("nominal_type").map(AstType::of_annotation);
+        let type_ = node.field_child("nominal_type")
+            .map(|node| AstType::of_annotation(scope, node));
         Self {
             node,
             name: AstValueIdent::new(name_node),
@@ -463,7 +478,7 @@ impl<'tree> AstParameter<'tree> {
     }
 
     pub fn single_arrow(node: TSNode<'tree>) -> Self {
-        impl_ast_node_common_kind_guard!(node, ["identifier"]);
+        assert_kind!(node, ["identifier"]);
         Self {
             node,
             name: AstValueIdent::new(node),
@@ -506,9 +521,10 @@ impl<'tree> TypedAstNode for AstParameter<'tree> {
 
 impl<'tree> HoistedValueBinding<'tree> for AstParameter<'tree> {}
 
-impl_ast_node_common!(AstReturn, ["return_statement"]);
+impl_ast!(AstReturn);
 impl<'tree> AstReturn<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["return_statement"]);
         Self {
             node,
             returned_value: node.last_named_child(),
@@ -516,9 +532,10 @@ impl<'tree> AstReturn<'tree> {
     }
 }
 
-impl_ast_node_common!(AstThrow, ["throw_statement"]);
+impl_ast!(AstThrow);
 impl<'tree> AstThrow<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["throw_statement"]);
         Self {
             node,
             thrown_value: node.last_named_child(),
@@ -526,11 +543,12 @@ impl<'tree> AstThrow<'tree> {
     }
 }
 
-impl_ast_node_common!(AstValueDecl, ["variable_declarator"]);
-impl_ast_node_local_value_binding!(AstValueDecl);
+impl_ast_local_value_binding!(AstValueDecl);
 impl<'tree> AstValueDecl<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
-        let type_ = node.field_child("nominal_type").map(AstType::of_annotation);
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["variable_declarator"]);
+        let type_ = node.field_child("nominal_type")
+            .map(|node| AstType::of_annotation(scope, node));
         Self {
             node,
             name: AstValueIdent::new(node.named_child(0).unwrap()),
@@ -552,21 +570,22 @@ impl<'tree> TypedAstNode for AstValueDecl<'tree> {
     }
 }
 
-impl_ast_node_common!(AstFunctionDecl, [
-    "function_declaration",
-    "generator_function_declaration",
-    "function_signature"
-]);
-impl_ast_node_local_value_binding!(AstFunctionDecl);
+impl_ast_local_value_binding!(AstFunctionDecl);
 impl<'tree> AstFunctionDecl<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, [
+            "function_declaration",
+            "generator_function_declaration",
+            "function_signature"
+        ]);
         let nominal_params = Self::nominal_params(node);
         let formal_params = node.field_child("parameters").unwrap()
             .named_children(&mut node.walk())
-            .map(AstParameter::formal)
+            .map(|node| AstParameter::formal(scope, node, false))
             .collect();
-        let return_type = node.field_child("nominal_return_type").map(AstReturnType::of_annotation);
-        let fn_type = ResolvedLazy::new(ThinType::func(
+        let return_type = node.field_child("nominal_return_type")
+            .map(|node| AstReturnType::of_annotation(scope, node));
+        let fn_type = ResolvedLazy::new(scope, ThinType::func(
             nominal_params.iter().map(|param| param.shape.thin.clone()).collect(),
             formal_params.iter().find(|param| param.is_this_param)
                 .map(AstParameter::thin)
@@ -606,9 +625,10 @@ impl<'tree> TypedAstNode for AstFunctionDecl<'tree> {
     }
 }
 
-impl_ast_node_common!(AstNominalGuard, ["nominal_type_guard"]);
+impl_ast!(AstNominalGuard);
 impl<'tree> AstNominalGuard<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_guard"]);
         let parameter = AstValueIdent::new(node.named_child(0).unwrap());
         let body = node.named_child(1).unwrap();
         let shape = NominalGuard {
@@ -625,10 +645,10 @@ impl<'tree> AstNominalGuard<'tree> {
     }
 }
 
-impl_ast_node_common!(AstTypeDecl, ["nominal_type_declaration"]);
-impl_ast_node_type_binding!(AstTypeDecl Local);
+impl_ast_type_binding!(AstTypeDecl Local);
 impl<'tree> AstTypeDecl<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_declaration"]);
         node.mark();
         let name = AstTypeIdent::new(node.named_child(0).unwrap());
         let nominal_params = node.field_child("nominal_type_parameters").map(|x| {
@@ -657,25 +677,31 @@ impl<'tree> AstTypeDecl<'tree> {
             nominal_supertypes,
             typescript_supertype,
             guard,
-            shape: RlTypeDecl::new(thin),
+            shape: RlTypeDecl::new(scope, thin),
         }
     }
 }
 
-impl_ast_node_common!(AstValueImportSpecifier, ["import_specifier"]);
-impl_ast_node_value_binding!(AstValueImportSpecifier Imported);
+impl_ast_value_binding!(AstValueImportSpecifier Imported);
 impl<'tree> AstValueImportSpecifier<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(
+        scope: &ScopePtr,
+        script_path: &ScriptPathPtr,
+        node: TSNode<'tree>,
+    ) -> Self {
+        assert_kind!(node, ["import_specifier"]);
         let original_name = AstValueIdent::new(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
             || original_name.clone(),
             AstValueIdent::new
         );
+        // Our imported original name is their exported alias
+        let export_alias = original_name.name.clone();
         Self {
             node,
             original_name,
             alias,
-            shape: OnceCell::new(),
+            shape: RlImportedValueType::new_imported(script_path, scope, export_alias),
         }
     }
 
@@ -691,20 +717,27 @@ impl<'tree> TypedAstNode for AstValueImportSpecifier<'tree> {
     }
 }
 
-impl_ast_node_common!(AstTypeImportSpecifier, ["import_specifier"]);
+impl_ast!(AstTypeImportSpecifier);
 impl<'tree> AstTypeImportSpecifier<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new(
+        scope: &ScopePtr,
+        script_path: &ScriptPathPtr,
+        node: TSNode<'tree>,
+    ) -> Self {
+        assert_kind!(node, ["import_specifier"]);
         node.mark();
         let original_name = AstTypeIdent::new(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
             || original_name.clone(),
             AstTypeIdent::new
         );
+        // Our imported original name is their exported alias
+        let export_alias = original_name.name.clone();
         Self {
             node,
             original_name,
             alias,
-            shape: OnceCell::new(),
+            shape: RlImportedTypeDecl::new_imported(script_path, scope, export_alias),
         }
     }
 
@@ -728,10 +761,11 @@ impl<'tree> TypeBinding for AstTypeImportSpecifier<'tree> {
     }
 }
 
-impl_ast_node_common!(AstImportPath, ["string"]);
+impl_ast!(AstImportPath);
 impl<'tree> AstImportPath<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
-        let module_path = ModulePath::from(unquote(node.text()).expect("import path is not a well-formed string literal"));
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["string"]);
+        let module_path = ImportPath::from(unquote(node.text()).expect("import path is not a well-formed string literal"));
         Self {
             node,
             module_path,
@@ -739,32 +773,42 @@ impl<'tree> AstImportPath<'tree> {
     }
 }
 
-impl_ast_node_common!(AstImportStatement, ["import_statement"]);
+impl_ast!(AstImportStatement);
 impl<'tree> AstImportStatement<'tree> {
-    fn _new(node: TSNode<'tree>) -> Self {
+    pub fn new<E>(
+        scope: &ScopePtr,
+        node: TSNode<'tree>,
+        resolve_import_path: impl FnOnce(&ImportPath) -> Result<PathBuf, E>
+    ) -> Result<Self, (AstImportPath<'_>, E)> {
+        assert_kind!(node, ["import_statement"]);
         let path = AstImportPath::new(node.named_child(1).unwrap());
+        let script_path = ScriptPathPtr::new(match resolve_import_path(&path.module_path) {
+            Ok(script_path) => script_path,
+            Err(error) => return Err((path, error))
+        });
         let import_container = node.named_child(0).unwrap();
         let imported_values = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "identifier")
-            .map(AstValueImportSpecifier::new)
+            .map(|node| AstValueImportSpecifier::new(scope, &script_path, node))
             .collect();
         let imported_types = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "nominal_type_identifier")
-            .map(AstTypeImportSpecifier::new)
+            .map(|node| AstTypeImportSpecifier::new(scope, &script_path, node))
             .collect();
         if let Some(invalid_specifier) = import_container
             .named_children(&mut node.walk())
             .find(|node| node.named_child(0).unwrap().kind() != "identifier" && node.named_child(0).unwrap().kind() != "nominal_type_identifier") {
             panic!("import statement contains an invalid import specifier {:?} of kind {:?}", invalid_specifier, invalid_specifier.kind());
         }
-        Self {
+        Ok(Self {
             node,
             path,
             imported_values,
-            imported_types
-        }
+            imported_types,
+            script_path
+        })
     }
 
     pub fn resolve_from_exports(&self, exports: &Exports) {

@@ -7,7 +7,7 @@ use crate::ast::typed_nodes::AstValueDecl;
 use crate::diagnostics::{error, FileLogger};
 
 pub struct ScopeChain<'tree> {
-    scopes: Vec<(TSNode<'tree>, Rc<Scope<'tree>>)>,
+    scopes: Vec<(TSNode<'tree>, ScopePtr<'tree>)>,
 }
 
 impl<'tree> ScopeChain {
@@ -32,15 +32,15 @@ impl<'tree> ScopeChain {
         self.scopes.push((scope_parent, scope));
     }
 
-    pub fn pop(&mut self) -> Option<(TSNode<'tree>, Rc<Scope<'tree>>)> {
+    pub fn pop(&mut self) -> Option<(TSNode<'tree>, ScopePtr<'tree>)> {
         self.scopes.pop()
     }
 
-    fn top(&self) -> Option<&(TSNode<'tree>, Rc<Scope<'tree>>)> {
+    fn top(&self) -> Option<&(TSNode<'tree>, ScopePtr<'tree>)> {
         self.scopes.last()
     }
 
-    fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, Rc<Scope<'tree>>)> {
+    fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, ScopePtr<'tree>)> {
         self.scopes.last_mut()
     }
 

@@ -245,24 +245,31 @@ impl ThinType {
 
     pub const NULL: Self = Self::Never { nullability: Nullability::Nullable };
 
-    pub fn ident(name: &str) -> Self {
+    pub fn ident(name: TypeName) -> Self {
         Self::Nominal {
             nullability: Nullability::NonNullable,
             id: TypeIdent {
-                name: TypeName::new(name),
+                name,
                 generic_args: Vec::new(),
             }
         }
     }
 
-    pub fn generic(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
+    pub fn generic(name: TypeName, generic_args: impl Iterator<Item=Self>) -> Self {
         Self::Nominal {
             nullability: Nullability::NonNullable,
             id: TypeIdent {
-                name: TypeName::new(name),
+                name,
                 generic_args: generic_args.collect(),
             }
         }
+    }
+    pub fn ident2(name: &str) -> Self {
+        Self::ident(TypeName::new(name))
+    }
+
+    pub fn generic2(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
+        Self::generic(TypeName::new(name), generic_args)
     }
 
     impl_structural_type_constructors!();

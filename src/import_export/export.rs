@@ -4,48 +4,82 @@ use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{ResolveCtx, RlImportedTypeDecl, RlImportedValueType, RlType, RlTypeDecl};
 
 use derive_more::{From, Into, AsRef, Deref, DerefMut};
-use crate::compile::FinishTranspile;
+use self_cell::self_cell;
+use crate::analyses::scopes::ModuleCtx;
+use crate::ast::tree_sitter::TSTree;
+use crate::compile::{finish_transpile, Module};
+use crate::ProjectCtx;
 
 #[derive(Debug)]
-pub struct TranspileOutput {
+pub struct TranspiledModule {
     pub exports: Exports,
     pub source_code: String
 }
 
 /// Lazy transpile output which lets us access header information without transpiling the rest,
 /// which is not only more efficient but solves import cycles
-#[derive(Debug, Default)]
-pub struct TranspileOutHeader {
+#[derive(Debug)]
+pub struct Module {
     pub exports: Exports,
-    pub rest: FinishTranspile
+    module_data: _Module
 }
+
+self_cell!(
+    struct _Module {
+        owner: TSTree,
+        #[covariant]
+        dependent: ModuleCtx,
+    }
+
+    impl {Debug}
+);
 
 #[derive(Debug, Default)]
 pub struct Exports {
-    module_id: ModuleId,
     values: HashMap<ValueName, RlType>,
     types: HashMap<TypeName, RlTypeDecl>
 }
 
+/// Path to import a module in an import statement, distinguished from [PathBuf] which is the
+/// resolved path
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From, Into, AsRef, Deref, DerefMut)]
-pub struct ModulePath(String);
+pub struct ImportPath(String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, From, Into)]
-pub struct ModuleId(usize);
+impl Module {
+    pub fn new(ast: TSTree) -> Module {
+        Module {
+            exports: Exports::new(),
+            module_data: _Module::new(ast, ModuleCtx::new)
+        }
+    }
 
-impl TranspileOutHeader {
-    pub fn finish(self, ctx: &mut ResolveCtx<'_>) -> TranspileOutput {
-        TranspileOutput {
+    pub fn ast(&self) -> &TSTree {
+        self.module_data.borrow_owner()
+    }
+
+    pub fn with_module_data<'outer, R>(&self, fun: impl for<'q> FnOnce(&'outer Exports, &'q TSTree, &'outer ModuleCtx<'q>) -> R) -> R {
+        self.module_data.with_dependent(|ast, module_ctx| fun(&self.exports, ast, module_ctx))
+    }
+
+    pub fn with_module_data_mut<'outer, R>(&mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
+        self.module_data.with_dependent_mut(|ast, module_ctx| fun(&mut self.exports, ast, module_ctx))
+    }
+
+    pub fn finish(mut self, ctx: &mut ProjectCtx<'_>) -> TranspiledModule {
+        let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
+            finish_transpile(ast, module_ctx, ctx);
+            ast.print()
+        });
+        TranspiledModule {
             exports: self.exports,
-            source_code: self.rest.finish(ctx)
+            source_code
         }
     }
 }
 
 impl Exports {
-    pub fn new(module_id: ModuleId) -> Exports {
+    pub fn new() -> Exports {
         Exports {
-            module_id,
             values: HashMap::new(),
             types: HashMap::new()
         }
@@ -65,13 +99,5 @@ impl Exports {
 
     pub fn type_decl(&self, name: &TypeName) -> Option<&RlTypeDecl> {
         self.types.get(name)
-    }
-}
-
-impl ModuleId {
-    pub const ZERO: ModuleId = ModuleId(0);
-
-    pub fn next(self) -> ModuleId {
-        ModuleId(self.0 + 1)
     }
 }
