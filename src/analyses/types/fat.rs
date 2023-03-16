@@ -281,7 +281,7 @@ impl<Hole: Default + FatTypeHoleTrait> FatType<Hole> {
 
 impl<Hole: FatTypeHoleTrait> FatTypeInherited<Hole> {
     /// Also = `default()`
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             super_ids: Vec::new(),
             structure: None,

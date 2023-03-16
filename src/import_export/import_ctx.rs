@@ -60,6 +60,10 @@ impl<'a> ProjectImportCtx<'a> {
         Self { cache, resolver }
     }
 
+    pub(crate) fn shorten_lifetime(&self) -> ProjectImportCtx {
+        ProjectImportCtx { cache: self.cache, resolver: self.resolver }
+    }
+
     pub(crate) fn file<'b>(&'b mut self, importer_path: &'b Path) -> FileImportCtx<'b> {
         FileImportCtx { project_ctx: ProjectImportCtx::new(&mut self.cache, &self.resolver), importer_path }
     }
@@ -71,7 +75,7 @@ impl<'a> ProjectImportCtx<'a> {
         &mut self,
         importer_path: &Path,
         module_path: &ModulePath,
-        transpile: impl FnOnce(&Path, &mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
     ) -> Result<&TranspileOutHeader, ImportError> {
         let fat_path = self.cache.cache_resolve_module(
             (importer_path, module_path),
@@ -86,7 +90,7 @@ impl<'a> ProjectImportCtx<'a> {
                 let Some(nominalscript_path) = fat_path.nominalscript_path.as_ref() else {
                     return Err(ImportError::NoNominalScript { fat_path: fat_path.clone() });
                 };
-                transpile(nominalscript_path, &mut ProjectImportCtx::new(cache, &self.resolver))
+                transpile(nominalscript_path, ProjectImportCtx::new(cache, &self.resolver))
             }
         ).as_ref().map_err(|e| e.clone())
     }
@@ -97,7 +101,7 @@ impl<'a> ProjectImportCtx<'a> {
     pub fn resolve_auxillary_and_cache_transpile(
         &mut self,
         script_path: &Path,
-        transpile: impl FnOnce(&mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+        transpile: impl FnOnce(ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
     ) -> Result<&TranspileOutHeader, ImportError> {
         let fat_path = self.resolver
             .fat_script_path(script_path)
@@ -107,19 +111,30 @@ impl<'a> ProjectImportCtx<'a> {
         }
         self.cache.cache_transpile2(
             fat_path,
-            |_fat_path, cache| transpile(&mut ProjectImportCtx::new(cache, &self.resolver))
+            |_fat_path, cache| transpile(ProjectImportCtx::new(cache, &self.resolver))
         ).as_ref().map_err(|e| e.clone())
     }
 }
 
 impl<'a> FileImportCtx<'a> {
+    pub(crate) fn shorten_lifetime(&mut self) -> FileImportCtx<'_> {
+        FileImportCtx {
+            project_ctx: self.project_ctx.shorten_lifetime(),
+            importer_path: self.importer_path
+        }
+    }
+
+    pub(crate) fn other_file<'b>(&'b mut self, path: &'b Path) -> FileImportCtx<'b> {
+        self.project_ctx.file(path)
+    }
+
     /// Resolves the module path.
     /// If already partially or fully transpiled, returns the cached result.
     /// Otherwise, calls `transpile` with the actual script path
     pub fn resolve_and_cache_transpile(
         &mut self,
         module_path: &ModulePath,
-        transpile: impl FnOnce(&Path, &mut ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
+        transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<TranspileOutHeader, ImportError>
     ) -> Result<&TranspileOutHeader, ImportError> {
         self.project_ctx.resolve_and_cache_transpile(self.importer_path, module_path, transpile)
     }

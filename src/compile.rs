@@ -2,13 +2,14 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use derive_more::{Display, From, Error};
+use self_cell::self_cell;
 use crate::import_export::export::{Exports, TranspileOutHeader};
 use crate::{FileCtx, ProjectCtx};
 use crate::analyses::bindings::{Locality, ValueName};
 use crate::analyses::scopes::{ModuleCtx, scope_parent_of};
 use crate::ast::{NOMINALSCRIPT_PARSER, queries};
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
-use crate::ast::tree_sitter::{TreeCreateError, TSParser, TSQueryCursor, TSTree};
+use crate::ast::tree_sitter::{TreeCreateError, TSNode, TSParser, TSQueryCursor, TSTree};
 use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{error, issue, hint, FileLogger};
 use crate::import_export::import_ctx::ImportError;
@@ -27,30 +28,26 @@ fn transpile_file<'a>(
     script_path: &Path,
     ctx: &'a mut ProjectCtx<'_>
 ) -> Result<&'a TranspileOutHeader, ImportError> {
-    _transpile_file(script_path, false, ctx)
-}
-
-/// `transpile_file` but provides a different error based on whether the file is being
-/// standalone transpiled or imported
-fn _transpile_file<'a>(
-    script_path: &Path,
-    is_being_imported: bool,
-    ctx: &'a mut ProjectCtx<'_>
-) -> Result<&'a TranspileOutHeader, ImportError> {
-    let header = ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
-        transpile_file_no_cache(script_path, &mut ProjectCtx {
-            import_ctx: import_ctx.project_ctx,
-            diagnostics: &mut ctx.diagnostics,
-            resolve_cache: &mut ctx.resolve_cache
-        }).map_err(ImportError::from)
-    });
+    let header = transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
-        error!(ctx.diagnostics, "failed to {} {}: {}", match is_being_imported {
-            false => "transpile",
-            true => "import"
-        }, script_path.display(), import_error);
+        error!(ctx.diagnostics, "failed to transpile '{}'", script_path.display();
+            issue!("{}", import_error));
     }
     header
+}
+
+/// `transpile_file` but doesn't log the import error
+fn transpile_file_no_log_err<'a>(
+    script_path: &Path,
+    ctx: &'a mut ProjectCtx<'_>
+) -> Result<&'a TranspileOutHeader, ImportError> {
+    ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
+        transpile_file_no_cache(script_path, &mut ProjectCtx {
+            import_ctx,
+            diagnostics: &ctx.diagnostics,
+            resolve_cache: &ctx.resolve_cache
+        }).map_err(ImportError::from)
+    })
 }
 
 /// `transpile_file` but doesn't cache
@@ -59,7 +56,7 @@ fn transpile_file_no_cache(
     ctx: &mut ProjectCtx<'_>
 ) -> Result<TranspileOutHeader, FatalTranspileError> {
     let ast = NOMINALSCRIPT_PARSER.lock().parse_file(script_path)?;
-    let mut exports = Exports::new();
+    let mut exports = Exports::new(ctx.resolve_cache.module_id(script_path));
     let rest = transpile_ast(ast, &mut exports, script_path, ctx);
     Ok(TranspileOutHeader { exports, rest })
 }
@@ -78,92 +75,114 @@ fn transpile_ast(
     script_path: &Path,
     ctx: &mut ProjectCtx<'_>
 ) -> FinishTranspile {
-    // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
-    let file_diagnostics = ctx.diagnostics.file(script_path);
-    let mut e = FileLogger::new(file_diagnostics);
-    let mut c = ast.walk();
-    let mut qc = TSQueryCursor::new();
-    let m = ModuleCtx::new(&ast);
-    let root_node = ast.root_node();
-    let root_scope = m.scopes.get(root_node, &mut c);
-    // Query all `nominal_type_declaraton`s and all imports.
-    // Build map of nominal type names to their declarations
-    // In global scope, build value map and map functions to their declarations.
-    // Add imported decls (lazily forward resolved) to the nominal type names and global scope value map
-    // Imports are lazily and narrowly resolved so that we allow inter-woven dependencies,
-    // laziness tracks self-recursion so we explicitly fail on cycles
-    for type_decl_match in qc.matches(&NOMINAL_TYPE, root_node) {
-        let type_decl = AstTypeDecl::new(type_decl_match.capture(0).unwrap().node);
-        let scope = m.scopes.of_node(type_decl.node, &mut c);
-        scope.types.set(Rc::new(type_decl), &mut e);
-    }
-    for function_decl_match in qc.matches(&FUNCTION, root_node) {
-        let func_decl = AstFunctionDecl::new(function_decl_match.capture(0).unwrap().node);
-        let scope = m.scopes.of_node(func_decl.node, &mut c);
-        scope.values.add_hoisted(Rc::new(func_decl), &mut e);
-    }
-    for value_decl_match in qc.matches(&VALUE, root_node) {
-        let value_decl = AstValueDecl::new(value_decl_match.capture(0).unwrap().node);
-        let scope = m.scopes.of_node(value_decl.node, &mut c);
-        scope.values.add_sequential(Rc::new(value_decl), &mut e);
-    }
-    for import_stmt_match in qc.matches(&IMPORT, root_node) {
-        let import_stmt = AstImportStatement::new(import_stmt_match.capture(0).unwrap().node);
-        let scope = m.scopes.of_node(import_stmt.node, &mut c);
-        scope.add_imported(import_stmt)
-    }
-    // Query and prefill exports, and also add to scopes
-    for export_id_match in qc.matches(&EXPORT_ID, root_node) {
-        let value_export_id = export_id_match.capture_named("value_export_id").map(|c| AstValueIdent::new(c.node));
-        let type_export_id = export_id_match.capture_named("nominal_export_id").map(|c| AstTypeIdent::new(c.node));
-        let export_id_node = value_export_id.map(|v| v.node).or_else(|| type_export_id.map(|t| t.node))
-            .expect("export_id_match should have either a value_export_id or a nominal_export_id");
-        let export_alias_id_node = export_id_match.capture_named("export_alias_id").map(|c| c.node);
+    FinishTranspile::new(ast, |ast| {
+        // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
+        let mut import_ctx = ctx.import_ctx.file(script_path);
+        let mut e = FileLogger::new(ctx.diagnostics.file(script_path));
+        let mut c = ast.walk();
+        let mut qc = TSQueryCursor::new();
+        let m = ModuleCtx::new(&ast);
+        let root_node = ast.root_node();
+        let root_scope = m.scopes.get(root_node, &mut c);
+        // Query all `nominal_type_declaraton`s and all imports.
+        // Build map of nominal type names to their declarations
+        // In global scope, build value map and map functions to their declarations.
+        // Add imported decls (lazily forward resolved) to the nominal type names and global scope value map
+        // Imports are lazily and narrowly resolved so that we allow inter-woven dependencies,
+        // laziness tracks self-recursion so we explicitly fail on cycles
+        for type_decl_match in qc.matches(&NOMINAL_TYPE, root_node) {
+            let type_decl = AstTypeDecl::new(type_decl_match.capture(0).unwrap().node);
+            let scope = m.scopes.of_node(type_decl.node, &mut c);
+            scope.types.set(Rc::new(type_decl), &mut e);
+        }
+        for function_decl_match in qc.matches(&FUNCTION, root_node) {
+            let func_decl = AstFunctionDecl::new(function_decl_match.capture(0).unwrap().node);
+            let scope = m.scopes.of_node(func_decl.node, &mut c);
+            scope.values.add_hoisted(Rc::new(func_decl), &mut e);
+        }
+        for value_decl_match in qc.matches(&VALUE, root_node) {
+            let value_decl = AstValueDecl::new(value_decl_match.capture(0).unwrap().node);
+            let scope = m.scopes.of_node(value_decl.node, &mut c);
+            scope.values.add_sequential(Rc::new(value_decl), &mut e);
+        }
+        for import_stmt_match in qc.matches(&IMPORT, root_node) {
+            let import_stmt = AstImportStatement::new(import_stmt_match.capture(0).unwrap().node);
+            let scope = m.scopes.of_node(import_stmt.node, &mut c);
+            scope.add_imported(import_stmt);
+        }
+        // Query and prefill exports, and also add to scopes
+        for export_id_match in qc.matches(&EXPORT_ID, root_node) {
+            let value_export_id = export_id_match.capture_named("value_export_id").map(|c| AstValueIdent::new(c.node));
+            let type_export_id = export_id_match.capture_named("nominal_export_id").map(|c| AstTypeIdent::new(c.node));
+            let export_id_node = value_export_id.map(|v| v.node).or_else(|| type_export_id.map(|t| t.node))
+                .expect("export_id_match should have either a value_export_id or a nominal_export_id");
+            let export_alias_id_node = export_id_match.capture_named("export_alias_id").map(|c| c.node);
 
-        let export = match (value_export_id, type_export_id) {
-            (None, None) => panic!("export_id_match should have either value_export_id or nominal_export_id"),
-            (Some(_), Some(_)) => panic!("export_id_match should have either value_export_id or nominal_export_id, not both"),
-            (Some(value_export), None) => {
-                let alias_id = export_alias_id_node.map_or_else(|| value_export.clone(), AstValueIdent::new);
-                Export::Value { original_name: value_export, alias: alias_id }
-            }
-            (None, Some(type_export)) => {
-                let alias_id = export_alias_id_node.map_or_else(|| type_export.clone(), AstTypeIdent::new);
-                Export::Type { original_name: type_export, alias: alias_id }
-            }
-        };
-
-
-        // Add to scope exports, and add to global exports if root scope
-        let scope = m.scopes.of_node(export_id_node, &mut c);
-        match export {
-            Export::Type { original_name, alias } => {
-                if scope == root_scope {
-                    if let Some(decl) = scope.types.get(&original_name.name) {
-                        exports.add_type(alias.name.clone(), decl.resolve_decl());
-                    }
-                    // if no decl, add_exported logs an error
+            let export = match (value_export_id, type_export_id) {
+                (None, None) => panic!("export_id_match should have either value_export_id or nominal_export_id"),
+                (Some(_), Some(_)) => panic!("export_id_match should have either value_export_id or nominal_export_id, not both"),
+                (Some(value_export), None) => {
+                    let alias_id = export_alias_id_node.map_or_else(|| value_export.clone(), AstValueIdent::new);
+                    Export::Value { original_name: value_export, alias: alias_id }
                 }
-                scope.types.add_exported(original_name, alias, &mut e);
-            }
-            Export::Value { original_name, alias } => {
-                if scope == root_scope {
-                    if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
-                        exports.add_value(alias.name.clone(), decl.resolve_type());
-                    }
-                    // if no decl, add_exported logs an error
+                (None, Some(type_export)) => {
+                    let alias_id = export_alias_id_node.map_or_else(|| type_export.clone(), AstTypeIdent::new);
+                    Export::Type { original_name: type_export, alias: alias_id }
                 }
-                scope.values.add_exported(original_name, alias, &mut e);
+            };
+
+            // Add to scope exports, and add to global exports if root scope
+            let scope = m.scopes.of_node(export_id_node, &mut c);
+            match export {
+                Export::Type { original_name, alias } => {
+                    if scope == root_scope {
+                        if let Some(decl) = scope.types.get(&original_name.name) {
+                            exports.add_type(alias.name.clone(), decl.type_decl());
+                        }
+                        // if no decl, add_exported logs an error
+                    }
+                    scope.types.add_exported(original_name, alias, &mut e);
+                }
+                Export::Value { original_name, alias } => {
+                    if scope == root_scope {
+                        if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
+                            exports.add_value(alias.name.clone(), decl.value_type());
+                        }
+                        // if no decl, add_exported logs an error
+                    }
+                    scope.values.add_exported(original_name, alias, &mut e);
+                }
             }
         }
-    }
-    FinishTranspile {
-
-    }
+        m
+    })
 }
 
-pub struct FinishTranspile {
+self_cell! {
+    struct FinishTranspile {
+        tree: TSTree,
+        #[covariant]
+        ctx: ModuleCtx
+    }
 
+    impl {Debug}
+}
+
+impl FinishTranspile {
+    pub fn finish(self) -> String {
+        match import_ctx.resolve_and_cache_transpile(&import_stmt.path.module_path, |imported_path, import_ctx| {
+            transpile_file_no_cache(imported_path, &mut ProjectCtx {
+                import_ctx,
+                diagnostics: &ctx.diagnostics,
+                resolve_cache: &ctx.resolve_cache
+            }).map_err(ImportError::from)
+        }) {
+            Ok(resolved_module) => import_stmt.resolve_from_exports(&resolved_module.exports),
+            Err(import_error) => error!(ctx.diagnostics,
+                    "failed to import module path '{}'", &import_stmt.path.module_path => import_stmt.path.node;
+                    issue!("{}", import_error))
+        }
+    }
 }
 
 /*

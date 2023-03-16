@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{btree_set, BTreeSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -5,16 +6,17 @@ use log::debug;
 use smallvec::SmallVec;
 use crate::ast::tree_sitter::TSRange;
 use derive_more::Display;
+use elsa::FrozenMap;
 
 #[derive(Debug)]
 pub struct ProjectDiagnostics {
-    global: BTreeSet<GlobalDiagnostic>,
-    by_file: HashMap<PathBuf, FileDiagnostics>,
+    global: RefCell<BTreeSet<GlobalDiagnostic>>,
+    by_file: FrozenMap<PathBuf, Box<FileDiagnostics>>,
 }
 
 #[derive(Debug)]
 pub struct FileDiagnostics {
-    diagnostics: BTreeSet<FileDiagnostic>
+    diagnostics: RefCell<BTreeSet<FileDiagnostic>>
 }
 
 #[derive(Debug, Clone)]
@@ -64,52 +66,57 @@ pub enum AdditionalInfoType {
 impl ProjectDiagnostics {
     pub fn new() -> Self {
         Self {
-            global: BTreeSet::new(),
-            by_file: HashMap::new(),
+            global: RefCell::new(BTreeSet::new()),
+            by_file: FrozenMap::new(),
         }
     }
 
-    pub fn insert_global(&mut self, diagnostic: GlobalDiagnostic) {
-        let did_insert = self.global.insert(diagnostic);
+    pub fn insert_global(&self, diagnostic: GlobalDiagnostic) {
+        let did_insert = self.global.borrow_mut().insert(diagnostic);
         if !did_insert {
             debug!("Duplicate diagnostic: {}", diagnostic);
         }
     }
 
-    pub fn iter_global(&self) -> impl Iterator<Item=&GlobalDiagnostic> {
-        self.global.iter()
+    /// Iterator requires an owned reference because we allow insertion behind shared references
+    pub fn iter_global(&mut self) -> impl Iterator<Item=&GlobalDiagnostic> {
+        self.global.get_mut().iter()
     }
 
-    pub fn file(&mut self, path: impl AsRef<Path>) -> &mut FileDiagnostics {
-        self.by_file.entry(path).or_default()
+    pub fn file(&self, path: impl AsRef<Path>) -> &FileDiagnostics {
+        if let Some(file) = self.by_file.get(path.as_ref()) {
+            return file
+        }
+        self.by_file.insert(path.as_ref().to_owned(), Box::new(FileDiagnostics::new()))
     }
 }
 
 impl FileDiagnostics {
     pub fn new() -> Self {
         Self {
-            diagnostics: BTreeSet::new(),
+            diagnostics: RefCell::new(BTreeSet::new()),
         }
     }
 
-    pub fn insert(&mut self, diagnostic: FileDiagnostic) {
-        let did_insert = self.diagnostics.insert(diagnostic);
+    pub fn insert(&self, diagnostic: FileDiagnostic) {
+        let did_insert = self.diagnostics.borrow_mut().insert(diagnostic);
         if !did_insert {
             debug!("Duplicate diagnostic: {}", diagnostic);
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&FileDiagnostic> {
-        self.diagnostics.iter()
+    /// Iterator requires an owned reference because we allow insertion behind shared references
+    pub fn iter(&mut self) -> impl Iterator<Item=&FileDiagnostic> {
+        self.diagnostics.get_mut().iter()
     }
 }
 
-impl<'a> IntoIterator for &'a FileDiagnostics {
+impl<'a> IntoIterator for &'a mut FileDiagnostics {
     type Item = FileDiagnostic;
     type IntoIter = btree_set::Iter<'a, Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.diagnostics.iter()
+        self.diagnostics.get_mut().iter()
     }
 }
 

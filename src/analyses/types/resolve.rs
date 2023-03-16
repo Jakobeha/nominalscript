@@ -1,13 +1,16 @@
+use std::cell::{Cell, RefCell};
 use once_cell::unsync::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use elsa::{FrozenMap, FrozenVec};
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ScopeChain};
 use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::ast::InProjectLoc;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostics, ProjectDiagnostics};
-use crate::import_export::export::ModulePath;
+use crate::import_export::export::ModuleId;
 use crate::import_export::import_ctx::{FileImportCtx, ProjectImportCtx};
 use crate::misc::{impl_by_map, OnceCellExt};
 
@@ -59,8 +62,10 @@ use crate::misc::{impl_by_map, OnceCellExt};
 /// The resolution context also contains diagnostic and import resolution capabilities, so that
 /// errors can be logged and imported data can be looked up and resolved. And it contains a cache,
 /// so that after a thin data is forced, it does not need to be forced again.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResolvedLazy<Thin, Fat> {
+    /// Module-id of the file that the value is declared in if it's not local
+    imported_origin: Option<ModuleId>,
     /// Thin version of the resolved value
     pub thin: Thin,
     /// Fat version of the resolved value
@@ -77,34 +82,40 @@ pub enum Creation {
     Inferred { loc: InProjectLoc },
 }
 
-/// Context containing imports, diagnostics, and cached resolved values
 #[derive(Debug)]
+/// Context containing imports, diagnostics, and cached resolved values.
+/// This context is for a file - however, it has access to other file data and will create
+/// [ResolveCtx] for other files to resolve imports.
+///
+/// We the [FileDiagnostics] and [FileResolvedCache] to prevent spurious lookups,
+/// but also [ProjectDiagnostics] and [ProjectResolvedCache] because we need to.
+/// [FileImportCtx] has a reference to [ProjectImportCtx] so that one is covered.
 pub struct ResolveCtx<'a> {
     imports: FileImportCtx<'a>,
-    diagnostics: &'a mut FileDiagnostics,
-    /// Cache of resolved values *and* values currently being resolved, to avoid infinite recursion
-    /// when resolving types
-    resolved: &'a mut FileResolveCache,
+    diagnostics: &'a FileDiagnostics,
+    project_diagnostics: &'a mut ProjectDiagnostics,
+    resolved: &'a FileResolveCache,
+    /// Resolved data
+    project_resolved: &'a mut ProjectResolveCache,
 }
 
 #[derive(Debug)]
-pub struct ProjectResolveCache {
-    by_file: HashMap<PathBuf, FileResolveCache>,
+pub(crate) struct ProjectResolveCache {
+    module_ids: FrozenVec<PathBuf>,
+    by_file: FrozenMap<PathBuf, Box<FileResolveCache>>,
 }
 
 #[derive(Debug)]
-pub struct FileResolveCache {
-    types: HashMap<ThinType, PartiallyResolved<FatType>>,
-    imported_types: HashMap<(ModulePath, TypeName), PartiallyResolved<FatType>>,
+/// Cache of resolved data *and* data currently being resolved, to avoid infinite recursion
+pub(crate) struct FileResolveCache {
+    module_id: ModuleId,
+    types_in_progress: RefCell<HashSet<ThinType>>,
+    types: FrozenMap<ThinType, Box<FatType>>,
 }
 
+/// Resolved value depends on itself. Not necessarily an error, but must be handled explicitly.
 #[derive(Debug, Clone, Copy)]
 struct RecursiveResolution;
-
-enum PartiallyResolved<T> {
-    InProgress,
-    Computed(T)
-}
 
 /// Trait implemented by [ResolvedLazy] which lets you use `DynResolvedLazy` values with arbitrary thin versions.
 pub trait ResolvedLazyTrait<Fat> {
@@ -124,13 +135,9 @@ pub type RlReturnType = ResolvedLazy<ReturnType<ThinType>, ReturnType<FatType>>;
 /// A resolved type declaration. See [ResolvedLazy]
 pub type RlTypeDecl = ResolvedLazy<ThinTypeDecl, FatTypeDecl>;
 /// A resolved type from an imported value. See [ResolvedLazy]
-pub type RlImportedValueType = ResolvedLazy<(ModulePath, ValueName), FatType>;
+pub type RlImportedValueType = RlType;
 /// A resolved type declaration from an imported type. See [ResolvedLazy]
-pub type RlImportedTypeDecl = ResolvedLazy<(ModulePath, TypeName), FatTypeDecl>;
-/// [RlType] with arbitrary thin version (dynamically-sized)
-pub type DynRlType = DynResolvedLazy<FatType>;
-/// [RlTypeDecl] with arbitrary thin version (dynamically-sized)
-pub type DynRlTypeDecl = DynResolvedLazy<FatTypeDecl>;
+pub type RlImportedTypeDecl = RlTypeDecl;
 
 /// A fat (with resolved context) version of data which can be stripped and converted back into the
 /// thin (without resolved context) version.
@@ -157,49 +164,77 @@ pub trait ResolveInto<Fat> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> Fat;
 }
 
-impl ProjectResolveCache {
-    pub fn new() -> Self {
-        Self {
-            by_file: HashMap::new()
+impl<'a> ResolveCtx<'a> {
+    fn shorten_lifetime(&mut self) -> ResolveCtx {
+        ResolveCtx {
+            imports: self.imports.shorten_lifetime(),
+            diagnostics: self.diagnostics,
+            project_diagnostics: self.project_diagnostics,
+            resolved: self.resolved,
+            project_resolved: self.project_resolved,
         }
     }
 
-    pub fn file(&mut self, path: &Path) -> &mut FileResolveCache {
-        if !self.by_file.contains_key(path) {
-            self.by_file.insert(path.to_owned(), FileResolveCache::new());
+    fn other_file<'b>(&'b mut self, path: &'b Path) -> ResolveCtx<'b> {
+        ResolveCtx {
+            imports: self.imports.other_file(path),
+            diagnostics: self.project_diagnostics.file(path),
+            project_diagnostics: self.project_diagnostics,
+            resolved: self.project_resolved.file(path),
+            project_resolved: self.project_resolved,
         }
-        self.by_file.get_mut(path).unwrap()
+    }
+}
+
+impl ProjectResolveCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            module_ids: FrozenVec::new(),
+            by_file: FrozenMap::new()
+        }
+    }
+
+    pub(crate) fn module_id(&self, path: impl AsRef<Path>) -> ModuleId {
+        self.file(path).module_id
+    }
+
+    fn path(&self, module_id: ModuleId) -> &Path {
+        &self.module_ids[module_id.into()]
+    }
+
+    fn add_module_id(&self, path: PathBuf) -> ModuleId {
+        let id = ModuleId(self.module_ids.len());
+        self.module_ids.push(path);
+        id
+    }
+
+    fn file(&self, path: impl AsRef<Path>) -> &FileResolveCache {
+        if let Some(file) = self.by_file.get(path.as_ref()) {
+            return file
+        }
+        let path = path.as_ref().to_owned();
+        let module_id = self.add_module_id(path.clone());
+        self.by_file.insert(path, Box::new(FileResolveCache::new(module_id)))
     }
 }
 
 impl FileResolveCache {
-    fn new() -> Self {
+    fn new(module_id: ModuleId) -> Self {
         Self {
-            types: HashMap::new(),
-            imported_types: HashMap::new()
+            module_id,
+            types_in_progress: RefCell::new(HashSet::new()),
+            types: FrozenMap::new()
         }
     }
 
-    fn get_or_compute(&mut self, key: &ThinType, compute: impl FnOnce(&mut Self) -> FatType) -> Result<&FatType, RecursiveResolution> {
+    fn get_or_compute(&self, key: &ThinType, compute: impl FnOnce() -> FatType) -> Result<&FatType, RecursiveResolution> {
         if let Some(value) = self.types.get(key) {
-            return match value {
-                PartiallyResolved::InProgress => Err(RecursiveResolution),
-                PartiallyResolved::Computed(t) => t
-            }
+            return Ok(value)
         }
-
-        let None = self.types.insert(key.clone(), PartiallyResolved::InProgress) else {
-            unreachable!("we just checked that the key is not in the map")
+        let true = self.types_in_progress.borrow_mut().insert(key.clone()) else {
+            return Err(RecursiveResolution)
         };
-        let computed = compute(self);
-        let Some(entry @ PartiallyResolved::InProgress) = self.types.get_mut(key) else {
-            unreachable!("we just set it to in progress")
-        };
-        *entry = PartiallyResolved::Computed(computed);
-        let PartiallyResolved::Computed(computed) = entry else {
-            unreachable!("we just set it to computed")
-        };
-        Ok(computed)
+        Ok(self.types.insert(key.clone(), Box::new(compute())))
     }
 }
 
@@ -210,6 +245,7 @@ impl<T> IntoThin<()> for T {
 impl<Thin, Fat: IntoThin<Thin>> ResolvedLazy<Thin, Fat> {
     pub fn resolved(fat: Fat) -> Self {
         Self {
+            imported_origin: None,
             thin: fat.ref_into_thin(),
             fat: OnceCell::with_value(fat)
         }
@@ -219,6 +255,7 @@ impl<Thin, Fat: IntoThin<Thin>> ResolvedLazy<Thin, Fat> {
 impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     pub fn new(thin: Thin) -> Self {
         Self {
+            imported_origin: None,
             thin,
             fat: OnceCell::new()
         }
@@ -227,11 +264,27 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
 
 impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
-        self.fat.get_or_init(|| self.thin.resolve(ctx))
+        self.fat.get_or_init(|| {
+            let mut ctx = self.local_ctx(ctx);
+            self.thin.resolve(&mut ctx)
+        })
     }
 }
 
 impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
+    /// Clones a possibly local [ResolvedLazy] and converts into an imported one which can be used
+    /// from another module.
+    ///
+    /// If the [ResolvedLazy] is already imported this will *not* change the imported origin,
+    /// instead if won't do anything (we still want to resolve at the real origin)
+    pub fn imported_from(&self, origin: ModuleId) -> Self {
+        Self {
+            imported_origin: Some(self.imported_origin.unwrap_or(origin)),
+            thin: self.thin.clone(),
+            fat: self.fat.clone()
+        }
+    }
+
     /// Transforms the thin value and, if computed, the fat value as well.
     ///
     /// **SAFETY:** The transformations must ensure that the following rules hold:
@@ -249,8 +302,18 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
         f_fat: impl FnOnce(Fat) -> NewFat,
     ) -> ResolvedLazy<NewThin, NewFat> {
         ResolvedLazy {
+            imported_origin: self.imported_origin,
             thin: f_thin(self.thin),
             fat: OnceCell::with_option(self.fat.into_inner().map(f_fat))
+        }
+    }
+
+    fn local_ctx<'a: 'b, 'b>(&self, ctx: &'b mut ResolveCtx<'a>) -> ResolveCtx<'b> {
+        if let Some(imported_origin) = self.imported_origin {
+            let imported_origin_path = ctx.project_resolved.path(imported_origin);
+            ctx.other_file(imported_origin_path)
+        } else {
+            ctx.clone()
         }
     }
 }
@@ -308,32 +371,32 @@ impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
 
 impl_by_map!(ResolveInto (fn resolve(&self, ctx: &mut ResolveCtx<'_>)) for TypeParam, ReturnType);
 
-impl ResolveInto<FatType> for (ModulePath, ValueName) {
-    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> FatType {
-        ctx.imports.lookup_value_type(&self.0, &self.1)
-    }
-}
-
-impl ResolveInto<FatTypeDecl> for (ModulePath, TypeName) {
-    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
-        ctx.imports.lookup_type_decl(&self.0, &self.1)
-    }
-}
-
 impl RlType {
     pub const ANY: Self = Self {
+        imported_origin: None,
         thin: ThinType::Any,
         fat: OnceCell::with_value(FatType::Any)
     };
 
     pub const NEVER: Self = Self {
+        imported_origin: None,
         thin: ThinType::NEVER,
         fat: OnceCell::with_value(FatType::NEVER)
     };
 
     pub const NULL: Self = Self {
+        imported_origin: None,
         thin: ThinType::NEVER,
         fat: OnceCell::with_value(FatType::NEVER)
+    };
+}
+
+impl RlTypeDecl {
+    pub const MISSING: Self = Self {
+        imported_origin: None,
+        thin: ThinTypeDecl::MISSING,
+        // Cannot create because FatTypeDecl has a Box, so we just leave empty
+        fat: OnceCell::new()
     };
 }
 

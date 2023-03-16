@@ -230,6 +230,16 @@ macro_rules! impl_structural_type_constructors {
 }
 pub(crate) use impl_structural_type_constructors;
 
+impl ThinTypeDecl {
+    pub const MISSING: Self = Self {
+        name: TypeName::MISSING,
+        type_params: Vec::new(),
+        supertypes: Vec::new(),
+        typescript_supertype: None,
+        guard: None
+    };
+}
+
 impl ThinType {
     pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
 

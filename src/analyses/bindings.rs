@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use smol_str::SmolStr;
 use derive_more::Display;
-use crate::analyses::types::{FatType, FatTypeDecl, DynRlType, DynRlTypeDecl, RlType, RlTypeDecl};
+use crate::analyses::types::{FatType, FatTypeDecl, RlType, RlTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
 use crate::misc::lazy_alt::{Lazy, LazyError, RcLazy};
@@ -23,7 +23,7 @@ pub enum Locality {
 /// imports, declarations, parameters, predefined globals, etc.
 pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn resolve_type(&self) -> &DynRlType;
+    fn value_type(&self) -> &RlType;
     fn locality(&self) -> Locality;
 }
 
@@ -31,7 +31,7 @@ pub trait ValueBinding {
 /// imported types, type declarations, type parameters, predefined globals, etc.
 pub trait TypeBinding {
     fn name(&self) -> &TypeName;
-    fn resolve_decl(&self) -> &DynRlTypeDecl;
+    fn type_decl(&self) -> &RlTypeDecl;
     fn locality(&self) -> Locality;
 }
 
@@ -105,7 +105,7 @@ impl ValueBinding for GlobalValueBinding {
         &self.name
     }
 
-    fn resolve_type(&self) -> &DynRlType {
+    fn value_type(&self) -> &RlType {
         &self.type_
     }
 
@@ -128,7 +128,7 @@ impl TypeBinding for GlobalTypeBinding {
         &self.name
     }
 
-    fn resolve_decl(&self) -> &DynRlTypeDecl {
+    fn type_decl(&self) -> &RlTypeDecl {
         &self.decl
     }
 
@@ -170,6 +170,8 @@ impl HoistedValueBinding for GlobalValueBinding {}
 // }
 
 impl TypeName {
+    pub const MISSING: TypeName = TypeName::new_inline("__Missing");
+
     pub const RESERVED: [&'static str; 4] = [
         "Any",
         "Never",

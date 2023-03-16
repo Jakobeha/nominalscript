@@ -1,5 +1,6 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
+use std::path::Path;
 use std::rc::Rc;
 use tree_sitter::LogType::Parse;
 use crate::analyses::bindings::{Locality, TypeBinding, TypeName, ValueBinding, ValueName};
@@ -8,6 +9,7 @@ use crate::analyses::types::{FatType, FatTypeDecl, DeterminedReturnType, Nullabi
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeDecl, AstTypeIdent, AstTypeImportSpecifier, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
 use crate::diagnostics::{error, issue, hint, FileLogger};
+use crate::import_export::export::{Exports, TranspileOutHeader};
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -62,7 +64,7 @@ impl<'tree> Scope<'tree> {
         self.values.set_params(params)
     }
 
-    pub fn add_imported(&self, import_stmt: AstImportStatement) {
+    pub fn add_imported(&self, import_stmt: AstImportStatement<'tree>) {
         for imported_type in import_stmt.imported_types {
             self.types.add_imported(Rc::new(imported_type), &mut e);
         }
@@ -269,7 +271,7 @@ impl<'tree> TypeScope<'tree> {
         }))
     }
 
-    pub fn add_imported(&self, imported: Rc<AstTypeImportSpecifier>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&self, imported: Rc<AstTypeImportSpecifier<'tree>>, e: &mut FileLogger<'_>) {
         let alias = &imported.alias.name;
         if let Some(prev_decl) = self.get(alias) {
             error!(e, "Nominal type '{}' already in scope", alias => imported.node;

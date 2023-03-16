@@ -10,7 +10,7 @@ use crate::misc::lazy_alt::LazyError;
 /// They should not take [ProjectDiagnostics] in order to separate logging from printing,
 /// though the separation isn't actually necessary or used for anything.
 #[derive(Debug)]
-pub struct ProjectLogger<'a>(&'a mut ProjectDiagnostics);
+pub struct ProjectLogger<'a>(&'a ProjectDiagnostics);
 
 /// Allows you to log file diagnostics.
 ///
@@ -18,7 +18,7 @@ pub struct ProjectLogger<'a>(&'a mut ProjectDiagnostics);
 /// They should not take [FileDiagnostics] in order to separate logging from printing,
 /// though the separation isn't actually necessary or used for anything.
 #[derive(Debug)]
-pub struct FileLogger<'a>(&'a mut FileDiagnostics);
+pub struct FileLogger<'a>(&'a FileDiagnostics);
 
 /// Allows you to log diagnostics for a type.
 ///
@@ -35,37 +35,37 @@ enum _TypeLogger<'a, 'b: 'a, 'c: 'b> {
 
 #[derive(Debug)]
 struct TypeLoggerBase<'b, 'c: 'b> {
-    file: &'b mut FileLogger<'c>,
+    file: &'b FileLogger<'c>,
     inferred_loc: TSNode<'b>,
     // RULE A: these are always active references (though may have different lifetimes)
     context: SmallVec<[TypeLocPtr; 2]>
 }
 
 impl<'a> ProjectLogger<'a> {
-    pub fn new(diagnostics: &'a mut ProjectDiagnostics) -> Self {
+    pub fn new(diagnostics: &'a ProjectDiagnostics) -> Self {
         Self(diagnostics)
     }
 
-    pub fn file(&mut self, path: impl AsRef<Path>) -> FileLogger<'a> {
+    pub fn file(&self, path: impl AsRef<Path>) -> FileLogger<'a> {
         FileLogger(self.0.file(path))
     }
 
-    pub fn log(&mut self, diagnostic: GlobalDiagnostic) {
+    pub fn log(&self, diagnostic: GlobalDiagnostic) {
         self.0.insert_global(diagnostic)
     }
 }
 
 impl<'a> FileLogger<'a> {
-    pub fn new(diagnostics: &'a mut FileDiagnostics) -> Self {
+    pub fn new(diagnostics: &'a FileDiagnostics) -> Self {
         Self(diagnostics)
     }
 
-    pub fn log(&mut self, diagnostic: FileDiagnostic) {
+    pub fn log(&self, diagnostic: FileDiagnostic) {
         self.0.insert(diagnostic)
     }
 
     pub fn unwrap_import_result<T>(
-        &mut self,
+        &self,
         result: Result<T, LazyError>,
         def: TSNode<'_>,
         use_: Option<TSNode<'_>>
@@ -87,7 +87,7 @@ impl<'a> FileLogger<'a> {
 }
 
 impl<'c> FileLogger<'c> {
-    pub fn type_<'b>(&'b mut self, inferred_loc: TSNode<'b>) -> TypeLogger<'b, 'b, 'c> {
+    pub fn type_<'b>(&'b self, inferred_loc: TSNode<'b>) -> TypeLogger<'b, 'b, 'c> {
         TypeLogger(_TypeLogger::Base { base: TypeLoggerBase {
             file: self,
             inferred_loc,

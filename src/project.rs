@@ -22,16 +22,16 @@ pub struct Project {
 #[derive(Debug)]
 pub struct ProjectCtx<'a> {
     pub import_ctx: ProjectImportCtx<'a>,
-    pub diagnostics: &'a mut ProjectDiagnostics,
-    pub resolve_cache: &'a mut ProjectResolveCache
+    pub diagnostics: &'a ProjectDiagnostics,
+    pub resolve_cache: &'a ProjectResolveCache
 }
 
 /// File environment = reference to file data
 #[derive(Debug)]
 pub struct FileCtx<'a> {
     pub import_ctx: FileImportCtx<'a>,
-    pub diagnostics: &'a mut FileDiagnostics,
-    pub resolve_cache: &'a mut FileResolveCache
+    pub diagnostics: &'a FileDiagnostics,
+    pub resolve_cache: &'a FileResolveCache
 }
 
 impl Project {

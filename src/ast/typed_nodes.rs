@@ -1,13 +1,14 @@
+use std::path::{Path, PathBuf};
 use enquote::unquote;
-use once_cell::unsync::Lazy;
+use once_cell::unsync::{Lazy, OnceCell};
 use smol_str::SmolStr;
 use crate::analyses::bindings::{Locality, HoistedValueBinding, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
-use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, RlImportedTypeDecl, RlImportedValueType, ResolvedLazy, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, DynRlType, LocalFatType, TypeStructure, ResolveCtx, ResolvedLazyTrait, Nullability};
+use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, RlImportedTypeDecl, RlImportedValueType, ResolvedLazy, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, LocalFatType, TypeStructure, ResolveCtx, ResolvedLazyTrait, Nullability};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
-use crate::import_export::export::ModulePath;
+use crate::import_export::export::{Exports, ModulePath};
 
 pub trait AstNode<'tree> {
     fn node(&self) -> TSNode<'tree>;
@@ -52,11 +53,11 @@ macro_rules! impl_ast_node_value_binding {
                     self.name.name()
                 }
 
-                fn resolve_type(&self) -> &DynReType {
+                fn value_type(&self) -> &RlType {
                     <Self as TypedAstNode>::infer_type(self, None)
                 }
 
-                fn locality(&self) -> &Locality {
+                fn locality(&self) -> Locality {
                     Locality::$locality
                 }
             }
@@ -86,11 +87,11 @@ macro_rules! impl_ast_node_type_binding {
                     self.name.name()
                 }
 
-                fn resolve_decl(&self) -> &DynReTypeDecl {
+                fn type_decl(&self) -> &RlTypeDecl {
                     &self.shape
                 }
 
-                fn locality(&self) -> &Locality {
+                fn locality(&self) -> Locality {
                     Locality::$locality
                 }
             }
@@ -99,7 +100,7 @@ macro_rules! impl_ast_node_type_binding {
 }
 
 pub trait TypedAstNode<'tree>: AstNode<'tree> {
-    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'tree>>) -> &DynRlType;
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'tree>>) -> &RlType;
 }
 
 pub trait AstBinding<'tree>: TypedAstNode<'tree> + LocalValueBinding<'tree> {
@@ -206,7 +207,7 @@ pub struct AstValueImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstValueIdent<'tree>,
     pub alias: AstValueIdent<'tree>,
-    pub shape: RlImportedValueType,
+    pub shape: OnceCell<RlImportedValueType>,
 }
 
 #[derive(Debug)]
@@ -214,7 +215,7 @@ pub struct AstTypeImportSpecifier<'tree> {
     pub node: TSNode<'tree>,
     pub original_name: AstTypeIdent<'tree>,
     pub alias: AstTypeIdent<'tree>,
-    pub shape: RlImportedTypeDecl,
+    pub shape: OnceCell<RlImportedTypeDecl>,
 }
 
 #[derive(Debug)]
@@ -492,7 +493,7 @@ impl<'tree> AstParameter<'tree> {
 }
 
 impl<'tree> TypedAstNode for AstParameter<'tree> {
-    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
@@ -540,7 +541,7 @@ impl<'tree> AstValueDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode for AstValueDecl<'tree> {
-    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
@@ -600,7 +601,7 @@ impl<'tree> AstFunctionDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode for AstFunctionDecl<'tree> {
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
         &self.fn_type
     }
 }
@@ -661,50 +662,69 @@ impl<'tree> AstTypeDecl<'tree> {
     }
 }
 
-impl_ast_node_common_trait!(AstValueImportSpecifier);
+impl_ast_node_common!(AstValueImportSpecifier, ["import_specifier"]);
 impl_ast_node_value_binding!(AstValueImportSpecifier Imported);
 impl<'tree> AstValueImportSpecifier<'tree> {
-    pub fn new(module_path: &ModulePath, node: TSNode<'tree>) -> Self {
-        impl_ast_node_common_kind_guard!(node, ["import_specifier"]);
+    fn _new(node: TSNode<'tree>) -> Self {
         let original_name = AstValueIdent::new(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
             || original_name.clone(),
             AstValueIdent::new
         );
-        let shape = RlImportedValueType::new((module_path.clone(), original_name.name.clone()));
         Self {
             node,
             original_name,
             alias,
-            shape,
+            shape: OnceCell::new(),
         }
+    }
+
+    pub fn resolve_from_exports(&self, exports: &Exports) {
+        self.shape.set(exports.value_type(&self.original_name.name).cloned().unwrap_or_default())
+            .expect("can only call resolve_from_exports once");
     }
 }
 
 impl<'tree> TypedAstNode for AstValueImportSpecifier<'tree> {
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
-        &self.shape
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+        self.shape.get().expect("must call resolve_from_exports before getting or inferring type")
     }
 }
 
-impl_ast_node_common_trait!(AstTypeImportSpecifier);
-impl_ast_node_type_binding!(AstTypeImportSpecifier Imported);
+impl_ast_node_common!(AstTypeImportSpecifier, ["import_specifier"]);
 impl<'tree> AstTypeImportSpecifier<'tree> {
-    pub fn new(module_path: &ModulePath, node: TSNode<'tree>) -> Self {
+    fn _new(node: TSNode<'tree>) -> Self {
         node.mark();
-        impl_ast_node_common_kind_guard!(node, ["import_specifier"]);
         let original_name = AstTypeIdent::new(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
             || original_name.clone(),
             AstTypeIdent::new
         );
-        let shape = RlImportedTypeDecl::new((module_path.clone(), original_name.name.clone()));
         Self {
             node,
             original_name,
             alias,
-            shape,
+            shape: OnceCell::new(),
         }
+    }
+
+    pub fn resolve_from_exports(&self, exports: &Exports) {
+        self.shape.set(exports.type_decl(&self.original_name.name).cloned().unwrap_or_default())
+            .expect("can only call resolve_from_exports once");
+    }
+}
+
+impl<'tree> TypeBinding for AstTypeImportSpecifier<'tree> {
+    fn name(&self) -> &TypeName {
+        self.name.name()
+    }
+
+    fn type_decl(&self) -> &RlTypeDecl {
+        self.shape.get().expect("must call resolve_from_exports before getting decl")
+    }
+
+    fn locality(&self) -> Locality {
+        Locality::Imported
     }
 }
 
@@ -727,12 +747,12 @@ impl<'tree> AstImportStatement<'tree> {
         let imported_values = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "identifier")
-            .map(|node| AstValueImportSpecifier::new(&path.module_path, node))
+            .map(AstValueImportSpecifier::new)
             .collect();
         let imported_types = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "nominal_type_identifier")
-            .map(|node| AstTypeImportSpecifier::new(&path.module_path, node))
+            .map(AstTypeImportSpecifier::new)
             .collect();
         if let Some(invalid_specifier) = import_container
             .named_children(&mut node.walk())
@@ -744,6 +764,15 @@ impl<'tree> AstImportStatement<'tree> {
             path,
             imported_values,
             imported_types
+        }
+    }
+
+    pub fn resolve_from_exports(&self, exports: &Exports) {
+        for specifier in &self.imported_values {
+            specifier.resolve_from_exports(exports);
+        }
+        for specifier in &self.imported_types {
+            specifier.resolve_from_exports(exports);
         }
     }
 }
