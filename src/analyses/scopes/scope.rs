@@ -1,7 +1,9 @@
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use elsa::{FrozenMap, FrozenVec};
+use once_cell::unsync::OnceCell;
 use tree_sitter::LogType::Parse;
 use crate::analyses::bindings::{Locality, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
@@ -20,42 +22,40 @@ pub struct Scope<'tree> {
     did_set_params: bool,
     pub values: ValueScope<'tree>,
     pub types: TypeScope<'tree>,
+    pub parent: Weak<Scope<'tree>>
 }
 
-/// A local scope: contains all of the value bindings in a scope node
-/// (top level, module, statement block, class declaration, arrow function, etc.)
-pub struct ValueScope<'tree>(RefCell<_ValueScope<'tree>>);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ExportedId<'tree, Name> {
     pub alias_node: TSNode<'tree>,
     pub name: Name
 }
 
-struct _ValueScope<'tree> {
-    params: Vec<Rc<AstParameter<'tree>>>,
-    hoisted: HashMap<ValueName, Rc<dyn ValueBinding<'tree>>>,
-    sequential: HashMap<ValueName, Vec<Rc<AstValueDecl<'tree>>>>,
-    exported: HashMap<ValueName, ExportedId<'tree, ValueName>>,
-    return_: Option<AstReturn<'tree>>,
-    throw: Option<AstThrow<'tree>>,
+/// A local scope: contains all of the value bindings in a scope node
+/// (top level, module, statement block, class declaration, arrow function, etc.)
+pub struct ValueScope<'tree> {
+    params: FrozenVec<Box<AstParameter<'tree>>>,
+    hoisted: FrozenMap<ValueName, Box<dyn ValueBinding<'tree>>>,
+    sequential: FrozenMap<ValueName, FrozenVec<Box<AstValueDecl<'tree>>>>,
+    exported: RefCell<HashMap<ValueName, ExportedId<'tree, ValueName>>>,
+    return_: OnceCell<AstReturn<'tree>>,
+    throw: OnceCell<AstThrow<'tree>>,
 }
 
 /// A local scope: contains all of the type bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.)
-pub struct TypeScope<'tree>(RefCell<_TypeScope<'tree>>);
-
-struct _TypeScope<'tree> {
-    hoisted: HashMap<TypeName, Rc<dyn TypeBinding<'tree>>>,
-    exported: HashMap<TypeName, ExportedId<'tree, TypeName>>,
+pub struct TypeScope<'tree> {
+    hoisted: FrozenMap<TypeName, Box<dyn TypeBinding<'tree>>>,
+    exported: RefCell<HashMap<TypeName, ExportedId<'tree, TypeName>>>,
 }
 
 impl<'tree> Scope<'tree> {
-    pub(super) fn new() -> Scope<'tree> {
+    pub(super) fn new(parent: Option<&Rc<Scope<'tree>>>) -> Scope<'tree> {
         Scope {
             did_set_params: false,
             values: ValueScope::new(),
             types: TypeScope::new(),
+            parent: parent.map_or_else(Weak::new, Rc::downgrade)
         }
     }
 
