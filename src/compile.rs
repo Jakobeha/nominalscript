@@ -11,7 +11,7 @@ use crate::ast::{NOMINALSCRIPT_PARSER, queries};
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TreeCreateError, TSNode, TSParser, TSQueryCursor, TSTree};
 use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
-use crate::diagnostics::{error, issue, hint, FileLogger};
+use crate::diagnostics::{error, issue, hint, FileLogger, FileDiagnostics};
 use crate::import_export::import_ctx::ImportError;
 use crate::misc::lazy_alt::Lazy;
 
@@ -43,23 +43,19 @@ fn begin_transpile_file_no_log_err<'a>(
     ctx: &'a mut ProjectCtx<'_>
 ) -> Result<&'a Module, ImportError> {
     ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
-        begin_transpile_file_no_cache(script_path, &mut ProjectCtx {
-            import_ctx,
-            diagnostics: &ctx.diagnostics,
-            resolve_cache: &ctx.resolve_cache
-        }).map_err(ImportError::from)
+        begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(script_path)).map_err(ImportError::from)
     })
 }
 
 /// [begin_transpile_file] but doesn't cache
-fn begin_transpile_file_no_cache(
+pub(crate) fn begin_transpile_file_no_cache(
     script_path: &Path,
-    ctx: &mut ProjectCtx<'_>
+    diagnostics: &FileDiagnostics
 ) -> Result<Module, FatalTranspileError> {
     let ast = NOMINALSCRIPT_PARSER.lock().parse_file(script_path)?;
     let mut module = Module::new(ast);
     module.with_module_data_mut(|exports, ast, m| {
-        begin_transpile_ast(m, ast, exports, script_path, ctx)
+        begin_transpile_ast(m, ast, exports, diagnostics)
     });
     Ok(module)
 }
@@ -74,12 +70,10 @@ fn begin_transpile_ast<'tree>(
     m: &mut ModuleCtx<'tree>,
     ast: &'tree TSTree,
     exports: &mut Exports,
-    script_path: &Path,
-    ctx: &mut ProjectCtx<'_>
+    diagnostics: &FileDiagnostics,
 ) {
     // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
-    let mut import_ctx = ctx.import_ctx.file(script_path);
-    let mut e = FileLogger::new(ctx.diagnostics.file(script_path));
+    let mut e = FileLogger::new(diagnostics);
     let mut c = ast.walk();
     let mut qc = TSQueryCursor::new();
     let root_node = ast.root_node();
@@ -108,21 +102,7 @@ fn begin_transpile_ast<'tree>(
     for import_stmt_match in qc.matches(&IMPORT, root_node) {
         let node = import_stmt_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(node, &mut c);
-        let import_stmt = match AstImportStatement::new(
-            &scope,
-            node,
-            |import_path| import_ctx
-                .resolve_and_cache_script_path(import_path)
-                .map(|path| path.to_path_buf())
-        ) {
-            Err((module_path_node, module_path, import_error)) => {
-                error!(ctx.diagnostics, "failed to resolve import '{}'", module_path => module_path_node;
-                    issue!("{}", import_error));
-                continue;
-            }
-            Ok(import_stmt) => import_stmt,
-        };
-        scope.add_imported(import_stmt);
+        scope.add_imported(AstImportStatement::new(&scope, node));
     }
     // Query and prefill exports, and also add to scopes
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {

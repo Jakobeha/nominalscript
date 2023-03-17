@@ -88,6 +88,22 @@ pub type LocalFatType = FatType<FatTypeHole>;
 /// Global (exported) types cannot have holes and they are thread-safe.
 pub type LocalFatTypeInherited = GenFatTypeInherited<FatTypeHole>;
 
+impl FatTypeDecl {
+    pub fn missing() -> Self {
+        Self {
+            name: TypeName::MISSING,
+            type_params: Vec::new(),
+            inherited: Box::new(FatTypeInherited::empty())
+        }
+    }
+}
+
+impl Default for FatTypeDecl {
+    fn default() -> Self {
+        Self::missing()
+    }
+}
+
 impl<Hole: FatTypeHoleTrait> FatType<Hole> {
     pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
 

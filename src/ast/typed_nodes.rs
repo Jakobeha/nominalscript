@@ -3,7 +3,7 @@ use enquote::unquote;
 use once_cell::unsync::{Lazy, OnceCell};
 use smol_str::SmolStr;
 use crate::analyses::bindings::{Locality, HoistedValueBinding, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ScriptPathPtr};
+use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ImportPathPtr};
 use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, RlImportedTypeDecl, RlImportedValueType, ResolvedLazy, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, LocalFatType, TypeStructure, ResolveCtx, ResolvedLazyTrait, Nullability};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
@@ -145,7 +145,7 @@ pub struct AstImportStatement<'tree> {
     pub path: AstImportPath<'tree>,
     pub imported_values: Vec<AstValueImportSpecifier<'tree>>,
     pub imported_types: Vec<AstTypeImportSpecifier<'tree>>,
-    pub(crate) script_path: ScriptPathPtr
+    pub(crate) import_path: ImportPathPtr
 }
 
 macro_rules! impl_ast {
@@ -263,7 +263,7 @@ impl<'tree> AstTypeParameter<'tree> {
                 .map(Self::variance_from)
                 .unwrap_or_default(),
             name: name.name.clone(),
-            supers: nominal_supertypes.iter().map(|t| t.shape.thin.clone()).collect(),
+            supers: nominal_supertypes.iter().map(|t| t.shape.thin.local().unwrap().clone()).collect(),
         };
         Self {
             node,
@@ -502,7 +502,7 @@ impl<'tree> AstParameter<'tree> {
     /// since parameters are contravariant, unless it's a declaration, in which case no
     /// explicit annotation implies `Any`.
     pub fn thin(&self) -> ThinType {
-        self.type_.map(|param_type| param_type.shape.thin.clone())
+        self.type_.map(|param_type| param_type.shape.thin.local().unwrap().clone())
             .unwrap_or(if self.is_arrow() { ThinType::NEVER } else { ThinType::Any })
     }
 }
@@ -596,7 +596,7 @@ impl<'tree> AstFunctionDecl<'tree> {
             formal_params.iter().find(|param| param.is_rest_param)
                 .map(AstParameter::thin)
                 .unwrap_or(ThinType::empty_rest_arg()),
-            return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
+            return_type.as_ref().map(|return_type| return_type.shape.thin.local().unwrap().clone())
                 .unwrap_or_default()
         ));
         Self {
@@ -686,7 +686,7 @@ impl_ast_value_binding!(AstValueImportSpecifier Imported);
 impl<'tree> AstValueImportSpecifier<'tree> {
     pub fn new(
         scope: &ScopePtr,
-        script_path: &ScriptPathPtr,
+        import_path: &ImportPathPtr,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
@@ -701,7 +701,7 @@ impl<'tree> AstValueImportSpecifier<'tree> {
             node,
             original_name,
             alias,
-            shape: RlImportedValueType::new_imported(script_path, scope, export_alias),
+            shape: RlImportedValueType::new_imported(import_path, scope, export_alias),
         }
     }
 
@@ -721,7 +721,7 @@ impl_ast!(AstTypeImportSpecifier);
 impl<'tree> AstTypeImportSpecifier<'tree> {
     pub fn new(
         scope: &ScopePtr,
-        script_path: &ScriptPathPtr,
+        import_path: &ImportPathPtr,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
@@ -737,7 +737,7 @@ impl<'tree> AstTypeImportSpecifier<'tree> {
             node,
             original_name,
             alias,
-            shape: RlImportedTypeDecl::new_imported(script_path, scope, export_alias),
+            shape: RlImportedTypeDecl::new_imported(import_path, scope, export_alias),
         }
     }
 
@@ -778,37 +778,33 @@ impl<'tree> AstImportStatement<'tree> {
     pub fn new<E>(
         scope: &ScopePtr,
         node: TSNode<'tree>,
-        resolve_import_path: impl FnOnce(&ImportPath) -> Result<PathBuf, E>
-    ) -> Result<Self, (AstImportPath<'_>, E)> {
+    ) -> Self {
         assert_kind!(node, ["import_statement"]);
         let path = AstImportPath::new(node.named_child(1).unwrap());
-        let script_path = ScriptPathPtr::new(match resolve_import_path(&path.module_path) {
-            Ok(script_path) => script_path,
-            Err(error) => return Err((path, error))
-        });
+        let import_path = ImportPathPtr::new(path.module_path.clone());
         let import_container = node.named_child(0).unwrap();
         let imported_values = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "identifier")
-            .map(|node| AstValueImportSpecifier::new(scope, &script_path, node))
+            .map(|node| AstValueImportSpecifier::new(scope, &import_path, node))
             .collect();
         let imported_types = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "nominal_type_identifier")
-            .map(|node| AstTypeImportSpecifier::new(scope, &script_path, node))
+            .map(|node| AstTypeImportSpecifier::new(scope, &import_path, node))
             .collect();
         if let Some(invalid_specifier) = import_container
             .named_children(&mut node.walk())
             .find(|node| node.named_child(0).unwrap().kind() != "identifier" && node.named_child(0).unwrap().kind() != "nominal_type_identifier") {
             panic!("import statement contains an invalid import specifier {:?} of kind {:?}", invalid_specifier, invalid_specifier.kind());
         }
-        Ok(Self {
+        Self {
             node,
             path,
             imported_values,
             imported_types,
-            script_path
-        })
+            import_path
+        }
     }
 
     pub fn resolve_from_exports(&self, exports: &Exports) {

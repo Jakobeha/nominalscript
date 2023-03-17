@@ -15,7 +15,7 @@ use crate::analyses::types::{FatType, FatTypeDecl, DeterminedReturnType, Nullabi
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeDecl, AstTypeIdent, AstTypeImportSpecifier, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
 use crate::diagnostics::{error, issue, hint, FileLogger};
-use crate::import_export::export::{Exports, Module};
+use crate::import_export::export::{Exports, ImportPath, Module};
 
 /// Raw pointer to scope which can be derefenced if we know the scope exists
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,10 +26,10 @@ pub(crate) struct RawScopePtr(*const Scope<'static>);
 pub struct ScopePtr<'tree>(Pin<Rc<Scope<'tree>>>);
 
 /// Raw pointer to pinned script path which can be dereferenced if we know the scope containing the imported path exists
-pub(crate) struct RawScriptPathPtr(*const (PhantomPinned, Path));
+pub(crate) struct RawImportPathPtr(*const (ImportPath, PhantomPinned));
 
 /// Script path which is pinned for [ResolvedLazy]
-pub(crate) struct ScriptPathPtr(Pin<Box<(PhantomPinned, Path)>>);
+pub(crate) struct ImportPathPtr(Pin<(ImportPath, PhantomPinned)>);
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -40,7 +40,7 @@ pub(crate) struct ScriptPathPtr(Pin<Box<(PhantomPinned, Path)>>);
 pub struct Scope<'tree> {
     did_set_params: bool,
     /// These must be stored in the scope because pointers in [ResolvedLazy] values reference them
-    imported_script_paths: RefCell<Vec<ScriptPathPtr>>,
+    imported_script_paths: RefCell<Vec<ImportPathPtr>>,
     pub values: ValueScope<'tree>,
     pub types: TypeScope<'tree>,
     pub(crate) resolve_cache: ResolveCache,
@@ -143,9 +143,9 @@ impl<'tree> Deref for ScopePtr<'tree> {
     }
 }
 
-impl RawScriptPathPtr {
-    pub const fn null() -> RawScriptPathPtr {
-        RawScriptPathPtr(std::ptr::null())
+impl RawImportPathPtr {
+    pub const fn null() -> RawImportPathPtr {
+        RawImportPathPtr(std::ptr::null())
     }
 
     pub fn is_null(&self) -> bool {
@@ -155,42 +155,39 @@ impl RawScriptPathPtr {
     /// SAFETY: You must statically know that the path being pointed to is alive.
     ///
     /// Returns `None` (not UB) if this is null.
-    pub(crate) unsafe fn upgrade<'a>(self) -> Option<&'a Path> {
+    pub(crate) unsafe fn upgrade<'a>(self) -> Option<&'a ImportPath> {
         unsafe {
-            // SAFETY: (PhantomPinned, Path) == Path and we already "know" it's alive from the above
-            let ptr = self.0 as *const Path;
-            ptr.as_ref()
+            // SAFETY: We already "know" the pointer is alive from the above
+            let ptr = self.0 as *const (ImportPath, PhantomPinned);
+            ptr.as_ref().map(|(path, _)| path)
         }
     }
 }
 
-impl ScriptPathPtr {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        // SAFETY: Path == (PhantomPinned, Path)
-        ScriptPathPtr(Box::into_pin(unsafe { std::mem::transmute::<Box<Path>, Box<(PhantomPinned, Path)>>(path.into_boxed_path()) }))
+impl ImportPathPtr {
+    pub(crate) fn new(path: ImportPath) -> Self {
+        // SAFETY: Pin / PhantomPinned is probably not even needed here, and ImportPath is Unpin
+        ImportPathPtr(unsafe { Pin::new_unchecked((path, PhantomPinned)) })
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn as_raw(this: &Self) -> RawScriptPathPtr {
-        // SAFETY: We are not mutating the pinned data but only converting to a reference
-        // (and also the pin doesn't really matter here)
-        RawScriptPathPtr(unsafe { Pin::into_inner(this.0.as_ref()) } as *const (PhantomPinned, Path))
+    pub(crate) fn as_raw(this: &Self) -> RawImportPathPtr {
+        RawImportPathPtr(Pin::into_inner(this.0.as_ref()) as *const (ImportPath, PhantomPinned))
     }
 }
 
-impl Deref for ScriptPathPtr {
-    type Target = Path;
+impl Deref for ImportPathPtr {
+    type Target = ImportPath;
 
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-impl AsRef<Path> for ScriptPathPtr {
-    fn as_ref(&self) -> &Path {
-        // SAFETY: (PhantomPinned, Path) == Path
-        let inner = unsafe { std::mem::transmute::<Pin<&(PhantomPinned, Path)>, Pin<&Path>>(this.0.as_ref()) };
-        Pin::into_inner(inner)
+impl AsRef<ImportPath> for ImportPathPtr {
+    fn as_ref(&self) -> &ImportPath {
+        // SAFETY: can't affect memory in pinned reference
+        &self.0.as_ref().get_ref().0
     }
 }
 
@@ -213,7 +210,7 @@ impl<'tree> Scope<'tree> {
     }
 
     pub fn add_imported(&self, import_stmt: AstImportStatement<'tree>) {
-        self.imported_script_paths.borrow_mut().push(import_stmt.script_path);
+        self.imported_script_paths.borrow_mut().push(import_stmt.import_path);
         for imported_type in import_stmt.imported_types {
             self.types.add_imported(imported_type, &mut e);
         }

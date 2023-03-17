@@ -7,12 +7,13 @@ use std::pin::Pin;
 use std::rc::Rc;
 use elsa::{FrozenMap, FrozenVec};
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ModuleScopes, RawScopePtr, RawScriptPathPtr, Scope, ScopeChain, ScopePtr, ScriptPathPtr};
+use crate::analyses::scopes::{ExprTypeMap, ModuleScopes, RawScopePtr, RawImportPathPtr, Scope, ScopeChain, ScopePtr, ImportPathPtr};
 use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::ast::tree_sitter::TSNode;
-use crate::diagnostics::{FileDiagnostics, ProjectDiagnostics};
-use crate::import_export::export::ModuleId;
-use crate::import_export::import_ctx::{FileImportCtx, ProjectImportCtx};
+use crate::compile::begin_transpile_file_no_cache;
+use crate::diagnostics::{error, issue, FileDiagnostics, ProjectDiagnostics};
+use crate::import_export::export::{Exports, ModuleId};
+use crate::import_export::import_ctx::{FileImportCtx, ImportError, ProjectImportCtx};
 use crate::misc::{impl_by_map, OnceCellExt};
 
 /// `ResolvedLazy` = lazy value which is "resolved" according to how NominalScript does unordered
@@ -84,7 +85,7 @@ pub enum LocalOrImported<Local, Imported> {
         /// Path of the module that the value is imported from if it's not local.
         ///
         /// This pointer is guaranteed to be non-null and live when the [ResolveCtx] is in scope
-        imported_origin: RawScriptPathPtr,
+        imported_origin: RawImportPathPtr,
         alias: Imported,
     }
 }
@@ -156,12 +157,12 @@ pub trait IntoThin<Thin> {
 
 /// A thin (without resolved context) version of data which can be resolved into the fat version
 /// with [ResolveCtx].
-pub trait ResolveInto<Fat>: Clone {
+pub trait ResolveInto<Fat> {
     /// Computes the fat version from the thin version, scope, and resolution context. Note that if
     /// the thin version was already computed before, it is cached and `resolve` may be skipped.
     /// Therefore `resolve` should have no side-effects except for ones that would be redundant
     /// (e.g. logging diagnostics and going through imports is ok).
-    fn resolve(self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Fat;
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Fat;
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -222,11 +223,11 @@ impl<Thin: ResolveInto<Fat>, Fat, ImportedThin> ResolvedLazy<Thin, Fat, Imported
 }
 
 impl<Thin, Fat, ImportedThin> ResolvedLazy<Thin, Fat, ImportedThin> {
-    pub fn new_imported(script_path: &ScriptPathPtr, scope: &ScopePtr<'_>, alias: ImportedThin) -> Self {
+    pub fn new_imported(import_path: &ImportPathPtr, scope: &ScopePtr<'_>, alias: ImportedThin) -> Self {
         Self {
             scope_origin: ScopePtr::as_raw(scope),
             thin: LocalOrImported::Imported {
-                imported_origin: ScriptPathPtr::as_raw(script_path),
+                imported_origin: ImportPathPtr::as_raw(import_path),
                 alias
             },
             fat: OnceCell::new()
@@ -234,30 +235,61 @@ impl<Thin, Fat, ImportedThin> ResolvedLazy<Thin, Fat, ImportedThin> {
     }
 }
 
-pub trait ResolveImport<Thin> {
-    fn resolve_import(self, imported_origin: &Path, scope: &mut Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> LocalOrImported<Thin, Self>;
+pub trait ResolveImport<Fat> {
+    fn resolve_import(self, exports: &Exports, e: &FileDiagnostics, ctx: &mut ResolveCtx<'_>) -> Fat;
 }
 
-impl<Thin: ResolveInto<Fat>, Fat, ImportedThin: ResolveImport<Thin>> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat, ImportedThin> {
+impl ResolveImport<FatTypeDecl> for TypeName {
+    fn resolve_import(self, exports: &Exports, e: &FileDiagnostics, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+        match exports.type_decl(name) {
+            Some(decl) => decl.resolve(ctx).clone(),
+            None => {
+                error!(e, "Type declaration `{}` not found in imported file", name);
+                FatTypeDecl::missing()
+            }
+        }
+    }
+}
+
+impl ResolveImport<FatType> for ValueName {
+    fn resolve_import(self, exports: &Exports, e: &FileDiagnostics, ctx: &mut ResolveCtx<'_>) -> FatType {
+        match exports.value_type(name) {
+            Some(type_) => type_.resolve(ctx).clone(),
+            None => {
+                error!(e, "Talue type `{}` not found in imported file", name);
+                FatTypeDecl::missing()
+            }
+        }
+    }
+}
+
+impl<Thin: ResolveInto<Fat>, Fat: Default, ImportedThin: ResolveImport<Thin>> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat, ImportedThin> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             let mut ctx = self.local_ctx(ctx);
             // SAFETY: ctx is alive so the scope pointer must also be
             let mut scope = unsafe { self.scope_origin.upgrade() };
 
-            let mut thin_or_imported = self.thin.clone();
-            let thin = loop {
-                match thin_or_imported {
-                    LocalOrImported::Local(thin) => break thin,
-                    LocalOrImported::Imported { imported_origin, alias } => {
-                        // SAFETY: scope is alive so the scope pointer must also be
-                        let imported_origin = unsafe { imported_origin.upgrade() }
-                            .expect("imported_origin is should never be null");
-                        thin_or_imported = alias.resolve_import(imported_origin, &mut scope, &mut ctx);
-                    }
+            match &self.thin {
+                LocalOrImported::Local(thin) => thin.resolve(scope, &mut ctx),
+                LocalOrImported::Imported { imported_origin, alias } => {
+                    // SAFETY: scope is alive so the scope pointer must also be
+                    let imported_origin = unsafe { imported_origin.upgrade() }
+                        .expect("imported_origin is should never be null");
+                    let exports = match ctx.imports.resolve_and_cache_transpile(imported_origin, |script_path, _import_ctx| {
+                        begin_transpile_file_no_cache(script_path, ctx.diagnostics).map_err(ImportError::from)
+                    }) {
+                        Err(import_error) => {
+                            error!(ctx.diagnostics,
+                                "failed to import module path '{}'", imported_origin => scope.imported_origin_node(imported_origin);
+                                issue!("{}", import_error));
+                            return Fat::default()
+                        }
+                        Ok(module) => &module.exports
+                    };
+                    alias.resolve_import(exports)
                 }
-            };
-            thin.resolve(scope, &mut ctx);
+            }
         })
     }
 }
@@ -298,6 +330,20 @@ impl<Thin, Fat, ImportedThin> ResolvedLazy<Thin, Fat, ImportedThin> {
 }
 
 impl<Local, Imported> LocalOrImported<Local, Imported> {
+    pub fn local(&self) -> Option<&Local> {
+        match self {
+            LocalOrImported::Local(local) => Some(local),
+            LocalOrImported::Imported { .. } => None
+        }
+    }
+
+    pub fn imported_alias(&self) -> Option<&Imported> {
+        match self {
+            LocalOrImported::Local(_) => None,
+            LocalOrImported::Imported { alias, .. } => Some(alias)
+        }
+    }
+
     pub fn bimap<NewLocal, NewImported>(
         self,
         f_local: impl FnOnce(Local) -> NewLocal,
@@ -346,25 +392,25 @@ impl IntoThin<ThinType> for FatType {
 impl_by_map!(IntoThin (fn into_thin(self)) for TypeIdent, TypeStructure, TypeParam, ReturnType);
 
 impl ResolveInto<FatType> for ThinType {
-    fn resolve(self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
         ctx; todo!()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
-    fn resolve(self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
         fat_param.into_decl(ctx.type_logger())
     }
 }
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
-    fn resolve(self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
         ctx; todo!()
     }
 }
 
-impl_by_map!(ResolveInto (fn resolve(self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>)) for TypeParam, ReturnType);
+impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>)) for TypeParam, ReturnType);
 
 impl RlType {
     pub const ANY: Self = Self {
