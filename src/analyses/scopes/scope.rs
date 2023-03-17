@@ -103,6 +103,16 @@ impl<'tree> Scope<'tree> {
             self.values.add_imported(imported_value, &mut e)
         }
     }
+
+    pub fn value_import(&self, idx: &ScopeValueImportIdx) -> (&AstImportPath<'tree>, Option<&dyn ValueBinding<'tree>>) {
+        let import_path = &self.imported_script_paths[idx.import_path_idx];
+        (import_path, self.values.hoisted(&idx.imported_name))
+    }
+
+    pub fn type_import(&self, idx: &ScopeTypeImportIdx) -> (&AstImportPath<'tree>, Option<&dyn TypeBinding<'tree>>) {
+        let import_path = &self.imported_script_paths[idx.import_path_idx];
+        (import_path, self.types.get(&idx.imported_name))
+    }
 }
 
 impl<'tree> ValueScope<'tree> {
@@ -265,7 +275,7 @@ impl<'tree> ValueScope<'tree> {
                 };
                 DeterminedReturnType {
                     // SAFETY: These are the same function, they are bijective
-                    type_: unsafe { type_.trimap(ReturnType::Type, ReturnType::Type, |x| x) },
+                    type_: unsafe { type_.bimap(ReturnType::Type, ReturnType::Type) },
                     return_node: Some(return_.node),
                     explicit_type
                 }
