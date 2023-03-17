@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use enquote::unquote;
 use once_cell::unsync::{Lazy, OnceCell};
 use smol_str::SmolStr;
-use crate::analyses::bindings::{Locality, HoistedValueBinding, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ImportPathPtr};
-use crate::analyses::types::{FatType, FatTypeDecl, Field, NominalGuard, OptionalType, ReturnType, RlImportedTypeDecl, RlImportedValueType, ResolvedLazy, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance, LocalFatType, TypeStructure, ResolveCtx, ResolvedLazyTrait, Nullability};
+use crate::analyses::bindings::{HoistedValueBinding, Locality, LocalTypeBinding, LocalUses, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::scopes::{ExprTypeMap, ScopeTypeImportIdx, ScopeValueImportIdx, ScopePtr};
+use crate::analyses::types::{FatType, FatTypeDecl, Field, LocalFatType, NominalGuard, Nullability, OptionalType, ResolveCtx, ResolvedLazy, ResolvedLazyTrait, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, TypeStructure, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
@@ -686,7 +686,7 @@ impl_ast_value_binding!(AstValueImportSpecifier Imported);
 impl<'tree> AstValueImportSpecifier<'tree> {
     pub fn new(
         scope: &ScopePtr,
-        import_path: &ImportPathPtr,
+        import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
@@ -695,13 +695,15 @@ impl<'tree> AstValueImportSpecifier<'tree> {
             || original_name.clone(),
             AstValueIdent::new
         );
-        // Our imported original name is their exported alias
-        let export_alias = original_name.name.clone();
+        let thin = ScopeValueImportIdx {
+            import_path_idx,
+            imported_name: original_name.name.clone()
+        };
         Self {
             node,
             original_name,
             alias,
-            shape: RlImportedValueType::new_imported(import_path, scope, export_alias),
+            shape: RlImportedValueType::new_imported(scope, thin),
         }
     }
 
@@ -721,7 +723,7 @@ impl_ast!(AstTypeImportSpecifier);
 impl<'tree> AstTypeImportSpecifier<'tree> {
     pub fn new(
         scope: &ScopePtr,
-        import_path: &ImportPathPtr,
+        import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
@@ -731,13 +733,15 @@ impl<'tree> AstTypeImportSpecifier<'tree> {
             || original_name.clone(),
             AstTypeIdent::new
         );
-        // Our imported original name is their exported alias
-        let export_alias = original_name.name.clone();
+        let thin = ScopeTypeImportIdx {
+            import_path_idx,
+            imported_name: original_name.name.clone()
+        };
         Self {
             node,
             original_name,
             alias,
-            shape: RlImportedTypeDecl::new_imported(import_path, scope, export_alias),
+            shape: RlImportedTypeDecl::new_imported(scope, thin),
         }
     }
 
@@ -777,6 +781,7 @@ impl_ast!(AstImportStatement);
 impl<'tree> AstImportStatement<'tree> {
     pub fn new<E>(
         scope: &ScopePtr,
+        import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_statement"]);
@@ -786,12 +791,12 @@ impl<'tree> AstImportStatement<'tree> {
         let imported_values = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "identifier")
-            .map(|node| AstValueImportSpecifier::new(scope, &import_path, node))
+            .map(|node| AstValueImportSpecifier::new(scope, import_path_idx, node))
             .collect();
         let imported_types = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "nominal_type_identifier")
-            .map(|node| AstTypeImportSpecifier::new(scope, &import_path, node))
+            .map(|node| AstTypeImportSpecifier::new(scope, import_path_idx, node))
             .collect();
         if let Some(invalid_specifier) = import_container
             .named_children(&mut node.walk())

@@ -194,7 +194,6 @@ version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f74077c3c3aedb99a2683919698285596662518ea13e5eedcf8bdd43b0d0453b"
 dependencies = [
- "indexmap",
  "stable_deref_trait",
 ]
 
@@ -469,6 +468,7 @@ dependencies = [
  "enquote",
  "env_logger",
  "globset",
+ "indexmap",
  "intmap",
  "join-lazy-fmt",
  "lazy_static",

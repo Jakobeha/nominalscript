@@ -66,7 +66,7 @@ pub struct FatTypeInherited<Hole: FatTypeHoleTrait = NoHole> {
     pub guards: Vec<NominalGuard>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct FatTypeHole {
     upper_bound: Rc<RefCell<FatType<FatTypeHole>>>
 }
@@ -313,6 +313,14 @@ impl<Hole: FatTypeHoleTrait> FatTypeInherited<Hole> {
         self.guards.extend(other.guards);
     }
 }
+
+impl PartialEq<FatTypeHole> for FatTypeHole {
+    fn eq(&self, other: &FatTypeHole) -> bool {
+        Rc::ptr_eq(&self.upper_bound, &other.upper_bound)
+    }
+}
+
+impl Eq for FatTypeHole {}
 
 impl<Hole: FatTypeHoleTrait> TypeParam<FatType<Hole>> {
     pub fn into_type(self, e: TypeLogger<'_, '_, '_>) -> FatType<Hole> {

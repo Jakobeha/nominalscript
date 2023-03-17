@@ -5,13 +5,14 @@ use std::marker::PhantomPinned;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
-use elsa::{FrozenMap, FrozenVec};
+use elsa::FrozenMap;
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ModuleScopes, RawScopePtr, RawImportPathPtr, Scope, ScopeChain, ScopePtr, ImportPathPtr};
+use crate::analyses::scopes::{ExprTypeMap, ModuleScopes, Scope, ScopeChain};
+use crate::analyses::scopes::scope_ptr::{RawScopePtr, ScopePtr};
 use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::ast::tree_sitter::TSNode;
 use crate::compile::begin_transpile_file_no_cache;
-use crate::diagnostics::{error, issue, FileDiagnostics, ProjectDiagnostics};
+use crate::diagnostics::{error, FileDiagnostics, issue, ProjectDiagnostics};
 use crate::import_export::export::{Exports, ModuleId};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError, ProjectImportCtx};
 use crate::misc::{impl_by_map, OnceCellExt};
@@ -251,6 +252,7 @@ impl ResolveImport<FatTypeDecl> for TypeName {
     }
 }
 
+// TODO: Refactor this entire imported thing and fix because it still doesn't handle transitive resolution
 impl ResolveImport<FatType> for ValueName {
     fn resolve_import(self, exports: &Exports, e: &FileDiagnostics, ctx: &mut ResolveCtx<'_>) -> FatType {
         match exports.value_type(name) {

@@ -77,7 +77,8 @@ fn begin_transpile_ast<'tree>(
     let mut c = ast.walk();
     let mut qc = TSQueryCursor::new();
     let root_node = ast.root_node();
-    let root_scope = m.scopes.get(root_node, &mut c);
+    // Can't clone because we may get a mutable reference to this
+    let root_scope = m.scopes.get(root_node, &mut c).downgrade();
     // Query all `nominal_type_declaraton`s and all imports.
     // Build map of nominal type names to their declarations
     // In global scope, build value map and map functions to their declarations.
@@ -87,22 +88,26 @@ fn begin_transpile_ast<'tree>(
     for type_decl_match in qc.matches(&NOMINAL_TYPE, root_node) {
         let node = type_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(node, &mut c);
-        scope.types.set(AstTypeDecl::new(&scope, node), &mut e);
+        let decl = AstTypeDecl::new(scope, node);
+        scope.borrow_mut().types_mut().set(decl, &mut e);
     }
     for function_decl_match in qc.matches(&FUNCTION, root_node) {
         let node = function_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(func_decl.node, &mut c);
-        scope.values.add_hoisted(AstFunctionDecl::new(&scope, node), &mut e);
+        let decl = AstFunctionDecl::new(scope, node);
+        scope.borrow_mut().values_mut().add_hoisted(decl, &mut e);
     }
     for value_decl_match in qc.matches(&VALUE, root_node) {
         let node = value_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(value_decl.node, &mut c);
-        scope.values.add_sequential(AstValueDecl::new(&scope, node), &mut e);
+        let decl = AstValueDecl::new(scope, node);
+        scope.borrow_mut().values_mut().add_sequential(decl, &mut e);
     }
     for import_stmt_match in qc.matches(&IMPORT, root_node) {
         let node = import_stmt_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(node, &mut c);
-        scope.add_imported(AstImportStatement::new(&scope, node));
+        let import_stmt = AstImportStatement::new(scope, scope.next_import_path_idx(), node);
+        scope.borrow_mut().add_imported(import_stmt);
     }
     // Query and prefill exports, and also add to scopes
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {
@@ -129,7 +134,7 @@ fn begin_transpile_ast<'tree>(
         let scope = m.scopes.of_node(export_id_node, &mut c);
         match export {
             Export::Type { original_name, alias } => {
-                if scope == root_scope {
+                if scope.downgrade() == root_scope {
                     if let Some(decl) = scope.types.get(&original_name.name) {
                         exports.add_type(alias.name.clone(), decl.type_decl());
                     }
@@ -138,7 +143,7 @@ fn begin_transpile_ast<'tree>(
                 scope.types.add_exported(original_name, alias, &mut e);
             }
             Export::Value { original_name, alias } => {
-                if scope == root_scope {
+                if scope.downgrade() == root_scope {
                     if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
                         exports.add_value(alias.name.clone(), decl.value_type());
                     }
