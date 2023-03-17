@@ -11,7 +11,7 @@ impl<'tree> ModuleCtx<'tree> {
     pub fn new(tree: &'tree TSTree) -> ModuleCtx<'tree> {
         ModuleCtx {
             tree,
-            scopes: ModuleScopes::new(),
+            scopes: ModuleScopes::new(tree.root_node()),
             typed_exprs: ExprTypeMap::new()
         }
     }

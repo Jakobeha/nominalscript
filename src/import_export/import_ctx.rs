@@ -76,7 +76,7 @@ impl<'a> ProjectImportCtx<'a> {
         importer_path: &Path,
         module_path: &ImportPath,
         transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<Module, ImportError>
-    ) -> Result<&Module, ImportError> {
+    ) -> Result<(&Path, &Module), ImportError> {
         let fat_path = self.resolve_and_cache_fat_path(importer_path, module_path);
         if fat_path.is_null() {
             return Err(ImportError::CouldNotResolve { module_path: module_path.to_string() });
@@ -89,7 +89,9 @@ impl<'a> ProjectImportCtx<'a> {
                 };
                 transpile(nominalscript_path, ProjectImportCtx::new(cache, &self.resolver))
             }
-        ).as_ref().map_err(|e| e.clone())
+        ).as_ref()
+            .map(|module| (fat_path.nominalscript_path.as_deref().unwrap(), module))
+            .map_err(|e| e.clone())
     }
 
     /// Resolves declarations / nominal exports and also checks that `scriptPath` is correct.
@@ -146,7 +148,7 @@ impl<'a> FileImportCtx<'a> {
         &mut self,
         module_path: &ImportPath,
         transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<Module, ImportError>
-    ) -> Result<&Module, ImportError> {
+    ) -> Result<(&Path, &Module), ImportError> {
         self.project_ctx.resolve_and_cache_transpile(self.importer_path, module_path, transpile)
     }
 

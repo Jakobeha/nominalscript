@@ -1,3 +1,5 @@
+/// Imports (outgoing edges) which let you data in the scope refer to other files
+mod scope_imports;
 /// A single scope (lexical or non-lexical)
 mod scope;
 /// Reference-counted pointer to a scope with the capability to erase and unsafely re-assign the lifetime
@@ -11,6 +13,7 @@ mod expr_type_map;
 /// Contains the value and nominal type module scopes, and map of expressions to types
 mod module_ctx;
 
+pub use scope_imports::*;
 pub use scope::*;
 pub use scope_ptr::*;
 pub use scope_chain::*;

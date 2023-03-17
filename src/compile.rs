@@ -160,20 +160,7 @@ pub(crate) fn finish_transpile<'tree>(
     ast: &'tree TSTree,
     m: &mut ModuleCtx<'tree>,
     ctx: &mut ProjectCtx<'_>
-) {
-    match import_ctx.resolve_and_cache_transpile(&import_stmt.path.module_path, |imported_path, import_ctx| {
-        begin_transpile_file_no_cache(imported_path, &mut ProjectCtx {
-            import_ctx,
-            diagnostics: &ctx.diagnostics,
-            resolve_cache: &ctx.resolve_cache
-        }).map_err(ImportError::from)
-    }) {
-        Ok(resolved_module) => import_stmt.resolve_from_exports(&resolved_module.exports),
-        Err(import_error) => error!(ctx.diagnostics,
-                    "failed to import module path '{}'", &import_stmt.path.module_path => import_stmt.path.node;
-                    issue!("{}", import_error))
-    }
-}
+) {}
 
 /*
   // Rest of the code is in a thunk: we don't have to run any of this if we're only

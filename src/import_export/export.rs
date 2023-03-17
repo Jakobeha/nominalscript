@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{ResolveCtx, RlImportedTypeDecl, RlImportedValueType, RlType, RlTypeDecl};
+use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolveCtx, ResolvedLazyTrait, RlImportedTypeDecl, RlImportedValueType, RlType, RlTypeDecl};
 
 use derive_more::{From, Into, AsRef, Deref, DerefMut};
 use self_cell::self_cell;
-use crate::analyses::scopes::ModuleCtx;
+use crate::analyses::scopes::{ModuleCtx, ScopeImportAlias};
 use crate::ast::tree_sitter::TSTree;
 use crate::compile::{finish_transpile, Module};
 use crate::ProjectCtx;
@@ -36,8 +36,8 @@ self_cell!(
 
 #[derive(Debug, Default)]
 pub struct Exports {
-    values: HashMap<ValueName, RlType>,
-    types: HashMap<TypeName, RlTypeDecl>
+    values: HashMap<ValueName, Box<DynRlType>>,
+    types: HashMap<TypeName, Box<DynRlTypeDecl>>
 }
 
 /// Path to import a module in an import statement, distinguished from [PathBuf] which is the
@@ -57,8 +57,8 @@ impl Module {
         self.module_data.borrow_owner()
     }
 
-    pub fn with_module_data<'outer, R>(&self, fun: impl for<'q> FnOnce(&'outer Exports, &'q TSTree, &'outer ModuleCtx<'q>) -> R) -> R {
-        self.module_data.with_dependent(|ast, module_ctx| fun(&self.exports, ast, module_ctx))
+    pub fn ctx(&self) -> &ModuleCtx<'_> {
+        self.module_data.borrow_dependent()
     }
 
     pub fn with_module_data_mut<'outer, R>(&mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
@@ -85,19 +85,23 @@ impl Exports {
         }
     }
 
-    pub fn add_value(&mut self, alias: ValueName, type_: &RlType) {
-        self.values.insert(alias, type_.imported_from(self.module_id));
+    pub fn add_value(&mut self, alias: ValueName, type_: impl ResolvedLazyTrait<FatType>) {
+        self.values.insert(alias, Box::new(type_));
     }
 
-    pub fn add_type(&mut self, alias: TypeName, decl: &RlTypeDecl) {
-        self.types.insert(alias, decl.imported_from(self.module_id));
+    pub fn add_type(&mut self, alias: TypeName, decl: impl ResolvedLazyTrait<FatTypeDecl>) {
+        self.types.insert(alias, Box::new(decl));
     }
 
-    pub fn value_type(&self, name: &ValueName) -> Option<&RlType> {
-        self.values.get(name)
+    pub fn value_type(&self, name: &ValueName) -> Option<&DynRlType> {
+        self.values.get(name).as_deref()
     }
 
-    pub fn type_decl(&self, name: &TypeName) -> Option<&RlTypeDecl> {
-        self.types.get(name)
+    pub fn type_decl(&self, name: &TypeName) -> Option<&DynRlTypeDecl> {
+        self.types.get(name).as_deref()
+    }
+
+    pub fn get<Alias: ScopeImportAlias>(&self, name: &Alias) -> Option<&DynResolvedLazy<Alias::Fat>> {
+        name._index_into_exports(self)
     }
 }

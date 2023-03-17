@@ -18,9 +18,8 @@ pub trait TypedAstNode<'tree>: AstNode<'tree> {
     fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'tree>>) -> &RlType;
 }
 
-pub trait AstBinding<'tree>: TypedAstNode<'tree> + LocalValueBinding<'tree> {
-    fn name_ident(&self) -> &AstValueIdent<'tree>;
-}
+pub trait AstValueBinding<'tree>: TypedAstNode<'tree> + ValueBinding<'tree> {}
+pub trait AstTypeBinding<'tree>: AstNode<'tree> + TypeBinding<'tree> {}
 
 #[derive(Debug, Clone)]
 pub struct AstValueIdent<'tree> {
@@ -178,7 +177,7 @@ macro_rules! impl_ast_value_binding {
                     self.name.name()
                 }
 
-                fn value_type(&self) -> &RlType {
+                fn value_type(&self) -> &rl_type!($locality) {
                     <Self as TypedAstNode>::infer_type(self, None)
                 }
 
@@ -186,6 +185,8 @@ macro_rules! impl_ast_value_binding {
                     Locality::$locality
                 }
             }
+
+            impl<'tree> AstValueBinding for $Type<'tree> {}
         )+
     }
 }
@@ -214,7 +215,7 @@ macro_rules! impl_ast_type_binding {
                     self.name.name()
                 }
 
-                fn type_decl(&self) -> &RlTypeDecl {
+                fn type_decl(&self) -> &rl_type_decl!($locality) {
                     &self.shape
                 }
 
@@ -222,8 +223,20 @@ macro_rules! impl_ast_type_binding {
                     Locality::$locality
                 }
             }
+
+            impl<'tree> AstTypeBinding for $Type<'tree> {}
         )+
     }
+}
+
+macro_rules! rl_type {
+    (Local) => { RlType };
+    (Imported) => { RlImportedValueType };
+}
+
+macro_rules! rl_type_decl {
+    (Local) => { RlTypeDecl };
+    (Imported) => { RlImportedTypeDecl };
 }
 
 impl_ast!(AstValueIdent);
@@ -719,7 +732,7 @@ impl<'tree> TypedAstNode for AstValueImportSpecifier<'tree> {
     }
 }
 
-impl_ast!(AstTypeImportSpecifier);
+impl_ast_type_binding!(AstTypeImportSpecifier Imported);
 impl<'tree> AstTypeImportSpecifier<'tree> {
     pub fn new(
         scope: &ScopePtr,
@@ -748,20 +761,6 @@ impl<'tree> AstTypeImportSpecifier<'tree> {
     pub fn resolve_from_exports(&self, exports: &Exports) {
         self.shape.set(exports.type_decl(&self.original_name.name).cloned().unwrap_or_default())
             .expect("can only call resolve_from_exports once");
-    }
-}
-
-impl<'tree> TypeBinding for AstTypeImportSpecifier<'tree> {
-    fn name(&self) -> &TypeName {
-        self.name.name()
-    }
-
-    fn type_decl(&self) -> &RlTypeDecl {
-        self.shape.get().expect("must call resolve_from_exports before getting decl")
-    }
-
-    fn locality(&self) -> Locality {
-        Locality::Imported
     }
 }
 

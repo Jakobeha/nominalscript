@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use smol_str::SmolStr;
 use derive_more::Display;
-use crate::analyses::types::{FatType, FatTypeDecl, RlType, RlTypeDecl};
+use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, RlType, RlTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstNode, AstValueIdent};
 use crate::misc::lazy_alt::{Lazy, LazyError, RcLazy};
@@ -23,7 +23,7 @@ pub enum Locality {
 /// imports, declarations, parameters, predefined globals, etc.
 pub trait ValueBinding {
     fn name(&self) -> &ValueName;
-    fn value_type(&self) -> &RlType;
+    fn value_type(&self) -> &DynRlType;
     fn locality(&self) -> Locality;
 }
 
@@ -31,7 +31,7 @@ pub trait ValueBinding {
 /// imported types, type declarations, type parameters, predefined globals, etc.
 pub trait TypeBinding {
     fn name(&self) -> &TypeName;
-    fn type_decl(&self) -> &RlTypeDecl;
+    fn type_decl(&self) -> &DynRlTypeDecl;
     fn locality(&self) -> Locality;
 }
 

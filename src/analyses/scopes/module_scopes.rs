@@ -11,6 +11,7 @@ use crate::ast::tree_sitter::{TSCursor, TSNode};
 
 /// The hierarchy of scopes within a file or module (including submodules)
 pub struct ModuleScopes<'tree> {
+    root_node: TSNode<'tree>,
     scopes: HashMap<TSNode<'tree>, ScopePtr<'tree>>,
     lexical_parents: HashMap<TSNode<'tree>, TSNode<'tree>>,
     lexical_children: HashMap<TSNode<'tree>, Vec<TSNode<'tree>>>
@@ -38,12 +39,19 @@ pub struct ScopeAncestorsOf<'a> {
 }
 
 impl<'tree> ModuleScopes<'tree> {
-    pub(super) fn new() -> ModuleScopes<'tree> {
-        ModuleScopes(RefCell::new(_ModuleScopes {
+    pub(super) fn new(root_node: TSNode<'tree>) -> ModuleScopes<'tree> {
+        let mut this = ModuleScopes {
+            root_node,
             scopes: HashMap::new(),
             lexical_parents: HashMap::new(),
             lexical_children: HashMap::new()
-        }))
+        };
+        this.scopes.insert(root_node, ScopePtr::new(None));
+        this
+    }
+
+    pub fn root(&self) -> &ScopePtr<'tree> {
+        &self.scopes[&self.root_node]
     }
 
     /// Gets the parent scope containing the node
