@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use crate::analyses::types::{FileResolveCache, ProjectResolveCache};
 use crate::diagnostics::{FileDiagnostics, ProjectDiagnostics};
 use crate::import_export::import_ctx::{FileImportCtx, ImportCache, ProjectImportCtx};
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError};
@@ -15,7 +14,6 @@ pub struct Project {
     /// Stateless relative to program (doesn't change when calling transpile)
     pub import_resolver: ImportResolver,
     pub diagnostics: ProjectDiagnostics,
-    pub resolve_cache: ProjectResolveCache
 }
 
 /// Project environment = reference to project data
@@ -23,7 +21,6 @@ pub struct Project {
 pub struct ProjectCtx<'a> {
     pub import_ctx: ProjectImportCtx<'a>,
     pub diagnostics: &'a ProjectDiagnostics,
-    pub resolve_cache: &'a ProjectResolveCache
 }
 
 /// File environment = reference to file data
@@ -31,7 +28,7 @@ pub struct ProjectCtx<'a> {
 pub struct FileCtx<'a> {
     pub import_ctx: FileImportCtx<'a>,
     pub diagnostics: &'a FileDiagnostics,
-    pub resolve_cache: &'a FileResolveCache
+    pub project_diagnostics: &'a ProjectDiagnostics,
 }
 
 impl Project {
@@ -44,15 +41,13 @@ impl Project {
             import_cache: ImportCache::new(),
             import_resolver,
             diagnostics: ProjectDiagnostics::new(),
-            resolve_cache: ProjectResolveCache::new()
         }
     }
 
     pub fn ctx(&mut self) -> ProjectCtx<'_> {
         ProjectCtx {
             import_ctx: ProjectImportCtx::new(&mut self.import_cache, &self.import_resolver),
-            diagnostics: &mut self.diagnostics,
-            resolve_cache: &mut self.resolve_cache
+            diagnostics: &self.diagnostics,
         }
     }
 }
@@ -61,8 +56,8 @@ impl<'a> ProjectCtx<'a> {
     pub fn file(&mut self, importer_path: &Path) -> FileCtx<'a> {
         FileCtx {
             import_ctx: self.import_ctx.file(importer_path),
-            diagnostics: &mut self.diagnostics.file(importer_path),
-            resolve_cache: &mut self.resolve_cache.file(importer_path)
+            diagnostics: &self.diagnostics.file(importer_path),
+            project_diagnostics: &self.diagnostics,
         }
     }
 }

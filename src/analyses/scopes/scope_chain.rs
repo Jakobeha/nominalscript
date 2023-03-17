@@ -1,22 +1,22 @@
-use std::rc::Rc;
-use crate::analyses::bindings::{GlobalValueBinding, LocalValueBinding, ValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, Scope, scope_parent_of};
+use crate::analyses::bindings::{GlobalValueBinding, ValueBinding, ValueName};
+use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, scope_parent_of, ScopePtr, WeakScopePtr};
 use crate::analyses::types::RlType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
-use crate::ast::typed_nodes::AstValueDecl;
-use crate::diagnostics::{error, FileLogger};
+use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueBinding, AstValueDecl};
+use crate::diagnostics::{FileLogger};
+use crate::error;
 
 pub struct ScopeChain<'tree> {
-    scopes: Vec<(TSNode<'tree>, ScopePtr<'tree>)>,
+    scopes: Vec<(TSNode<'tree>, WeakScopePtr<'tree>)>,
 }
 
-impl<'tree> ScopeChain {
+impl<'tree> ScopeChain<'tree> {
     //noinspection RsUnreachableCode (this inspection is bugged for IntelliJ with let-else statements)
-    pub fn new(ctx: &ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
+    pub fn new(ctx: &mut ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
         let mut scopes = Vec::new();
         let mut scope_parent = scope_parent;
         loop {
-            let scope = ctx.scopes.get(scope_parent, c);
+            let scope = ctx.scopes.get(scope_parent, c).downgrade();
             scopes.push((scope_parent, scope));
             let Some(next_scope_parent) = scope_parent_of(scope_parent, c) else {
                 break
@@ -27,63 +27,61 @@ impl<'tree> ScopeChain {
         Self { scopes }
     }
 
-    pub fn push(&mut self, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) {
-        let scope = ctx.scopes.get(scope_parent, c);
+    pub fn push(&mut self, ctx: &mut ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) {
+        let scope = ctx.scopes.get(scope_parent, c).downgrade();
         self.scopes.push((scope_parent, scope));
     }
 
     pub fn pop(&mut self) -> Option<(TSNode<'tree>, ScopePtr<'tree>)> {
-        self.scopes.pop()
+        self.scopes.pop().map(|(node, scope)|
+            (node, scope.upgrade().expect("ScopeChain has dangling WeakScopePtr")))
     }
 
-    fn top(&self) -> Option<&(TSNode<'tree>, ScopePtr<'tree>)> {
-        self.scopes.last()
+    fn top(&self) -> Option<(TSNode<'tree>, ScopePtr<'tree>)> {
+        self.scopes.last().map(|(node, scope)|
+            (*node, scope.upgrade().expect("ScopeChain has dangling WeakScopePtr")))
     }
 
-    fn top_mut(&mut self) -> Option<&mut (TSNode<'tree>, ScopePtr<'tree>)> {
-        self.scopes.last_mut()
+    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
+        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_sequential(decl, e);
     }
 
-    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, c: &mut TSCursor<'tree>) {
-        self.top_mut().expect("ScopeChain is empty").1.add_sequential(decl, c);
+    pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
+        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_return(return_, e);
     }
 
-    pub fn add_return(&mut self, stmt: TSNode<'tree>, value: Option<TSNode<'tree>>) {
-        self.top_mut().expect("ScopeChain is empty").1.add_return(stmt, value);
+    pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
+        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_throw(throw, e);
     }
 
-    pub fn add_throw(&mut self, stmt: TSNode<'tree>, value: Option<TSNode<'tree>>) {
-        self.top_mut().expect("ScopeChain is empty").1.add_throw(stmt, value);
-    }
-
-    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<Rc<dyn LocalValueBinding<'tree>>> {
-        self.top().expect("ScopeChain is empty").1.hoisted(name)
+    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
+        self.top().expect("ScopeChain is empty").1.values.hoisted(name)
     }
 
     pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
-        let mut top_to_bottom = self.scopes.iter().rev();
+        let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
-            if top.has_at_pos(name, pos_node) {
+            if top.values.has_at_pos(name, pos_node) {
                 return true
             }
         }
-        top_to_bottom.any(|(_, scope)| scope.has_any(name)) ||
+        top_to_bottom.any(|(_, scope)| scope.values.has_any(name)) ||
             GlobalValueBinding::has(name)
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        let mut top_to_bottom = self.scopes.iter().rev();
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn ValueBinding> {
+        let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
-            if let Some(decl) = top.at_pos(name, pos_node) {
+            if let Some(decl) = top.values.at_pos(name, pos_node) {
                 return Some(decl)
             }
         }
-        top_to_bottom.find_map(|(_, scope)| scope.last(name))
-            .or_else(|| GlobalValueBinding::get)
+        top_to_bottom.find_map(|(_, scope)| scope.values.last(name) as Option<&dyn ValueBinding>)
+            .or_else(|| GlobalValueBinding::get(name))
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<Rc<dyn ValueBinding<'tree>>> {
-        self.top().expect("ScopeChain is empty").1.at_exact_pos(name, pos_node)
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
+        self.top().expect("ScopeChain is empty").1.values.at_exact_pos(name, pos_node)
     }
 
     /// Finds up type of an identifier by looking up its binding and returning its inferred type.
@@ -103,11 +101,17 @@ impl<'tree> ScopeChain {
         typed_exprs: &'a ExprTypeMap,
         e: &mut FileLogger<'_>,
     ) -> &'a RlType {
-        scope.at_pos(use_id, use_node)
+        scope
+            .at_pos(use_id, use_node)
             .and_then(|def| def.infer_type(typed_exprs))
             .unwrap_or_else(|| {
                 error!(e, "undeclared identifier `{}`", use_id => use_node);
                 &RlType::NEVER
             })
+    }
+
+    fn iter_top_to_bottom(&self) -> impl Iterator<Item=(TSNode<'tree>, ScopePtr<'tree>)> + 'tree {
+        self.scopes.iter().rev().map(|(node, scope)|
+            (*node, scope.upgrade().expect("ScopeChain has dangling WeakScopePtr")))
     }
 }

@@ -16,7 +16,7 @@ pub struct ThinTypeDecl {
 /// A nominal guard is a special function which is called after a nominal wrap expression,
 /// and checks that the value is of the correct type.
 /// If it returns false, the program will throw a TypeError.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NominalGuard {
     /// The parameter binding
     pub param: ValueName,
@@ -176,16 +176,16 @@ pub enum Optionality {
 macro_rules! impl_structural_type_constructors {
     () => {
     pub fn func(
-        type_params: impl Iterator<Item=TypeParam<Self>>,
+        type_params: impl Iterator<Item=$crate::analyses::types::TypeParam<Self>>,
         this_type: Self,
-        arg_types: impl Iterator<Item=OptionalType<Self>>,
+        arg_types: impl Iterator<Item=$crate::analyses::types::OptionalType<Self>>,
         rest_arg_type: Self,
-        return_type: ReturnType<Self>
+        return_type: $crate::analyses::types::ReturnType<Self>
     ) -> Self {
         Self::Structural {
-            nullability: Nullability::NonNullable,
-            structure: TypeStructure::Fn {
-                fn_type: Box::new(FnType::new(
+            nullability: $crate::analyses::types::Nullability::NonNullable,
+            structure: $crate::analyses::types::TypeStructure::Fn {
+                fn_type: Box::new($crate::analyses::types::FnType::new(
                     type_params,
                     this_type,
                     arg_types,
@@ -198,26 +198,26 @@ macro_rules! impl_structural_type_constructors {
 
     pub fn array(element_type: Self) -> Self {
         Self::Structural {
-            nullability: Nullability::NonNullable,
-            structure: TypeStructure::Array {
+            nullability: $crate::analyses::types::Nullability::NonNullable,
+            structure: $crate::analyses::types::TypeStructure::Array {
                 element_type: Box::new(element_type),
             }
         }
     }
 
-    pub fn tuple(element_types: impl Iterator<Item=OptionalType<Self>>) -> Self {
+    pub fn tuple(element_types: impl Iterator<Item=$crate::analyses::types::OptionalType<Self>>) -> Self {
         Self::Structural {
-            nullability: Nullability::NonNullable,
-            structure: TypeStructure::Tuple {
+            nullability: $crate::analyses::types::Nullability::NonNullable,
+            structure: $crate::analyses::types::TypeStructure::Tuple {
                 element_types: element_types.collect(),
             }
         }
     }
 
-    pub fn object(property_types: impl Iterator<Item=Field<OptionalType<Self>>>) -> Self {
+    pub fn object(property_types: impl Iterator<Item=$crate::analyses::types::Field<$crate::analyses::types::OptionalType<Self>>>) -> Self {
         Self::Structural {
-            nullability: Nullability::NonNullable,
-            structure: TypeStructure::Object {
+            nullability: $crate::analyses::types::Nullability::NonNullable,
+            structure: $crate::analyses::types::TypeStructure::Object {
                 field_types: property_types.collect(),
             }
         }
@@ -244,6 +244,16 @@ impl ThinType {
     pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
 
     pub const NULL: Self = Self::Never { nullability: Nullability::Nullable };
+
+    pub fn dummy_for_hole(nullability: Nullability) -> Self {
+        Self::Nominal {
+            nullability,
+            id: TypeIdent {
+                name: TypeName::DUMMY_FOR_HOLE,
+                generic_args: Vec::new(),
+            }
+        }
+    }
 
     pub fn ident(name: TypeName) -> Self {
         Self::Nominal {
@@ -368,9 +378,9 @@ impl<Type> FnType<Type> {
 
     pub fn map<F, NewType>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
         FnType {
-            type_params: self.type_params.into_iter().map(|param| param.map(&mut f)).collect(),
+            type_params: self.type_params.into_iter().map(|param| param.map(|x| f(x))).collect(),
             this_type: f(self.this_type),
-            arg_types: self.arg_types.into_iter().map(|arg| arg.map(&mut f)).collect(),
+            arg_types: self.arg_types.into_iter().map(|arg| arg.map(|x| f(x))).collect(),
             rest_arg_type: f(self.rest_arg_type),
             return_type: self.return_type.map(f),
         }
@@ -412,6 +422,15 @@ impl<Type> ReturnType<Type> {
         match self {
             ReturnType::Type(type_) => ReturnType::Type(f(type_)),
             ReturnType::Void => ReturnType::Void,
+        }
+    }
+}
+
+impl<Type> Field<Type> {
+    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> Field<NewType> {
+        Field {
+            name: self.name,
+            type_: f(self.type_),
         }
     }
 }

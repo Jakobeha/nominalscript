@@ -1,13 +1,9 @@
-use std::cell::RefCell;
-use std::cmp::Ordering;
-use std::collections::BTreeSet;
-use std::rc::Rc;
-use smol_str::SmolStr;
 use derive_more::Display;
+use smol_str::SmolStr;
+use crate::analyses::scopes::ExprTypeMap;
+
 use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, RlType, RlTypeDecl};
-use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstNode, AstValueIdent};
-use crate::misc::lazy_alt::{Lazy, LazyError, RcLazy};
+use crate::ast::typed_nodes::AstNode;
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {
@@ -25,6 +21,10 @@ pub trait ValueBinding {
     fn name(&self) -> &ValueName;
     fn value_type(&self) -> &DynRlType;
     fn locality(&self) -> Locality;
+
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+        self.value_type()
+    }
 }
 
 /// Declares a type identifier which can be referenced:
@@ -98,6 +98,14 @@ impl GlobalValueBinding {
             type_: RlType::resolved(type_),
         }
     }
+
+    pub fn has(name: &ValueName) -> bool {
+        todo!("something with lazy_static")
+    }
+
+    pub fn get(name: &ValueName) -> Option<&GlobalValueBinding> {
+        todo!("something with lazy_static")
+    }
 }
 
 impl ValueBinding for GlobalValueBinding {
@@ -105,7 +113,7 @@ impl ValueBinding for GlobalValueBinding {
         &self.name
     }
 
-    fn value_type(&self) -> &RlType {
+    fn value_type(&self) -> &DynRlType {
         &self.type_
     }
 
@@ -121,6 +129,14 @@ impl GlobalTypeBinding {
             decl: RlTypeDecl::resolved(decl),
         }
     }
+
+    pub fn has(name: &TypeName) -> bool {
+        todo!("something with lazy_static")
+    }
+
+    pub fn get(name: &TypeName) -> Option<&GlobalTypeBinding> {
+        todo!("something with lazy_static")
+    }
 }
 
 impl TypeBinding for GlobalTypeBinding {
@@ -128,7 +144,7 @@ impl TypeBinding for GlobalTypeBinding {
         &self.name
     }
 
-    fn type_decl(&self) -> &RlTypeDecl {
+    fn type_decl(&self) -> &DynRlTypeDecl {
         &self.decl
     }
 
@@ -171,6 +187,7 @@ impl HoistedValueBinding for GlobalValueBinding {}
 
 impl TypeName {
     pub const MISSING: TypeName = TypeName::new_inline("__Missing");
+    pub const DUMMY_FOR_HOLE: TypeName = TypeName::new_inline("__Hole");
 
     pub const RESERVED: [&'static str; 4] = [
         "Any",

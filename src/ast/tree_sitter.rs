@@ -4,9 +4,8 @@ use std::fs;
 use std::iter::{once, Once};
 use std::str::Utf8Error;
 use derive_more::{Display, From, Error};
-use std::fmt::Write;
 use std::hash::{Hash, Hasher};
-use std::ops::{Range, RangeBounds};
+use std::ops::Range;
 use crate::misc::id_maps::{Id, IdSet};
 
 #[derive(Debug)]
@@ -29,18 +28,16 @@ pub struct TSNode<'tree> {
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, Hash)]
 pub struct TSNodeId(usize);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TSCursor<'tree> {
     cursor: tree_sitter::TreeCursor<'tree>,
     tree: &'tree TSTree,
 }
 
-#[derive(Debug)]
 pub struct TSQueryCursor {
     query_cursor: tree_sitter::QueryCursor
 }
 
-#[derive(Debug)]
 pub struct TSQueryMatches<'query, 'tree: 'query> {
     query_matches: tree_sitter::QueryMatches<'query, 'tree, &'query TSTree>,
     tree: &'tree TSTree,
@@ -54,7 +51,6 @@ pub struct TSQueryMatch<'query, 'tree> {
     query: &'query TSQuery
 }
 
-#[derive(Debug)]
 pub struct TSQueryCaptures<'query, 'tree> {
     query_captures: tree_sitter::QueryCaptures<'query, 'tree, &'query TSTree>,
     tree: &'tree TSTree,
@@ -82,7 +78,7 @@ pub enum TreeCreateError {
     IO(std::io::Error),
     LoadLanguage(tree_sitter::LanguageError),
     ParsingFailed,
-    #[display(fmt = "Invalid UTF-8 at byte index {}-{}", actual_index, "error.error_len()")]
+    #[display(fmt = "Invalid UTF-8 at byte index {}-{}", actual_index, "error.error_len().unwrap_or(0)")]
     NotUtf8 { actual_index: usize, error: Utf8Error }
 }
 
@@ -218,11 +214,11 @@ impl<'tree> TSNode<'tree> {
     }
 
     pub fn start_point(&self) -> TSPoint {
-        self.node.start_point()
+        self.node.start_position()
     }
 
     pub fn end_point(&self) -> TSPoint {
-        self.node.end_point()
+        self.node.end_position()
     }
 
     pub fn byte_range(&self) -> Range<usize> {
@@ -242,11 +238,11 @@ impl<'tree> TSNode<'tree> {
         unsafe { std::str::from_utf8_unchecked(self.byte_text()) }
     }
 
-    pub fn all_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> {
+    pub fn all_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
         self.node.children(&mut cursor.cursor).map(move |node| TSNode::new(node, self.tree))
     }
 
-    pub fn named_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> {
+    pub fn named_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
         self.node.named_children(&mut cursor.cursor).map(move |node| TSNode::new(node, self.tree))
     }
 
@@ -301,9 +297,9 @@ impl<'tree> TSNode<'tree> {
             .map(|node| TSNode::new(node, self.tree))
     }
 
-    pub fn children_of_kind(&self, kind: &'static str, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> {
+    pub fn children_of_kind(&self, kind: &'static str, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
         self.node.named_children(&mut cursor.cursor)
-            .filter(|node| node.kind() == kind)
+            .filter(move |node| node.kind() == kind)
             .map(|node| TSNode::new(node, self.tree))
     }
 
@@ -320,7 +316,7 @@ impl<'tree> TSNode<'tree> {
                     panic!("node not found in parent's children")
                 }
             }
-            cursor.current_field_name()
+            cursor.field_name()
         })
     }
 
@@ -332,7 +328,7 @@ impl<'tree> TSNode<'tree> {
     ///   we cannot and don't really want to store a reference to a node here, and currently
     ///   we need to re-parse the node's text to get a sub-tree.
     pub fn into_subtree(self, parser: &mut TSParser) -> Result<TSSubTree, TreeCreateError> {
-        parser.parse_bytes(self.byte_text().into_vec())
+        parser.parse_bytes(self.byte_text().to_vec())
     }
 
     /// *Panics* if already marked
@@ -394,7 +390,7 @@ impl<'tree> TSCursor<'tree> {
     }
 
     pub fn goto(&mut self, node: TSNode<'tree>) {
-        self.cursor.goto(node.node)
+        self.cursor.reset(node.node)
     }
 
     pub fn goto_first_child(&mut self) -> bool {
@@ -429,7 +425,7 @@ impl TSQueryCursor {
 
     pub fn matches<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryMatches<'query, 'tree> {
         TSQueryMatches {
-            query_matches: self.query_cursor.matches(&query.query, node.node, node.tree),
+            query_matches: self.query_cursor.matches(&query, node.node, node.tree),
             tree: node.tree,
             query
         }
@@ -500,7 +496,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
         self.iter_captures().find(|capture| capture.name == name)
     }
 
-    pub fn captures_named(&self, name: &str) -> impl Iterator<Item = TSQueryCapture<'query, 'tree>> {
+    pub fn captures_named(&self, name: &str) -> impl Iterator<Item = TSQueryCapture<'query, 'tree>> + 'tree {
         self.iter_captures().filter(|capture| capture.name == name)
     }
 
@@ -520,7 +516,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
         self.query_match.remove()
     }
 
-    pub fn nodes_for_capture_index(&self, capture_index: u32) -> impl Iterator<Item = TSNode<'tree>> {
+    pub fn nodes_for_capture_index(&self, capture_index: u32) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
         self.query_match
             .nodes_for_capture_index(capture_index)
             .map(move |node| TSNode::new(node, self.tree))
@@ -531,7 +527,7 @@ impl<'query, 'tree> TSQueryCapture<'query, 'tree> {
     fn new(query_capture: tree_sitter::QueryCapture, tree: &'tree TSTree, query: &'query TSQuery) -> Self {
         Self {
             node: TSNode::new(query_capture.node, tree),
-            name: query.capture_names()[query_capture.index]
+            name: &query.capture_names()[query_capture.index as usize]
         }
     }
 }

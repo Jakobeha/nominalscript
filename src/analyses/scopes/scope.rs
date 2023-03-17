@@ -1,22 +1,17 @@
-use std::cell::{Cell, Ref, RefCell};
 use std::collections::HashMap;
 use std::marker::PhantomPinned;
-use std::ops::Deref;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
+
 use indexmap::IndexMap;
-use once_cell::unsync::OnceCell;
-use tree_sitter::LogType::Parse;
+
+use crate::{error, hint, issue};
 use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
 use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::scopes::scope_ptr::{WeakScopePtr, ScopePtr};
-use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeDecl, FileResolveCache, Nullability, ResolveCache, ReturnType, RlReturnType, RlType, ThinType, TypeIdent};
+use crate::analyses::scopes::scope_ptr::{ScopePtr, WeakScopePtr};
+use crate::analyses::types::{DeterminedReturnType, FatType, Nullability, ResolveCache, ReturnType, RlReturnType, RlType, ThinType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeDecl, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
-use crate::diagnostics::{error, FileLogger, hint, issue};
-use crate::import_export::export::{Exports, ImportPath, Module};
+use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
+use crate::diagnostics::FileLogger;
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -37,6 +32,7 @@ pub struct Scope<'tree> {
 
 /// A local scope: contains all of the value bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.)
+#[derive(Debug)]
 pub struct ValueScope<'tree> {
     params: IndexMap<ValueName, Box<AstParameter<'tree>>>,
     hoisted: HashMap<ValueName, Box<dyn AstValueBinding<'tree>>>,
@@ -48,6 +44,7 @@ pub struct ValueScope<'tree> {
 
 /// A local scope: contains all of the type bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.)
+#[derive(Debug)]
 pub struct TypeScope<'tree> {
     hoisted: HashMap<TypeName, Box<dyn AstTypeBinding<'tree>>>,
     exported: HashMap<TypeName, ExportedId<'tree, TypeName>>,
@@ -73,7 +70,7 @@ impl<'tree> Scope<'tree> {
         }
     }
 
-    pub fn set_params(&mut self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
+    pub fn set_params(&mut self, params: impl Iterator<Item=AstParameter<'tree>>) {
         assert!(!self.did_set_params, "set_params() can only be called once per scope");
         self.values.set_params(params)
     }
@@ -82,13 +79,13 @@ impl<'tree> Scope<'tree> {
         self.imported_script_paths.len()
     }
 
-    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>) {
-        self.imported_script_paths.push(import_stmt.import_path);
+    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>, e: &mut FileLogger<'_>) {
+        self.imported_script_paths.push(import_stmt.path);
         for imported_type in import_stmt.imported_types {
-            self.types.add_imported(imported_type, &mut e);
+            self.types.add_imported(imported_type, e);
         }
         for imported_value in import_stmt.imported_values {
-            self.values.add_imported(imported_value, &mut e)
+            self.values.add_imported(imported_value, e)
         }
     }
 
@@ -222,7 +219,7 @@ impl<'tree> ValueScope<'tree> {
     }
 
     pub fn hoisted(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
-        self.hoisted.get(name).or_else(|| self.params.get(name))
+        self.hoisted.get(name).or_else(|| self.params.get(name)).as_deref()
     }
 
     pub fn has_any(&self, name: &ValueName) -> bool {
@@ -232,25 +229,25 @@ impl<'tree> ValueScope<'tree> {
     pub fn last(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
         // `as_deref`s convert &Box<dyn ValueBinding> to &dyn ValueBinding
         self.sequential.get(name).map(|sequential| {
-            sequential.last().expect("sequential should never be Some(<empty vec>)")
+            sequential.last().expect("sequential should never be Some(<empty vec>)") as &Box<dyn AstValueBinding<'tree>>
         }).or_else(|| self.hoisted(name)).as_deref()
     }
 
     pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
-        self.get(name, pos_node).is_some()
+        self.at_pos(name, pos_node).is_some()
     }
 
     pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
         return self.sequential.get(name).and_then(|sequential| {
-            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
+            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte()) as Option<&Box<dyn AstValueBinding<'tree>>>
         }).or_else(|| self.hoisted(name)).as_deref()
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte() &&
                 decl.node().end_byte() >= pos_node.end_byte())
-        }).as_deref()
+        }).map(|decl| decl.as_ref())
     }
 
     pub fn exported(&self, alias: &ValueName) -> Option<&ExportedId<ValueName>> {
@@ -258,7 +255,7 @@ impl<'tree> ValueScope<'tree> {
     }
 
     pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> DeterminedReturnType<'tree> {
-        match (self.return_.get(), self.throw.get()) {
+        match (self.return_.as_ref(), self.throw.as_ref()) {
             (None, None) => DeterminedReturnType {
                 type_: RlReturnType::resolved_void(),
                 return_node: None,
@@ -266,15 +263,15 @@ impl<'tree> ValueScope<'tree> {
             },
             (return_, Some(throw))
             if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => DeterminedReturnType {
-                type_: RlReturnType::resolved_type(FatType::never()),
+                type_: RlReturnType::resolved_type(FatType::NEVER),
                 return_node: Some(throw.node),
-                explicit_type
+                explicit_type: None
             },
             (None, Some(_)) => unreachable!("guard succeeds if return_.is_none()"),
             (Some(return_), _) => {
                 let expr = return_.returned_value.and_then(|x| typed_exprs.get(x));
                 let (type_, explicit_type) = match expr {
-                    None => (RlType::any(), None),
+                    None => (RlType::ANY, None),
                     Some(expr) => (expr.type_.clone(), expr.explicit_type)
                 };
                 DeterminedReturnType {
@@ -338,28 +335,19 @@ impl<'tree> TypeScope<'tree> {
     }
 
     pub fn get(&self, name: &TypeName) -> Option<&dyn AstTypeBinding<'tree>> {
-        self.hoisted.get(name)
+        self.hoisted.get(name).as_deref()
     }
 
+    // TODO is the return type even correct?
     pub fn immediate_supertypes(&self, type_: ThinType) -> FatType {
         let ThinType::Nominal { id, nullability } = type_ else {
-            Vec::new()
+            return FatType::Any
         };
         self.ident_supertypes(id, nullability)
     }
 
     fn ident_supertypes(&self, id: TypeIdent<ThinType>, nullability: Nullability) -> FatType {
-        // TODO this is wrong
-        let mut supertypes = Vec::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(name);
-        while let Some(name) = queue.pop_front() {
-            if let Some(decl) = this.hoisted.get(name) {
-                supertypes.push(decl.clone());
-                queue.extend(decl.supertypes().iter().map(|x| x.name()));
-            }
-        }
-        supertypes
+        todo!()
     }
 
     pub fn exported(&self, alias: &TypeName) -> Option<&ExportedId<TypeName>> {

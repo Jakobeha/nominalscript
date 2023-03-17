@@ -1,10 +1,8 @@
-use std::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::iter::{once, zip};
-use std::rc::Rc;
+use std::iter::once;
+
 use smallvec::SmallVec;
-use crate::analyses::scopes::Scope;
+
 use crate::analyses::scopes::scope_ptr::ScopePtr;
 use crate::analyses::types::DeterminedReturnType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
@@ -30,12 +28,12 @@ pub enum ScopeParentType {
     NonLexical
 }
 
-pub struct ScopeAncestorsAndTypesOf<'a> {
-    c: &'a mut TSCursor<'_>
+pub struct ScopeAncestorsAndTypesOf<'a, 'tree> {
+    c: &'a mut TSCursor<'tree>
 }
 
-pub struct ScopeAncestorsOf<'a> {
-    c: &'a mut TSCursor<'_>
+pub struct ScopeAncestorsOf<'a, 'tree> {
+    c: &'a mut TSCursor<'tree>
 }
 
 impl<'tree> ModuleScopes<'tree> {
@@ -73,8 +71,8 @@ impl<'tree> ModuleScopes<'tree> {
         let mut descendants = SmallVec::<[TSNode<'tree>; 4]>::new();
         let mut node_or_parent = node;
         while !self.scopes.contains_key(&node_or_parent) {
-            if let Some((parent, is_parent_lexical)) = ancestors.next() {
-                if is_parent_lexical {
+            if let Some((parent, parent_type)) = ancestors.next() {
+                if matches!(parent_type, ScopeParentType::Lexical) {
                     self.lexical_parents.insert(node_or_parent, parent);
                     self.lexical_children.entry(parent).or_default().push(node_or_parent);
                 }
@@ -86,7 +84,7 @@ impl<'tree> ModuleScopes<'tree> {
         }
         let mut scope = self.scopes.get_mut(&node_or_parent);
         for child in descendants {
-            let child_scope = ScopePtr::new(scope as Option<&_>);
+            let child_scope = ScopePtr::new(scope.map(|x| x as &ScopePtr));
             scope = None;
             let std::collections::hash_map::Entry::Vacant(child_entry) = self.scopes.entry(child) else {
                 unreachable!("we just checked that it's not in the map")
@@ -96,13 +94,13 @@ impl<'tree> ModuleScopes<'tree> {
         scope.unwrap()
     }
 
-    pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> {
+    pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> + 'tree {
         SeenLexicalDescendantsOf::new(self, node)
     }
 
-    pub fn seen_return_types(&self, node: TSNode<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> {
-        once(node).chain(seen_lexical_descendants_of(node))
-            .map(|node| self.scopes[&node].return_type())
+    pub fn seen_return_types(&self, node: TSNode<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'tree {
+        once(node).chain(self.seen_lexical_descendants_of(node))
+            .map(|node| self.scopes[&node].values.return_type())
     }
 }
 
@@ -174,13 +172,13 @@ impl<'a, 'tree: 'a> Iterator for SeenLexicalDescendantsOf<'a, 'tree> {
 }
 */
 
-impl<'a> Iterator for ScopeAncestorsAndTypesOf<'a> {
-    type Item = (TSNode<'a>, ScopeParentType);
+impl<'a, 'tree> Iterator for ScopeAncestorsAndTypesOf<'a, 'tree> {
+    type Item = (TSNode<'tree>, ScopeParentType);
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut type_ = ScopeParentType::Lexical;
         while self.c.goto_parent() {
-            if type_ == ScopeParentType::Lexical && is_at_lexical_border(c) {
+            if matches!(type_, ScopeParentType::Lexical) && is_at_lexical_border(self.c) {
                 type_ = ScopeParentType::NonLexical;
             }
             if is_at_scope(&mut self.c) {
@@ -191,8 +189,8 @@ impl<'a> Iterator for ScopeAncestorsAndTypesOf<'a> {
     }
 }
 
-impl<'a> Iterator for ScopeAncestorsOf<'a> {
-    type Item = TSNode<'a>;
+impl<'a, 'tree> Iterator for ScopeAncestorsOf<'a, 'tree> {
+    type Item = TSNode<'tree>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.c.goto_parent() {
@@ -204,11 +202,11 @@ impl<'a> Iterator for ScopeAncestorsOf<'a> {
     }
 }
 
-pub fn scope_parent_and_type(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<(TSNode<'_>, ScopeParentType)> {
+pub fn scope_parent_and_type<'tree>(node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Option<(TSNode<'tree>, ScopeParentType)> {
     let mut type_ = ScopeParentType::Lexical;
     c.goto(node);
     while c.goto_parent() {
-        if type_ == ScopeParentType::Lexical && is_at_lexical_border(c) {
+        if matches!(type_, ScopeParentType::Lexical) && is_at_lexical_border(c) {
             type_ = ScopeParentType::NonLexical;
         }
         if is_at_scope(c) {
@@ -218,17 +216,17 @@ pub fn scope_parent_and_type(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<(
     None
 }
 
-pub fn scope_ancestors_and_types_of<'a>(node: TSNode<'_>, c: &'a mut TSCursor<'_>) -> ScopeAncestorsAndTypesOf<'a> {
+pub fn scope_ancestors_and_types_of<'a, 'tree>(node: TSNode<'tree>, c: &'a mut TSCursor<'tree>) -> ScopeAncestorsAndTypesOf<'a, 'tree> {
     c.goto(node);
     ScopeAncestorsAndTypesOf { c }
 }
 
-pub fn scope_ancestors_of<'a>(node: TSNode<'_>, c: &'a mut TSCursor<'_>) -> ScopeAncestorsOf<'a> {
+pub fn scope_ancestors_of<'a, 'tree>(node: TSNode<'tree>, c: &'a mut TSCursor<'tree>) -> ScopeAncestorsOf<'a, 'tree> {
     c.goto(node);
     ScopeAncestorsOf { c }
 }
 
-pub fn scope_parent_of(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<TSNode<'_>> {
+pub fn scope_parent_of<'tree>(node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Option<TSNode<'tree>> {
     c.goto(node);
     while c.goto_parent() {
         if is_at_scope(c) {
@@ -238,7 +236,7 @@ pub fn scope_parent_of(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<TSNode<
     None
 }
 
-pub fn lexical_scope_parent_of(node: TSNode<'_>, c: &mut TSCursor<'_>) -> Option<TSNode<'_>> {
+pub fn lexical_scope_parent_of<'tree>(node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Option<TSNode<'tree>> {
     c.goto(node);
     while c.goto_parent() {
         if is_at_lexical_border(c) {

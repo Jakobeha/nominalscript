@@ -1,21 +1,17 @@
-use std::cell::{Cell, RefCell};
-use once_cell::unsync::OnceCell;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::marker::PhantomPinned;
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::rc::Rc;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::fmt::{Debug, Formatter};
+use std::path::Path;
+
 use elsa::FrozenMap;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ModuleScopes, RawScopePtr, ScopePtr, Scope, ScopeChain, ScopeTypeImportIdx, ScopeValueImportIdx, ScopeImportIdx, ScopeImportAlias};
-use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
-use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::AstImportPath;
+use once_cell::unsync::OnceCell;
+
+use crate::{error, issue};
+use crate::analyses::scopes::{RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
+use crate::analyses::types::{FatType, FatTypeDecl, FatTypeInherited, Nullability, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::compile::begin_transpile_file_no_cache;
-use crate::diagnostics::{error, FileDiagnostics, FileLogger, issue, ProjectDiagnostics};
-use crate::import_export::export::{Exports, ModuleId};
-use crate::import_export::import_ctx::{FileImportCtx, ImportError, ProjectImportCtx};
+use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
+use crate::import_export::import_ctx::{FileImportCtx, ImportError};
 use crate::misc::{impl_by_map, OnceCellExt};
 
 /// `ResolvedLazy` = lazy value which is "resolved" according to how NominalScript does unordered
@@ -94,7 +90,6 @@ pub struct ResolveCtx<'a> {
 }
 
 /// Cache of resolved data *and* data currently being resolved, to avoid infinite recursion
-#[derive(Debug)]
 pub(crate) struct ResolveCache {
     types_in_progress: RefCell<HashSet<ThinType>>,
     types: FrozenMap<ThinType, Box<FatType>>,
@@ -105,8 +100,10 @@ pub(crate) struct ResolveCache {
 struct RecursiveResolution;
 
 /// Trait implemented by [ResolvedLazy] which lets you use `DynResolvedLazy` values with arbitrary thin versions.
-pub trait ResolvedLazyTrait<Fat> {
+pub trait ResolvedLazyTrait<Fat>: Debug {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat;
+
+    fn box_clone(&self) -> Box<dyn ResolvedLazyTrait<Fat>>;
 }
 
 /// Resolved lazy value where you don't know/care about the thin version (dynamically-sized)
@@ -171,6 +168,10 @@ impl<'a> ResolveCtx<'a> {
             project_diagnostics: self.project_diagnostics,
         }
     }
+
+    pub(crate) fn type_logger(&self) -> TypeLogger<'_, '_, '_> {
+        todo!()
+    }
 }
 
 impl ResolveCache {
@@ -212,13 +213,23 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
-impl<Thin: ResolveInto<Fat>, Fat: Default> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
+impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
             let mut scope = unsafe { self.scope_origin.upgrade() };
             self.thin.resolve(scope, ctx)
         })
+    }
+}
+
+impl<Thin: ResolveInto<Fat> + Debug + Clone + Eq, Fat: Debug + Clone + Eq> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
+    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
+        self.resolve(ctx)
+    }
+
+    fn box_clone(&self) -> Box<dyn ResolvedLazyTrait<Fat>> {
+        Box::new(self.clone())
     }
 }
 
@@ -247,7 +258,7 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
-impl IntoThin<ThinType> for FatType {
+impl<Hole> IntoThin<ThinType> for FatType<Hole> {
     fn into_thin(self) -> ThinType {
         match self {
             FatType::Any => ThinType::Any,
@@ -258,7 +269,7 @@ impl IntoThin<ThinType> for FatType {
             FatType::Nominal { nullability, id, inherited: _ } => {
                 ThinType::Nominal { nullability, id: id.into_thin() }
             }
-            FatType::Hole { nullability: _, hole } => hole.unreachable(),
+            FatType::Hole { nullability, hole: _ } => ThinType::dummy_for_hole(nullability),
         }
     }
 
@@ -272,15 +283,39 @@ impl IntoThin<ThinType> for FatType {
             FatType::Nominal { nullability, id, inherited: _ } => {
                 ThinType::Nominal { nullability: *nullability, id: id.ref_into_thin() }
             }
-            FatType::Hole { nullability: _, hole } => hole.unreachable(),
+            FatType::Hole { nullability, hole: _ } => ThinType::dummy_for_hole(*nullability),
+        }
+    }
+}
+
+impl IntoThin<ThinTypeDecl> for FatTypeDecl {
+    fn into_thin(self) -> ThinTypeDecl {
+        ThinTypeDecl {
+            name: self.name,
+            type_params: self.type_params.into_iter().map(|p| p.into_thin()).collect(),
+            supertypes: self.inherited.super_ids.into_iter()
+                .map(|id| FatType::Nominal {
+                    nullability: Nullability::NonNullable,
+                    id,
+                    // FUTURE: Merge inherited super_ids and structure?
+                    inherited: Box::new(FatTypeInherited::empty()),
+                })
+                .chain(self.inherited.structure.map(|structure| {
+                    FatType::Structural { nullability: Nullability::NonNullable, structure }
+                }))
+                .collect(),
+            // TODO: typescript union of self.inherited.typescript_types
+            typescript_supertype: None,
+            // TODO: merge self.inherited.guards
+            guard: None,
         }
     }
 }
 
 impl_by_map!(IntoThin (fn into_thin(self)) for TypeIdent, TypeStructure, TypeParam, ReturnType);
 
-impl ResolveInto<FatType> for ThinType {
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
+impl<Hole> ResolveInto<FatType<Hole>> for ThinType {
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType<Hole> {
         ctx; todo!()
     }
 }
@@ -298,8 +333,8 @@ impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
     }
 }
 
-impl<Alias: ScopeImportAlias> ResolveInto<Alias::ResolveInfo> for ScopeImportIdx<Alias> {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Alias::ResolveInto {
+impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> {
+    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Alias::Fat {
         let e = FileLogger::new(ctx.diagnostics);
         let scope = scope.expect("ScopeValueImportIdx::resolve: scope must be Some");
         let (import_path, import_node) = scope.import(self);
@@ -311,15 +346,15 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::ResolveInfo> for ScopeImportIdx
                 error!(e,
                     "Could not resolve imported module '{}'", import_path.module_path => import_path.node;
                     issue!("{}", import_error));
-                return FatType::Any
+                return Alias::Fat::default()
             }
             Ok(module) => module
         };
         let mut imported_ctx = ctx.other_file(script_path);
         let imported = match module.exports.get(&self.imported_name) {
             None => {
-                error!(e, "{} not exported from module '{}': `{}`", Alias::capital_desc(), import_path.module_path, self.imported_name => import_node);
-                return FatType::Any
+                error!(e, "{} not exported from module '{}': `{}`", Alias::capital_name_str(), import_path.module_path, self.imported_name => import_node);
+                return Alias::Fat::default()
             }
             Some(imported) => imported
         };
@@ -365,5 +400,14 @@ impl RlReturnType {
 
     pub fn resolved_type(type_: FatType) -> Self {
         Self::resolved(ReturnType::Type(type_))
+    }
+}
+
+impl Debug for ResolveCache {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolveCache")
+            .field("types_in_progress", &self.types_in_progress.borrow())
+            .field("types", "...")
+            .finish()
     }
 }

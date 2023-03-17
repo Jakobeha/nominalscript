@@ -1,8 +1,11 @@
 use std::path::Path;
-use std::ptr::NonNull;
+
 use smallvec::SmallVec;
+
+use crate::analyses::types::{TypeLoc, TypeLocPtr};
+use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
-use crate::misc::lazy_alt::LazyError;
+use crate::note;
 
 /// Allows you to log project (global or file) diagnostics.
 ///
@@ -30,7 +33,8 @@ pub struct TypeLogger<'a, 'b: 'a, 'c: 'b>(_TypeLogger<'a, 'b, 'c>);
 #[derive(Debug)]
 enum _TypeLogger<'a, 'b: 'a, 'c: 'b> {
     Base { base: TypeLoggerBase<'b, 'c> },
-    Derived { base: &'a mut TypeLoggerBase<'b, 'c> }
+    Derived { base: &'a mut TypeLoggerBase<'b, 'c> },
+    Ignore
 }
 
 #[derive(Debug)]
@@ -63,27 +67,6 @@ impl<'a> FileLogger<'a> {
     pub fn log(&self, diagnostic: FileDiagnostic) {
         self.0.insert(diagnostic)
     }
-
-    pub fn unwrap_import_result<T>(
-        &self,
-        result: Result<T, LazyError>,
-        def: TSNode<'_>,
-        use_: Option<TSNode<'_>>
-    ) -> Option<T> {
-        match result {
-            Ok(result) => Some(result),
-            Err(error) => {
-                let msg = match error {
-                    LazyError::CycleDetected => "recursive import",
-                    LazyError::ForcePanicked => "import caused a panic"
-                };
-                error!(self, "{}", msg => def;
-                    note_if!(use_ => use_, "used here" => use_)
-                );
-                None
-            }
-        }
-    }
 }
 
 impl<'c> FileLogger<'c> {
@@ -97,19 +80,29 @@ impl<'c> FileLogger<'c> {
 }
 
 impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
+    pub fn ignore() -> TypeLogger<'a, 'b, 'c> {
+        TypeLogger(_TypeLogger::Ignore)
+    }
+
     pub fn with_context<'a2>(
         &'a2 mut self,
         context: TypeLoc<'_>
     ) -> TypeLogger<'a2, 'b, 'c> {
         // ^ RULE A -> will pop context on derived drop
-        self.base().context.push(context.as_ptr());
-        TypeLogger(_TypeLogger::Derived { base })
+        match self.base() {
+            None => TypeLogger::ignore(),
+            Some(base) => {
+                base.context.push(context.as_ptr());
+                TypeLogger(_TypeLogger::Derived { base })
+            }
+        }
     }
 
     fn base(&mut self) -> &mut TypeLoggerBase<'b, 'c> {
         match &mut self.0 {
             _TypeLogger::Base { base } => base,
             _TypeLogger::Derived { base } => base
+            _TypeLogger::Ignore => None
         }
     }
 
@@ -138,11 +131,13 @@ impl<'a, 'b: 'a, 'c: 'b> Drop for _TypeLogger<'a, 'b, 'c> {
             _TypeLogger::Derived { base } => {
                 // ^ RULE A: Must pop top context as it's no longer live
                 base.context.pop();
-            }
+            },
+            _TypeLogger::Ignore => {}
         }
     }
 }
 
+#[macro_export]
 macro_rules! log {
     ($e:expr, $level:expr, $format:literal $(, $arg:expr)* $(,)? $(;
          $additional_info:expr)* $(;)?) => {
@@ -166,36 +161,36 @@ macro_rules! log {
         })
     };
 }
-pub(crate) use log;
 
+#[macro_export]
 macro_rules! error {
     ($e:expr, $( $arg:tt )*) => {
-        $crate::diagnostics::log!($e, $crate::diagnostics::DiagnosticLevel::Error, $( $arg )*)
+        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Error, $( $arg )*)
     };
 }
-pub(crate) use error;
 
+#[macro_export]
 macro_rules! warning {
     ($e:expr, $( $arg:tt )*) => {
-        $crate::diagnostics::log!($e, $crate::diagnostics::DiagnosticLevel::Warning, $( $arg )*)
+        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Warning, $( $arg )*)
     };
 }
-pub(crate) use warning;
 
+#[macro_export]
 macro_rules! info {
     ($e:expr, $( $arg:tt )*) => {
-        $crate::diagnostics::log!($e, $crate::diagnostics::DiagnosticLevel::Info, $( $arg )*)
+        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Info, $( $arg )*)
     };
 }
-pub(crate) use info;
 
+#[macro_export]
 macro_rules! debug {
     ($e:expr, $( $arg:tt )*) => {
-        $crate::diagnostics::log!($e, $crate::diagnostics::DiagnosticLevel::Debug, $( $arg )*)
+        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Debug, $( $arg )*)
     };
 }
-pub(crate) use debug;
 
+#[macro_export]
 macro_rules! additional_info {
     ($type_:expr, $format:literal $(, $arg:expr)* $(,)?) => {
         ::std::iter::once($crate::diagnostics::AdditionalInfo {
@@ -212,58 +207,58 @@ macro_rules! additional_info {
         })
     };
 }
-pub(crate) use additional_info;
 
+#[macro_export]
 macro_rules! issue {
     ($($arg:tt)*) => {
-        $crate::diagnostics::additional_info!($crate::diagnostics::AdditionalInfoType::Issue, $($arg)*)
+        $crate::additional_info!($crate::diagnostics::AdditionalInfoType::Issue, $($arg)*)
     };
 }
-pub(crate) use issue;
 
+#[macro_export]
 macro_rules! hint {
     ($($arg:tt)*) => {
-        $crate::diagnostics::additional_info!($crate::diagnostics::AdditionalInfoType::Hint, $($arg)*)
+        $crate::additional_info!($crate::diagnostics::AdditionalInfoType::Hint, $($arg)*)
     };
 }
-pub(crate) use hint;
 
+#[macro_export]
 macro_rules! note {
     ($($arg:tt)*) => {
-        $crate::diagnostics::additional_info!($crate::diagnostics::AdditionalInfoType::Note, $($arg)*)
+        $crate::additional_info!($crate::diagnostics::AdditionalInfoType::Note, $($arg)*)
     };
 }
-pub(crate) use note;
-use crate::ast::tree_sitter::TSNode;
 
+#[macro_export]
 macro_rules! issue_if {
     ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| issue!($($arg)*))
     };
 }
-pub(crate) use issue_if;
 
+#[macro_export]
 macro_rules! hint_if {
     ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| hint!($($arg)*))
     };
 }
-pub(crate) use hint_if;
 
+#[macro_export]
 macro_rules! note_if {
     ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| note!($($arg)*))
     };
 }
-pub(crate) use note_if;
-use crate::analyses::types::{TypeLoc, TypeLocPtr};
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use crate::diagnostics::{ProjectDiagnostics, ProjectLogger, error, warning, info, debug, issue, hint, note};
-    use crate::ast::tree_sitter::TSParser;
+
     use tree_sitter_typescript::language_typescript;
+
+    use crate::{debug, error, hint, info, issue, note, warning, hint_if, note_if, issue_if};
+    use crate::ast::tree_sitter::TSParser;
+    use crate::diagnostics::{ProjectDiagnostics, ProjectLogger};
 
     #[test]
     pub fn test() {
@@ -319,7 +314,7 @@ mod tests {
             note_if!(Some(5) => n, "hello {}", n));
         error!(e.file(p), "hello" => a_node;
             issue!("hello {:?}", "hello");
-            hint_if!(None => n, "hello {}", n);
+            hint_if!(None::<String> => n, "hello {}", n);
             hint!("hello" => b_node));
         warning!(e.file(p), "hello" => a_node;
             issue_if!(Some(5) => n, "hello {}", n);

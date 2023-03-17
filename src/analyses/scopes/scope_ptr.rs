@@ -1,25 +1,24 @@
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::marker::PhantomPinned;
-use std::ops::{Deref, DerefMut};
 use std::ptr::addr_of;
+use std::rc::{Rc, Weak};
+
 use crate::analyses::scopes::{Scope, TypeScope, ValueScope};
-use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportStatement, AstParameter};
-use crate::import_export::export::ImportPath;
+use crate::diagnostics::FileLogger;
 
 /// Raw pointer to scope which can be dereferenced and re-assigned a lifetime if we know the scope exists
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct RawScopePtr(*const Scope<'static>);
 
 /// Pointer to a scope
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct ScopePtr<'tree>(Pin<Rc<Scope<'tree>>>);
 
 /// Weak pointer to a scope
-#[derive(Debug, Clone, Hash)]
-pub struct WeakScopePtr<'tree>(Pin<Weak<Scope<'tree>>>);
+#[derive(Debug, Clone)]
+pub struct WeakScopePtr<'tree>(Weak<Scope<'tree>>);
 
 /// Mutable reference to a scope behind a pointer
 #[derive(Debug)]
@@ -61,9 +60,8 @@ impl<'tree> ScopePtr<'tree> {
 
     /// Downgrade to a weak scope pointer
     pub fn downgrade(&self) -> WeakScopePtr<'tree> {
-        // SAFETY: We're unpinning and then re-pinning,
-        //     and manipulation of the pinned value doesn't change its location
-        WeakScopePtr(unsafe { Pin::new_unchecked(Rc::downgrade(ScopePtr::unpinned(this))) })
+        // SAFETY: We're not breaking the pin
+        WeakScopePtr(unsafe { Rc::downgrade(ScopePtr::unpinned(self)) })
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -87,7 +85,7 @@ impl<'tree> ScopePtr<'tree> {
 
 impl<'tree> PartialEq<ScopePtr<'tree>> for ScopePtr<'tree> {
     fn eq(&self, other: &ScopePtr<'tree>) -> bool {
-        // SAFETY: We're not manipulating the pin
+        // SAFETY: We're not breaking the pin
         unsafe { Rc::ptr_eq(ScopePtr::unpinned(self), ScopePtr::unpinned(other)) }
     }
 }
@@ -112,7 +110,7 @@ impl<'tree> WeakScopePtr<'tree> {
     /// Creates an uninialized scope pointer which will always `upgrade` to `None`
     pub fn new() -> Self {
         // SAFETY: This is a null pointer, so Pin is irrelevant
-        WeakScopePtr(unsafe { Pin::new_unchecked(Weak::new()) })
+        WeakScopePtr(Weak::new())
     }
 
     /// If the scope this points to is still alive (has at least once [ScopePtr]),
@@ -120,8 +118,8 @@ impl<'tree> WeakScopePtr<'tree> {
     ///
     /// *Panics* if the scope is currently being mutated
     pub fn upgrade(&self) -> Option<ScopePtr<'tree>> {
-        // SAFETY: We'ren't manipulating the pin
-        let weak = unsafe { WeakScopePtr::unpinned(self) };
+        // SAFETY: We'ren't breaking the pin
+        let weak = &self.0;
         if weak.strong_count() == 0 {
             return None
         }
@@ -141,21 +139,13 @@ impl<'tree> WeakScopePtr<'tree> {
 
     #[allow(clippy::wrong_self_convention)]
     fn as_ptr(this: &Self) -> *const Scope<'tree> {
-        // SAFETY: We're not mutating the Rc but creating an (unpinned) pointer
-        unsafe { Weak::as_ptr(Self::unpinned(this)) }
-    }
-
-    /// SAFETY: You must ensure that the inner reference remains pinned
-    unsafe fn unpinned(this: &Self) -> &Weak<Scope<'tree>> {
-        // SAFETY: Pin<Weak<_>> = Weak<_> but pinned
-        unsafe { std::mem::transmute::<&Pin<Weak<Scope<'tree>>>, &Weak<Scope<'tree>>>(&this.0) }
+        Weak::as_ptr(&this.0)
     }
 }
 
 impl<'tree> PartialEq<WeakScopePtr<'tree>> for WeakScopePtr<'tree> {
     fn eq(&self, other: &WeakScopePtr<'tree>) -> bool {
-        // SAFETY: We're not manipulating the pin
-        unsafe { Rc::ptr_eq(WeakScopePtr::unpinned(self), WeakScopePtr::unpinned(other)) }
+        Weak::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -164,6 +154,18 @@ impl<'tree> Eq for WeakScopePtr<'tree> {}
 impl<'tree> Hash for WeakScopePtr<'tree> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         WeakScopePtr::as_ptr(self).hash(state)
+    }
+}
+
+impl<'tree> PartialEq<WeakScopePtr<'tree>> for ScopePtr<'tree> {
+    fn eq(&self, other: &WeakScopePtr<'tree>) -> bool {
+        ScopePtr::as_ptr(self) == WeakScopePtr::as_ptr(other)
+    }
+}
+
+impl<'tree> PartialEq<ScopePtr<'tree>> for WeakScopePtr<'tree> {
+    fn eq(&self, other: &ScopePtr<'tree>) -> bool {
+        WeakScopePtr::as_ptr(self) == ScopePtr::as_ptr(other)
     }
 }
 
@@ -244,8 +246,8 @@ impl<'a, 'tree> ScopeMut<'a, 'tree> {
         unsafe { Self::unpinned_mut(self) }.set_params(params)
     }
 
-    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>) {
-        unsafe { Self::unpinned_mut(self) }.add_imported(import_stmt)
+    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>, e: &mut FileLogger<'_>) {
+        unsafe { Self::unpinned_mut(self) }.add_imported(import_stmt, e)
     }
 
     /// SAFETY: You must ensure that the inner reference remains pinned

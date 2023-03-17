@@ -28,7 +28,7 @@ pub enum TypeLocPtr {
 }
 
 impl<'a> Display for TypeLoc<'a> {
-    unsafe fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TypeLoc::Supertypes => write!(f, "supertypes"),
             TypeLoc::ArrayElem => write!(f, "array element"),

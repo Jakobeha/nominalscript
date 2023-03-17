@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::iter::once;
 use std::path::{Path, PathBuf};
-use nonempty::NonEmpty;
+
 use derive_more::{Display, Error, From};
 use globset::{Glob, GlobSet, GlobSetBuilder};
+use nonempty::NonEmpty;
 use tsconfig::TsConfig;
+
 use crate::import_export::export::ImportPath;
-use crate::misc::{chain, path};
+use crate::misc::{chain, mk_path};
 
 /// Module resolution strategy *and* source root.
 /// Usually generated from `ImportResolveCtx.regular`,
@@ -32,7 +34,7 @@ pub struct ImportResolver {
     pub module_root_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GlobPaths {
     pub globs: GlobSet,
     pub glob_paths: Vec<NonEmpty<PathBuf>>,
@@ -59,7 +61,7 @@ pub struct ResolvedFatPath {
     pub arbitrary_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Display, Error, From)]
+#[derive(Debug, Display, Error, From)]
 pub enum ImportResolverCreateError {
     #[display(fmt = "Failed to parse tsconfig.json: {}", error)]
     TSConfigError { error: tsconfig::ConfigError },
@@ -117,7 +119,9 @@ impl ImportResolver {
         &self,
         script_path: &Path
     ) -> Result<ResolvedFatPath, ResolveFailure> {
-        self.locate_from_resolved_candidates(once(script_path.with_extension("")))
+        self.locate_from_resolved_candidates(once(ResolvedPath::Regular {
+            path: script_path.with_extension("")
+        }))
     }
 
     fn locate_from_resolved_candidates(
@@ -132,23 +136,23 @@ impl ImportResolver {
                     }
                 },
                 ResolvedPath::NodeModule { node_module, remainder_path } => {
-                    let node_module_path = path!(self.module_root_path.clone(), "node_modules", node_module);
-                    let d_ns_path = if_exists(path!(node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
-                    let d_ts_path = if_exists(path!(node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
-                    let js_path = if_exists(path!(node_module_path, "out", "lib", remainder_path).with_extension("js"));
+                    let node_module_path = mk_path!(self.module_root_path.clone(), "node_modules", node_module);
+                    let d_ns_path = if_exists(mk_path!(node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
+                    let d_ts_path = if_exists(mk_path!(node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
+                    let js_path = if_exists(mk_path!(node_module_path, "out", "lib", remainder_path).with_extension("js"));
                     let arbitrary_path = if js_path.is_some() {
                         None
                     } else {
-                        if_exists(path!(node_module_path, "out", "resources", remainder_path));
+                        if_exists(mk_path!(node_module_path, "out", "resources", remainder_path))
                     };
                     if d_ns_path.is_none() || d_ts_path.is_none() || js_path.is_none() || arbitrary_path.is_none() {
-                        Ok(ResolvedFatPath {
+                        return Ok(ResolvedFatPath {
                             nominalscript_path: d_ns_path,
                             typescript_path: d_ts_path,
                             javascript_path: js_path,
                             arbitrary_path,
-                        })
-                    } else if let Ok(fat_path) = Self::locate_from_regular_candidate(path!(node_module_path, "lib", remainder_path)) {
+                        });
+                    } else if let Ok(fat_path) = Self::locate_from_regular_candidate(mk_path!(node_module_path, "lib", remainder_path)) {
                         return Ok(fat_path);
                     }
                 }
@@ -191,12 +195,17 @@ impl ImportResolver {
         importer_path: Option<&Path>
     ) -> impl Iterator<Item=ResolvedPath> {
         let importer_dir = importer_path.and_then(|importer_path| importer_path.parent());
-        let relative = importer_dir.map(|importer_dir| importer_dir.join(module_path));
+        let relative = importer_dir
+            .map(|importer_dir| importer_dir.join(module_path))
+            .map(|path| ResolvedPath::Regular { path });
         let is_only_relative = module_path.starts_with("./") || module_path.starts_with("../");
         let from_paths = if is_only_relative {
             None
         } else {
-            Some(self.absolute_import_source_paths.resolve(&self.absolute_import_base_path, module_path))
+            Some(
+                self.absolute_import_source_paths.resolve(&self.absolute_import_base_path, module_path)
+                    .map(|path| ResolvedPath::Regular { path })
+            )
         }.into_iter().flatten();
         let from_node_modules = if is_only_relative || !self.resolve_node_modules {
             None
@@ -217,10 +226,10 @@ impl ImportResolver {
 }
 
 impl GlobPaths {
-    pub fn resolve(&self, base_path: &Path, path: &str) -> impl Iterator<Item=PathBuf> {
+    pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a str) -> impl Iterator<Item=PathBuf> + 'a {
         self.globs.matches(path).into_iter().flat_map(|match_idx| {
-            self.glob_paths[match_idx].map(|resolved_path| {
-                path!(base_path.clone(), resolved_path.clone(), path)
+            self.glob_paths[match_idx].clone().map(|resolved_path| {
+                mk_path!(base_path.clone(), resolved_path, path)
             })
         })
     }
@@ -236,7 +245,14 @@ impl FromIterator<(String, Vec<String>)> for GlobPaths {
     fn from_iter<T: IntoIterator<Item=(String, Vec<String>)>>(iter: T) -> Self {
         iter.into_iter()
             .filter(|(_, paths)| !paths.is_empty())
-            .map(|(glob, paths)| (Glob::new(glob), NonEmpty::from_vec(paths).unwrap().map(PathBuf::from)))
+            .filter_map(|(glob, paths)| match Glob::new(glob) {
+                Err(err) => {
+                    log::warn!("Invalid glob pattern: {}", err);
+                    None
+                }
+                Ok(glob) => Some((glob, paths)),
+            })
+            .map(|(glob, paths)| (glob, NonEmpty::from_vec(paths).unwrap().map(PathBuf::from)))
             .collect()
     }
 }
@@ -249,8 +265,15 @@ impl FromIterator<(Glob, NonEmpty<PathBuf>)> for GlobPaths {
             globs.add(glob);
             glob_paths.push(paths);
         }
+        let globs = match globs.build() {
+            Err(err) => {
+                log::warn!("Invalid glob pattern set: {}", err);
+                GlobSet::empty()
+            }
+            Ok(globs) => globs,
+        };
         Self {
-            globs: GlobSet::from_iter(globs).unwrap(),
+            globs,
             glob_paths,
         }
     }
@@ -339,17 +362,17 @@ impl Display for ResolvedFatPath {
             did_write = true;
         }
         if let Some(typescript_path) = self.typescript_path.as_ref() {
-            if did_write { write!(", ")?; }
+            if did_write { write!(f, ", ")?; }
             write!(f, "typescript @ {}", typescript_path.display())?;
             did_write = true;
         }
         if let Some(javascript_path) = self.javascript_path.as_ref() {
-            if did_write { write!(", ")?; }
+            if did_write { write!(f, ", ")?; }
             write!(f, "javascript @ {}", javascript_path.display())?;
             did_write = true;
         }
         if let Some(arbitrary_path) = self.arbitrary_path.as_ref() {
-            if did_write { write!(", ")?; }
+            if did_write { write!(f, ", ")?; }
             write!(f, "arbitrary @ {}", arbitrary_path.display())?;
             did_write = true;
         }

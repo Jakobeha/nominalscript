@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::Scope;
 use crate::analyses::types::{DynResolvedLazy, FatType, FatTypeDecl};
@@ -22,10 +22,10 @@ pub type ScopeTypeImportIdx = ScopeImportIdx<TypeName>;
 
 /// Name which is used to import data into the scope
 pub trait ScopeImportAlias: Display {
-    type Fat;
+    type Fat: Debug + Clone + Default + Eq;
 
     /// [Scope::import]
-    fn _index_into_scope<'a, 'tree>(this: &ScopeImportIdx<Self>, scope: &'a Scope<'tree>) -> (&'a AstImportPath<'tree>, TSNode<'tree>);
+    fn _index_into_scope<'a, 'tree>(this: &ScopeImportIdx<Self>, scope: &'a Scope<'tree>) -> (&'a AstImportPath<'tree>, TSNode<'tree>) where Self: Sized;
     /// [Exports::get]
     fn _index_into_exports<'a>(&self, exports: &'a Exports) -> Option<&'a DynResolvedLazy<Self::Fat>>;
     /// User-facing label

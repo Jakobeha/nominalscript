@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+
 use replace_with::replace_with_or_default;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{FnType, InferInfo, NominalGuard, Nullability, OptionalType, ReturnType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance, impl_structural_type_constructors};
-use crate::ast::tree_sitter::TSTree;
-use crate::diagnostics::{error, note, TypeLogger};
+
+use crate::analyses::bindings::TypeName;
+use crate::analyses::types::{impl_structural_type_constructors, NominalGuard, Nullability, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
+use crate::ast::tree_sitter::{TSSubTree, TSTree};
+use crate::diagnostics::TypeLogger;
+use crate::{error, note};
 
 /// Type declaration after we've resolved the supertypes
 #[derive(Debug, Clone)]
@@ -62,7 +65,7 @@ pub enum FatType<Hole: FatTypeHoleTrait = NoHole> {
 pub struct FatTypeInherited<Hole: FatTypeHoleTrait = NoHole> {
     pub super_ids: Vec<TypeIdent<FatType<Hole>>>,
     pub structure: Option<TypeStructure<FatType<Hole>>>,
-    pub typescript_types: Vec<TSTree>,
+    pub typescript_types: Vec<TSSubTree>,
     pub guards: Vec<NominalGuard>,
 }
 
@@ -86,7 +89,7 @@ pub type LocalFatType = FatType<FatTypeHole>;
 ///
 /// Holes are not thread-safe.
 /// Global (exported) types cannot have holes and they are thread-safe.
-pub type LocalFatTypeInherited = GenFatTypeInherited<FatTypeHole>;
+pub type LocalFatTypeInherited = FatTypeInherited<FatTypeHole>;
 
 impl FatTypeDecl {
     pub fn missing() -> Self {
@@ -235,7 +238,7 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
                 replace_with_or_default(this, |this| {
                     let TypeStructure::Tuple { element_types } = this else { unreachable!() };
                     TypeStructure::Array {
-                        element_type: FatType::unify_all(element_types, TypeLogger::Ignore)
+                        element_type: FatType::unify_all(element_types, TypeLogger::ignore())
                     }
                 });
             }
@@ -245,7 +248,7 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
                 }
                 let TypeStructure::Tuple { element_types } = other else { unreachable!() };
                 other = TypeStructure::Array {
-                    element_type: FatType::unify_all(element_types, TypeLogger::Ignore)
+                    element_type: FatType::unify_all(element_types, TypeLogger::ignore())
                 }
             }
             _ => {}

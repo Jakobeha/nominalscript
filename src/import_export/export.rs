@@ -1,13 +1,14 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolveCtx, ResolvedLazyTrait, RlImportedTypeDecl, RlImportedValueType, RlType, RlTypeDecl};
+use std::path::Path;
 
-use derive_more::{From, Into, AsRef, Deref, DerefMut};
+use derive_more::{AsRef, Deref, DerefMut, Display, From, Into};
 use self_cell::self_cell;
+
+use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::{ModuleCtx, ScopeImportAlias};
+use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolvedLazyTrait};
 use crate::ast::tree_sitter::TSTree;
-use crate::compile::{finish_transpile, Module};
+use crate::compile::finish_transpile;
 use crate::ProjectCtx;
 
 #[derive(Debug)]
@@ -42,7 +43,7 @@ pub struct Exports {
 
 /// Path to import a module in an import statement, distinguished from [PathBuf] which is the
 /// resolved path
-#[derive(Debug, Clone, PartialEq, Eq, Hash, From, Into, AsRef, Deref, DerefMut)]
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, From, Into, AsRef, Deref, DerefMut)]
 pub struct ImportPath(String);
 
 impl Module {
@@ -68,7 +69,7 @@ impl Module {
     pub fn finish(mut self, ctx: &mut ProjectCtx<'_>) -> TranspiledModule {
         let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
             finish_transpile(ast, module_ctx, ctx);
-            ast.print()
+            todo!("ast.print()")
         });
         TranspiledModule {
             exports: self.exports,
@@ -85,23 +86,29 @@ impl Exports {
         }
     }
 
-    pub fn add_value(&mut self, alias: ValueName, type_: impl ResolvedLazyTrait<FatType>) {
-        self.values.insert(alias, Box::new(type_));
+    pub fn add_value(&mut self, alias: ValueName, type_: Box<DynRlType>) {
+        self.values.insert(alias, type_);
     }
 
-    pub fn add_type(&mut self, alias: TypeName, decl: impl ResolvedLazyTrait<FatTypeDecl>) {
-        self.types.insert(alias, Box::new(decl));
+    pub fn add_type(&mut self, alias: TypeName, decl: Box<DynRlTypeDecl>) {
+        self.types.insert(alias, decl);
     }
 
     pub fn value_type(&self, name: &ValueName) -> Option<&DynRlType> {
-        self.values.get(name).as_deref()
+        self.values.get(name).map(|x| x.as_ref())
     }
 
     pub fn type_decl(&self, name: &TypeName) -> Option<&DynRlTypeDecl> {
-        self.types.get(name).as_deref()
+        self.types.get(name).map(|x| x.as_ref())
     }
 
     pub fn get<Alias: ScopeImportAlias>(&self, name: &Alias) -> Option<&DynResolvedLazy<Alias::Fat>> {
         name._index_into_exports(self)
+    }
+}
+
+impl AsRef<Path> for ImportPath {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
     }
 }

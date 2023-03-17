@@ -1,9 +1,9 @@
 use lazy_static::lazy_static;
-use crate::ast::tree_sitter::{TSParser, TSRange};
-use std::path::PathBuf;
+
 use tree_sitter_nominalscript::language_nominalscript;
+
+use crate::ast::tree_sitter::TSParser;
 use crate::misc::NiceMutex;
-use crate::import_export::export::ImportPath;
 
 /// Wrapper for arbitrary tree-sitter nodes, queries, and other datatypes
 pub mod tree_sitter;

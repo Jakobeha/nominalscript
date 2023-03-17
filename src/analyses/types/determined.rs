@@ -1,13 +1,7 @@
-use std::collections::HashMap;
-use serde_json::Value;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::scopes::ExprTypeMap;
-use crate::analyses::types::{FatType, FatTypeDecl, RlReturnType, ReturnType, RlType, ThinType, ThinTypeDecl, TypeParam};
+use crate::analyses::types::{RlReturnType, RlType};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::AstType;
-use crate::diagnostics::ProjectDiagnostics;
-use crate::import_export::export::ImportPath;
-use crate::import_export::import_ctx::ProjectImportCtx;
+use crate::diagnostics::FileLogger;
 
 /// Required or assigned type with information on what node it was determined from,
 /// and whether it was explicitly provided and/or inferred. For diagnostics.
@@ -41,5 +35,13 @@ impl<'tree> DeterminedType<'tree> {
     /// Type
     pub fn explicit(annotation: &AstType<'tree>) -> Self {
         Self { type_: annotation.shape.clone(), defined_value: None, explicit_type: Some(annotation.node) }
+    }
+
+    pub(crate) fn check_subtype(assigned: Option<&DeterminedType>, required: Option<&DeterminedType>, loc_node: &TSNode, e: &mut FileLogger<'_>) {
+        todo!()
+    }
+
+    pub(crate) fn check_not_disjoint(assigned: Option<&DeterminedType>, required: Option<&DeterminedType>, loc_node: &TSNode, e: &mut FileLogger<'_>) {
+        todo!()
     }
 }

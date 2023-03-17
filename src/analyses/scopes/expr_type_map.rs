@@ -1,9 +1,9 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
+
 use crate::analyses::bindings::LocalValueBinding;
 use crate::analyses::types::DeterminedType;
 use crate::ast::tree_sitter::TSNode;
-use crate::diagnostics::{error, FileLogger};
+use crate::diagnostics::FileLogger;
 
 /// Keeps track of an expression's required type (from context) and assigned type (actually inferred).
 pub struct ExprTypeMap<'tree> {
@@ -41,17 +41,6 @@ impl<'tree> ExprTypeMap<'tree> {
     /// Lookup assigned type
     pub fn get(&self, node: TSNode<'tree>) -> Option<&DeterminedType<'tree>> {
         self.assigned_types.get(&node)
-    }
-
-    /// Infer the binding's type from uses' *required* types
-    pub fn backwards_infer(&mut self, binding: &impl LocalValueBinding<'tree>) -> Option<&DeterminedType<'tree>> {
-        binding.local_uses().iter().find_map(|use_| {
-            assert!(
-                !self.assigned_types.contains_key(&use_),
-                "use already assigned a type (didn't expect, can probably just remove the assertion and just call this.assignedTypes.get(use.id)"
-            );
-            self.required_types.get(&use_)
-        })
     }
 
     pub fn check_all(&self, e: &mut FileLogger<'_>) {

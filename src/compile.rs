@@ -1,21 +1,20 @@
 use std::path::Path;
-use std::rc::Rc;
-use std::sync::Arc;
-use derive_more::{Display, From, Error};
-use self_cell::self_cell;
-use crate::import_export::export::{Exports, Module};
-use crate::{FileCtx, ProjectCtx};
-use crate::analyses::bindings::{Locality, ValueName};
-use crate::analyses::scopes::{ModuleCtx, scope_parent_of};
-use crate::ast::{NOMINALSCRIPT_PARSER, queries};
-use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
-use crate::ast::tree_sitter::{TreeCreateError, TSNode, TSParser, TSQueryCursor, TSTree};
-use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
-use crate::diagnostics::{error, issue, hint, FileLogger, FileDiagnostics};
-use crate::import_export::import_ctx::ImportError;
-use crate::misc::lazy_alt::Lazy;
 
-#[derive(Debug, Clone, Display, From, Error)]
+use derive_more::{Display, Error, From};
+
+use crate::ProjectCtx;
+use crate::analyses::scopes::ModuleCtx;
+use crate::ast::NOMINALSCRIPT_PARSER;
+use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
+use crate::ast::tree_sitter::{TreeCreateError, TSQueryCursor, TSTree};
+use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger};
+use crate::import_export::export::{Exports, Module};
+use crate::import_export::import_ctx::ImportError;
+use crate::{error, issue};
+use crate::analyses::bindings::ValueBinding;
+
+#[derive(Debug, Display, From, Error)]
 pub enum FatalTranspileError {
     TreeCreate(TreeCreateError),
 }
@@ -31,7 +30,8 @@ fn begin_transpile_file<'a>(
 ) -> Result<&'a Module, ImportError> {
     let header = begin_transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
-        error!(ctx.diagnostics, "failed to transpile '{}'", script_path.display();
+        let e = ProjectLogger::new(&ctx.diagnostics);
+        error!(e, "failed to transpile '{}'", script_path.display();
             issue!("{}", import_error));
     }
     header
@@ -93,13 +93,13 @@ fn begin_transpile_ast<'tree>(
     }
     for function_decl_match in qc.matches(&FUNCTION, root_node) {
         let node = function_decl_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(func_decl.node, &mut c);
+        let scope = m.scopes.of_node(node, &mut c);
         let decl = AstFunctionDecl::new(scope, node);
         scope.borrow_mut().values_mut().add_hoisted(decl, &mut e);
     }
     for value_decl_match in qc.matches(&VALUE, root_node) {
         let node = value_decl_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(value_decl.node, &mut c);
+        let scope = m.scopes.of_node(node, &mut c);
         let decl = AstValueDecl::new(scope, node);
         scope.borrow_mut().values_mut().add_sequential(decl, &mut e);
     }
@@ -107,7 +107,7 @@ fn begin_transpile_ast<'tree>(
         let node = import_stmt_match.capture(0).unwrap().node;
         let scope = m.scopes.of_node(node, &mut c);
         let import_stmt = AstImportStatement::new(scope, scope.next_import_path_idx(), node);
-        scope.borrow_mut().add_imported(import_stmt);
+        scope.borrow_mut().add_imported(import_stmt, &mut e);
     }
     // Query and prefill exports, and also add to scopes
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {
@@ -136,7 +136,7 @@ fn begin_transpile_ast<'tree>(
             Export::Type { original_name, alias } => {
                 if scope.downgrade() == root_scope {
                     if let Some(decl) = scope.types.get(&original_name.name) {
-                        exports.add_type(alias.name.clone(), decl.type_decl());
+                        exports.add_type(alias.name.clone(), decl.type_decl().box_clone());
                     }
                     // if no decl, add_exported logs an error
                 }
@@ -145,7 +145,7 @@ fn begin_transpile_ast<'tree>(
             Export::Value { original_name, alias } => {
                 if scope.downgrade() == root_scope {
                     if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
-                        exports.add_value(alias.name.clone(), decl.value_type());
+                        exports.add_value(alias.name.clone(), decl.value_type().box_clone());
                     }
                     // if no decl, add_exported logs an error
                 }

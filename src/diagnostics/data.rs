@@ -1,14 +1,15 @@
 use std::cell::RefCell;
-use std::collections::{btree_set, BTreeSet, HashMap};
-use std::fmt::{Display, Formatter};
+use std::collections::{btree_set, BTreeSet};
+use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
-use log::debug;
-use smallvec::SmallVec;
-use crate::ast::tree_sitter::TSRange;
+
 use derive_more::Display;
 use elsa::FrozenMap;
+use log::debug;
+use smallvec::SmallVec;
 
-#[derive(Debug)]
+use crate::ast::tree_sitter::TSRange;
+
 pub struct ProjectDiagnostics {
     global: RefCell<BTreeSet<GlobalDiagnostic>>,
     by_file: FrozenMap<PathBuf, Box<FileDiagnostics>>,
@@ -112,8 +113,8 @@ impl FileDiagnostics {
 }
 
 impl<'a> IntoIterator for &'a mut FileDiagnostics {
-    type Item = FileDiagnostic;
-    type IntoIter = btree_set::Iter<'a, Self::Item>;
+    type Item = &'a FileDiagnostic;
+    type IntoIter = btree_set::Iter<'a, FileDiagnostic>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.diagnostics.get_mut().iter()
@@ -144,7 +145,7 @@ impl GlobalDiagnostic {
 // region display
 impl Display for ProjectDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        for diagnostic in &self.global {
+        for diagnostic in self.global.borrow() {
             writeln!(f, "{}", diagnostic)?;
         }
         for (path, diagnostics) in &self.by_file {
@@ -192,8 +193,7 @@ impl Display for AdditionalInfo {
 // region eq ord
 impl PartialEq<GlobalDiagnostic> for GlobalDiagnostic {
     fn eq(&self, other: &Self) -> bool {
-        self.loc == other.loc
-            && self.level == other.level
+        self.level == other.level
             && self.message == other.message
     }
 }
@@ -237,3 +237,12 @@ impl Ord for FileDiagnostic {
     }
 }
 // endregion
+
+impl Debug for ProjectDiagnostics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProjectDiagnostics")
+            .field("global", &self.global)
+            .field("by_file", "...")
+            .finish()
+    }
+}

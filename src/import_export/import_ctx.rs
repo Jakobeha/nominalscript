@@ -1,13 +1,11 @@
-use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+
 use derive_more::{Display, Error};
-use crate::analyses::types::ProjectResolveCache;
+
 use crate::compile::FatalTranspileError;
-use crate::diagnostics::ProjectDiagnostics;
 use crate::import_export::export::{ImportPath, Module};
-use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError, ResolvedFatPath, ResolveFailure};
+use crate::import_export::import_resolver::{ImportResolver, ResolvedFatPath, ResolveFailure};
 
 /// Caches and resolves imports.
 #[derive(Debug)]
@@ -27,7 +25,7 @@ pub struct FileImportCtx<'a> {
     importer_path: &'a Path
 }
 
-#[derive(Debug, Clone, Display, Error, PartialEq, Eq)]
+#[derive(Debug, Display, Error)]
 pub enum ImportError {
     #[display(fmt = "could not locate module at path {}", module_path)]
     CouldNotResolve { #[error(not(source))] module_path: String },
@@ -35,7 +33,7 @@ pub enum ImportError {
     NoNominalScript { #[error(not(source))] fat_path: ResolvedFatPath },
     #[display(fmt = "file not found at path {}", "path.display()")]
     CouldNotResolvePath { path: PathBuf, resolve_failure: ResolveFailure },
-    #[display(fmt = "cannot transpile file at path because it's not nominalscript", "path.display()")]
+    #[display(fmt = "cannot transpile file at path because it's not nominalscript: {}", "path.display()")]
     NotNominalScriptPath { #[error(not(source))] path: PathBuf },
     #[display(fmt = "could not load file at path {}: {}", "path.display()", error)]
     CouldNotLoad { path: PathBuf, #[error(source)] error: std::io::Error },
@@ -171,15 +169,17 @@ impl ImportCache {
         (importer_path, module_path): (&Path, &ImportPath),
         resolve: impl FnOnce() -> Result<ResolvedFatPath, ResolveFailure>
     ) -> &ResolvedFatPath {
-        if let Ok(fat_path) = self.module_to_fat_path.get(importer_path).and_then(|m| m.get(module_path)) {
+        if let Some(fat_path) = self.module_to_fat_path.get(importer_path).and_then(|m| m.get(module_path)) {
             return fat_path
         }
         let fat_path = resolve().unwrap_or_default();
         let module_to_fat_path = self.module_to_fat_path
             .entry(importer_path.to_path_buf())
             .or_default();
-        module_to_fat_path.insert(module.clone(), fat_path);
-        module_to_fat_path.get(module_path).unwrap()
+        let std::collections::hash_map::Entry::Vacant(entry) = module_to_fat_path.entry(module_path.clone()) else {
+            unreachable!("we just checked that this entry doesn't exist")
+        };
+        entry.insert(fat_path)
     }
 
     /// If the path has already been partially or fully transpiled, returns the cached result.
@@ -192,12 +192,12 @@ impl ImportCache {
         transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<Module, ImportError>
     ) -> &Result<Module, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
-        if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(fat_path) {
+        if let Some(transpile_result) = self.fat_path_to_transpile_out.get(fat_path) {
             return transpile_result
         }
         let transpiled = transpile(&fat_path, self);
         let std::collections::hash_map::Entry::Vacant(entry) = self.fat_path_to_transpile_out.entry(fat_path.clone()) else {
-            unreachable!("we just checked that the entry doesn't exist")
+            unreachable!("we just checked that this entry doesn't exist")
         };
         entry.insert(transpiled)
     }
@@ -209,7 +209,7 @@ impl ImportCache {
         transpile: impl FnOnce(&ResolvedFatPath, &mut ImportCache) -> Result<Module, ImportError>
     ) -> &Result<Module, ImportError> {
         assert!(!fat_path.is_null(), "can't cache-transpile null fat path");
-        if let Ok(transpile_result) = self.fat_path_to_transpile_out.get(&fat_path) {
+        if let Some(transpile_result) = self.fat_path_to_transpile_out.get(&fat_path) {
             return transpile_result
         }
         let transpiled = transpile(&fat_path, self);

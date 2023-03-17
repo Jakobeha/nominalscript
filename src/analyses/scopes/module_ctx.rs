@@ -1,6 +1,7 @@
 use crate::analyses::scopes::{ExprTypeMap, ModuleScopes};
 use crate::ast::tree_sitter::TSTree;
 
+#[derive(Debug)]
 pub struct ModuleCtx<'tree> {
     tree: &'tree TSTree,
     pub scopes: ModuleScopes<'tree>,
