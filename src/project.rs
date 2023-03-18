@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::diagnostics::{FileDiagnostics, ProjectDiagnostics};
-use crate::import_export::import_ctx::{FileImportCtx, ImportCache, ProjectImportCtx};
+use crate::import_export::import_cache::ImportCache;
+use crate::import_export::import_ctx::{FileImportCtx, ProjectImportCtx};
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError};
 
 /// Project datastructure which contains everything.
@@ -44,20 +45,20 @@ impl Project {
         }
     }
 
-    pub fn ctx(&mut self) -> ProjectCtx<'_> {
+    pub fn ctx(&self) -> ProjectCtx<'_> {
         ProjectCtx {
-            import_ctx: ProjectImportCtx::new(&mut self.import_cache, &self.import_resolver),
+            import_ctx: ProjectImportCtx::new(&self.import_cache, &self.import_resolver),
             diagnostics: &self.diagnostics,
         }
     }
 }
 
 impl<'a> ProjectCtx<'a> {
-    pub fn file<'b>(&'b mut self, importer_path: &'b Path) -> FileCtx<'b> {
+    pub fn file<'b>(&'b self, importer_path: &'b Path) -> FileCtx<'b> {
         FileCtx {
             import_ctx: self.import_ctx.file(importer_path),
-            diagnostics: &self.diagnostics.file(importer_path),
-            project_diagnostics: &self.diagnostics,
+            diagnostics: self.diagnostics.file(importer_path),
+            project_diagnostics: self.diagnostics,
         }
     }
 }

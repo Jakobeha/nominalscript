@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::rc::Rc;
 
 use derive_more::{Display, Error, From};
 
@@ -13,9 +14,8 @@ use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
 use crate::{error, issue};
 use crate::analyses::bindings::ValueBinding;
-use crate::misc::Oob;
 
-#[derive(Debug, Display, From, Error)]
+#[derive(Debug, Clone, Display, From, Error)]
 pub enum FatalTranspileError {
     TreeCreate(TreeCreateError),
 }
@@ -25,10 +25,10 @@ pub enum FatalTranspileError {
 ///
 /// If successful, the transpiled file (module) will be cached in `ctx`,
 /// so calling again will just return the same result
-fn begin_transpile_file<'a>(
+fn begin_transpile_file(
     script_path: &Path,
-    ctx: &'a mut ProjectCtx<'_>
-) -> Result<&'a Module, Oob<'a, ImportError>> {
+    ctx: &ProjectCtx<'_>
+) -> Result<Rc<Module>, Rc<ImportError>> {
     let header = begin_transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
         let e = ProjectLogger::new(&ctx.diagnostics);
@@ -41,9 +41,9 @@ fn begin_transpile_file<'a>(
 /// [begin_transpile_file] but doesn't log the import error
 fn begin_transpile_file_no_log_err<'a>(
     script_path: &Path,
-    ctx: &'a mut ProjectCtx<'_>
-) -> Result<&'a Module, Oob<'a, ImportError>> {
-    ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
+    ctx: &ProjectCtx<'_>
+) -> Result<Rc<Module>, Rc<ImportError>> {
+    ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, || {
         begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(script_path)).map_err(ImportError::from)
     })
 }
@@ -160,7 +160,7 @@ fn begin_transpile_ast<'tree>(
 pub(crate) fn finish_transpile<'tree>(
     ast: &'tree TSTree,
     m: &mut ModuleCtx<'tree>,
-    ctx: &mut ProjectCtx<'_>
+    ctx: &ProjectCtx<'_>
 ) {}
 
 /*

@@ -72,7 +72,7 @@ pub struct ResolvedLazy<Thin, Fat> {
     pub thin: Thin,
     /// Fat version = resolved data
     fat: OnceCell<Fat>,
-    // compute: fn(&Thin, &mut ResolveCtx<'_>) -> Fat
+    // compute: fn(&Thin, &ResolveCtx<'_>) -> Fat
 }
 
 #[derive(Debug)]
@@ -101,7 +101,7 @@ struct RecursiveResolution;
 
 /// Trait implemented by [ResolvedLazy] which lets you use `DynResolvedLazy` values with arbitrary thin versions.
 pub trait ResolvedLazyTrait<Fat>: Debug {
-    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat;
+    fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat;
 
     fn box_clone(&self) -> Box<dyn ResolvedLazyTrait<Fat>>;
 }
@@ -143,32 +143,16 @@ pub trait ResolveInto<Fat> {
     /// the thin version was already computed before, it is cached and `resolve` may be skipped.
     /// Therefore `resolve` should have no side-effects except for ones that would be redundant
     /// (e.g. logging diagnostics and going through imports is ok).
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Fat;
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Fat;
 }
 
 impl<'a> ResolveCtx<'a> {
-    fn shorten_lifetime(&mut self) -> ResolveCtx {
-        ResolveCtx {
-            imports: self.imports.shorten_lifetime(),
-            diagnostics: self.diagnostics,
-            project_diagnostics: self.project_diagnostics,
-        }
-    }
-
-    fn other_file<'b>(&'b mut self, path: &'b Path) -> ResolveCtx<'b> {
+    fn other_file<'b>(&'b self, path: &'b Path) -> ResolveCtx<'b> {
         ResolveCtx {
             imports: self.imports.other_file(path),
             diagnostics: self.project_diagnostics.file(path),
             project_diagnostics: self.project_diagnostics,
         }
-    }
-
-    fn with_other_file<R>(&mut self, path: &'a Path, fun: impl FnOnce(&mut Self) -> R) -> R {
-        let original_path = self.imports.importer_path;
-        self.imports.importer_path = path;
-        let result = fun(self);
-        self.imports.importer_path = original_path;
-        result
     }
 
     pub(crate) fn type_logger(&self) -> TypeLogger<'_, '_, '_> {
@@ -216,7 +200,7 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
 }
 
 impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
-    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
+    fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
             let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade() } );
@@ -226,7 +210,7 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
 }
 
 impl<Thin: ResolveInto<Fat> + Debug + Clone + 'static, Fat: Debug + Clone + 'static> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
-    fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
+    fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
         self.resolve(ctx)
     }
 
@@ -304,31 +288,31 @@ impl ToThin<ThinTypeDecl> for FatTypeDecl {
 impl_by_map!(ToThin (fn thin(&self) by map_ref) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
 
 impl ResolveInto<FatType> for ThinType {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
         ctx; todo!()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
         fat_param.into_decl(ctx.type_logger())
     }
 }
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         ctx; todo!()
     }
 }
 
 impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Alias::Fat {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Alias::Fat {
         let e = FileLogger::new(ctx.diagnostics);
         let scope = scope.expect("ScopeValueImportIdx::resolve: scope must be Some");
         let (import_path, import_node) = scope.import(self);
 
-        let (script_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path, import_ctx| {
+        let (script_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path| {
             begin_transpile_file_no_cache(script_path, ctx.project_diagnostics.file(script_path)).map_err(ImportError::from)
         }) {
             Err(import_error) => {
@@ -346,11 +330,11 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
             }
             Some(imported) => imported
         };
-        ctx.with_other_file(script_path, move |ctx| imported.resolve(ctx).clone())
+        imported.resolve(&ctx.other_file(script_path)).clone()
     }
 }
 
-impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) by map_ref) for TypeParam, OptionalType, ReturnType);
+impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref) for TypeParam, OptionalType, ReturnType);
 
 impl RlType {
     pub const ANY: Self = Self {

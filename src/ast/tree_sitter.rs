@@ -618,6 +618,18 @@ impl CachedTreeData {
     }
 }
 
+impl Clone for TreeCreateError {
+    fn clone(&self) -> Self {
+        match self {
+            TreeCreateError::IO(e) => TreeCreateError::IO(std::io::Error::from(e.kind())),
+            // SAFETY: Relies on LanguageError being POD, so it could technically break in a future version but very unlikely
+            TreeCreateError::LoadLanguage(e) => TreeCreateError::LoadLanguage(unsafe { std::mem::transmute_copy(e) }),
+            TreeCreateError::ParsingFailed => TreeCreateError::ParsingFailed,
+            TreeCreateError::NotUtf8 { actual_index, error } => TreeCreateError::NotUtf8 { actual_index: *actual_index, error: error.clone() }
+        }
+    }
+}
+
 impl PartialEq<SubTree> for SubTree {
     fn eq(&self, other: &SubTree) -> bool {
         self.text == other.text &&
@@ -685,4 +697,4 @@ impl<'tree> PreorderTraversal<'tree> {
             Some(item)
         }
     }
-}}
+}

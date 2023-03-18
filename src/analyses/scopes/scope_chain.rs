@@ -1,8 +1,8 @@
-use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueBinding, ValueName};
+use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, scope_parent_of, ScopePtr};
 use crate::analyses::types::{DynRlType, RlType};
 use crate::ast::tree_sitter::{TSCursor, TSNode};
-use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueBinding, AstValueDecl, DynAstValueBinding};
+use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueDecl, DynAstValueBinding};
 use crate::diagnostics::{FileLogger};
 use crate::error;
 
@@ -99,7 +99,7 @@ impl<'tree> ScopeChain<'tree> {
     /// for subsequent calls (backwards inference).
     ///
     /// If the identifier has no binding, then logs an error and returns `NEVER`.
-    pub fn lookup<'a, 'tree>(
+    pub fn lookup<'a>(
         use_id: &ValueName,
         use_node: TSNode<'tree>,
         scope: &'a ScopeChain<'tree>,

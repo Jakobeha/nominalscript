@@ -58,15 +58,15 @@ impl Module {
         self.module_data.borrow_owner()
     }
 
-    pub fn ctx(&self) -> &ModuleCtx<'_> {
-        self.module_data.borrow_dependent()
+    pub fn with_ctx<'outer, R>(&'outer self, fun: impl for<'q> FnOnce(&'outer ModuleCtx<'q>) -> R) -> R {
+        self.module_data.with_dependent(|_ast, ctx| fun(ctx))
     }
 
     pub fn with_module_data_mut<'outer, R>(&'outer mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
         self.module_data.with_dependent_mut(|ast, module_ctx| fun(&mut self.exports, ast, module_ctx))
     }
 
-    pub fn finish(mut self, ctx: &mut ProjectCtx<'_>) -> TranspiledModule {
+    pub fn finish(mut self, ctx: &ProjectCtx<'_>) -> TranspiledModule {
         let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
             finish_transpile(ast, module_ctx, ctx);
             todo!("ast.print()")

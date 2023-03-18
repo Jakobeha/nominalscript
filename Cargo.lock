@@ -483,6 +483,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "smol_str",
+ "stable_deref_trait",
  "thiserror",
  "tree-sitter",
  "tree-sitter-nominalscript",
