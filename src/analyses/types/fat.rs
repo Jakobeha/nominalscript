@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use replace_with::replace_with_or_default;
+use replace_with::{replace_with, replace_with_or_default};
 
-use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{impl_structural_type_constructors, NominalGuard, Nullability, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
-use crate::ast::tree_sitter::{TSSubTree, TSTree};
+use crate::analyses::bindings::{TypeName, ValueName};
+use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, OptionalType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
+use crate::ast::tree_sitter::SubTree;
 use crate::diagnostics::TypeLogger;
 use crate::{error, note};
 
@@ -65,7 +65,7 @@ pub enum FatType<Hole: FatTypeHoleTrait = NoHole> {
 pub struct FatTypeInherited<Hole: FatTypeHoleTrait = NoHole> {
     pub super_ids: Vec<TypeIdent<FatType<Hole>>>,
     pub structure: Option<TypeStructure<FatType<Hole>>>,
-    pub typescript_types: Vec<TSSubTree>,
+    pub typescript_types: Vec<SubTree>,
     pub guards: Vec<NominalGuard>,
 }
 
@@ -157,7 +157,7 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
     pub fn collapse_supers(
         supers: impl IntoIterator<Item=Self>,
         mut e: TypeLogger<'_, '_, '_>
-    ) -> FatTypeInherited {
+    ) -> FatTypeInherited<Hole> {
         let mut inherited = FatTypeInherited::empty();
         for super_ in supers {
             match super_ {
@@ -235,10 +235,10 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
                 if !bias.is_covariant() {
                     error!(e, "an array is not a subtype of a tuple");
                 }
-                replace_with_or_default(this, |this| {
+                replace_with(this, TypeStructure::Array { element_type: Box::default() }, |this| {
                     let TypeStructure::Tuple { element_types } = this else { unreachable!() };
                     TypeStructure::Array {
-                        element_type: FatType::unify_all(element_types, TypeLogger::ignore())
+                        element_type: Box::new(FatType::unify_all(element_types, TypeLogger::ignore()))
                     }
                 });
             }
@@ -248,7 +248,7 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
                 }
                 let TypeStructure::Tuple { element_types } = other else { unreachable!() };
                 other = TypeStructure::Array {
-                    element_type: FatType::unify_all(element_types, TypeLogger::ignore())
+                    element_type: Box::new(FatType::unify_all(element_types, TypeLogger::ignore()))
                 }
             }
             _ => {}
@@ -256,12 +256,12 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
         // Merge if equivalent kinds or log error
         match (this, other) {
             (TypeStructure::Fn { fn_type }, TypeStructure::Fn { fn_type: other_fn_type }) => {
-                Self::unify_fn(fn_type, other_fn_type, bias, e);
+                Self::unify_fn(fn_type, *other_fn_type, bias, e);
             }
             (TypeStructure::Array { element_type }, TypeStructure::Array { element_type: other_element_type }) => {
                 Self::unify(
                     element_type,
-                    other_element_type,
+                    *other_element_type,
                     bias,
                     e.with_context(TypeLoc::ArrayElem)
                 );
@@ -286,6 +286,68 @@ impl<Hole: FatTypeHoleTrait> FatType<Hole> {
                 error!(e, "can't unify {} and {}", this.kind().a_display(), other.kind().a_display());
             }
         }
+    }
+
+    pub fn unify_fn(
+        this: &mut FnType<Self>,
+        mut other: FnType<Self>,
+        bias: Variance,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        todo!();
+    }
+
+    pub fn unify_optionals(
+        this: &mut Vec<OptionalType<Self>>,
+        mut other: Vec<OptionalType<Self>>,
+        bias: Variance,
+        e: impl Fn(usize) -> TypeLogger<'_, '_, '_>
+    ) {
+        todo!();
+        /* let len = this.len().max(other.len());
+        this.resize(len, Self::NEVER);
+        other.resize(len, Self::NEVER);
+        for (index, (this, other)) in this.iter_mut().zip(other).enumerate() {
+            Self::unify(this, other, bias, e(index));
+        } */
+    }
+
+    pub fn unify_fields(
+        this: &mut Vec<Field<OptionalType<Self>>>,
+        mut other: Vec<Field<OptionalType<Self>>>,
+        bias: Variance,
+        e: impl Fn(&ValueName) -> TypeLogger<'_, '_, '_>
+    ) {
+        todo!();
+        /* for (name, this) in this.iter_mut() {
+            let other = other.remove(name).unwrap_or(Self::NEVER);
+            Self::unify(this, other, bias, e(name));
+        }
+        for (name, other) in other {
+            let this = Self::NEVER;
+            Self::unify(this, other, bias, e(name));
+        } */
+    }
+
+    fn unify(
+        &mut self,
+        other: Self,
+        bias: Variance,
+        &mut e: TypeLogger<'_, '_, '_>
+    ) {
+        todo!()
+    }
+
+    pub fn unify_all(types: impl IntoIterator<Item = Self>, e: TypeLogger<'_, '_, '_>) -> Self {
+        todo!();
+        let mut types = types.into_iter();
+        let Some(mut result) = types.next() else {
+            return Self::NEVER
+        };
+        for other in types {
+            result = result.unify(other, Variance::Bivariant, todo!());
+        }
+        result
     }
 }
 

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use smol_str::SmolStr;
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::ast::tree_sitter::TSSubTree;
+use crate::ast::tree_sitter::SubTree;
 
 /// Type declaration before we've resolved the supertypes
 #[derive(Debug, Clone)]
@@ -9,7 +9,7 @@ pub struct ThinTypeDecl {
     pub name: TypeName,
     pub type_params: Vec<TypeParam<ThinType>>,
     pub supertypes: Vec<ThinType>,
-    pub typescript_supertype: Option<TSSubTree>,
+    pub typescript_supertype: Option<SubTree>,
     pub guard: Option<NominalGuard>,
 }
 
@@ -21,7 +21,7 @@ pub struct NominalGuard {
     /// The parameter binding
     pub param: ValueName,
     /// The body of the guard.
-    pub body: TSSubTree
+    pub body: SubTree
 }
 
 /// Thin type = type reference which is parsed from a string or AST node
@@ -341,7 +341,7 @@ impl<Type> TypeStructure<Type> {
         }
     }
 
-    pub fn map<F, NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
+    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
         match self {
             TypeStructure::Fn { fn_type } => TypeStructure::Fn {
                 fn_type: Box::new(fn_type.map(f)),
@@ -353,7 +353,7 @@ impl<Type> TypeStructure<Type> {
                 element_types: element_types.into_iter().map(|elem| elem.map(f)).collect(),
             },
             TypeStructure::Object { field_types } => TypeStructure::Object {
-                field_types: field_types.into_iter().map(|field| field.map(f)).collect(),
+                field_types: field_types.into_iter().map(|field| field.map(|opt| opt.map(f))).collect(),
             },
         }
     }
@@ -376,11 +376,11 @@ impl<Type> FnType<Type> {
         }
     }
 
-    pub fn map<F, NewType>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
+    pub fn map<NewType>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
         FnType {
-            type_params: self.type_params.into_iter().map(|param| param.map(|x| f(x))).collect(),
+            type_params: self.type_params.into_iter().map(|param| param.map(&mut f)).collect(),
             this_type: f(self.this_type),
-            arg_types: self.arg_types.into_iter().map(|arg| arg.map(|x| f(x))).collect(),
+            arg_types: self.arg_types.into_iter().map(|arg| arg.map(&mut f)).collect(),
             rest_arg_type: f(self.rest_arg_type),
             return_type: self.return_type.map(f),
         }
@@ -409,7 +409,7 @@ impl<Type> OptionalType<Type> {
         }
     }
 
-    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> OptionalType<NewType> {
+    pub fn map<NewType>(self, f: impl FnOnce(Type) -> NewType) -> OptionalType<NewType> {
         OptionalType {
             optionality: self.optionality,
             type_: f(self.type_),
@@ -418,7 +418,7 @@ impl<Type> OptionalType<Type> {
 }
 
 impl<Type> ReturnType<Type> {
-    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> ReturnType<NewType> {
+    pub fn map<NewType>(self, f: impl FnOnce(Type) -> NewType) -> ReturnType<NewType> {
         match self {
             ReturnType::Type(type_) => ReturnType::Type(f(type_)),
             ReturnType::Void => ReturnType::Void,
@@ -427,7 +427,7 @@ impl<Type> ReturnType<Type> {
 }
 
 impl<Type> Field<Type> {
-    pub fn map<F, NewType>(self, f: impl FnOnce(Type) -> NewType) -> Field<NewType> {
+    pub fn map<NewType>(self, f: impl FnOnce(Type) -> NewType) -> Field<NewType> {
         Field {
             name: self.name,
             type_: f(self.type_),

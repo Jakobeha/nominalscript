@@ -76,11 +76,11 @@ impl<'tree> ScopeChain<'tree> {
                 return Some(decl)
             }
         }
-        top_to_bottom.find_map(|(_, scope)| scope.values.last(name) as Option<&dyn ValueBinding>)
-            .or_else(|| GlobalValueBinding::get(name))
+        top_to_bottom.find_map(|(_, scope)| scope.values.last(name).map(|decl| decl as &dyn ValueBinding))
+            .or_else(|| GlobalValueBinding::get(name).map(|decl| decl as &dyn ValueBinding))
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
+    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.top().expect("ScopeChain is empty").1.values.at_exact_pos(name, pos_node)
     }
 
@@ -103,14 +103,14 @@ impl<'tree> ScopeChain<'tree> {
     ) -> &'a RlType {
         scope
             .at_pos(use_id, use_node)
-            .and_then(|def| def.infer_type(typed_exprs))
+            .map(|def| def.infer_type(Some(typed_exprs)))
             .unwrap_or_else(|| {
                 error!(e, "undeclared identifier `{}`", use_id => use_node);
                 &RlType::NEVER
             })
     }
 
-    fn iter_top_to_bottom(&self) -> impl Iterator<Item=(TSNode<'tree>, ScopePtr<'tree>)> + 'tree {
+    fn iter_top_to_bottom(&self) -> impl Iterator<Item=(TSNode<'tree>, ScopePtr<'tree>)> + '_ {
         self.scopes.iter().rev().map(|(node, scope)|
             (*node, scope.upgrade().expect("ScopeChain has dangling WeakScopePtr")))
     }

@@ -8,7 +8,7 @@ use once_cell::unsync::OnceCell;
 
 use crate::{error, issue};
 use crate::analyses::scopes::{RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{FatType, FatTypeDecl, FatTypeInherited, Nullability, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
+use crate::analyses::types::{FatType, FatTypeDecl, FatTypeHoleTrait, Nullability, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};
@@ -67,7 +67,7 @@ pub struct ResolvedLazy<Thin, Fat> {
     /// Scope-id to resolve the data
     ///
     /// This pointer is either null or guaranteed to be live when the [ResolveCtx] is in scope
-    scope_origin: RawScopePtr,
+    scope_origin: Option<RawScopePtr>,
     /// Thin version = unresolved data
     pub thin: Thin,
     /// Fat version = resolved data
@@ -196,7 +196,7 @@ impl ResolveCache {
 impl<Thin, Fat: IntoThin<Thin>> ResolvedLazy<Thin, Fat> {
     pub fn resolved(fat: Fat) -> Self {
         Self {
-            scope_origin: RawScopePtr::null(),
+            scope_origin: None,
             thin: fat.ref_into_thin(),
             fat: OnceCell::with_value(fat)
         }
@@ -206,7 +206,7 @@ impl<Thin, Fat: IntoThin<Thin>> ResolvedLazy<Thin, Fat> {
 impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     pub fn new(scope: &ScopePtr<'_>, thin: Thin) -> Self {
         Self {
-            scope_origin: ScopePtr::as_raw(scope),
+            scope_origin: Some(ScopePtr::as_raw(scope)),
             thin,
             fat: OnceCell::new()
         }
@@ -217,13 +217,13 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
-            let mut scope = unsafe { self.scope_origin.upgrade() };
+            let mut scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade() } );
             self.thin.resolve(scope, ctx)
         })
     }
 }
 
-impl<Thin: ResolveInto<Fat> + Debug + Clone + Eq, Fat: Debug + Clone + Eq> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
+impl<Thin: ResolveInto<Fat> + Debug + Clone, Fat: Debug + Clone> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
     fn resolve(&self, ctx: &mut ResolveCtx<'_>) -> &Fat {
         self.resolve(ctx)
     }
@@ -258,7 +258,7 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
-impl<Hole> IntoThin<ThinType> for FatType<Hole> {
+impl<Hole: FatTypeHoleTrait> IntoThin<ThinType> for FatType<Hole> {
     fn into_thin(self) -> ThinType {
         match self {
             FatType::Any => ThinType::Any,
@@ -294,14 +294,15 @@ impl IntoThin<ThinTypeDecl> for FatTypeDecl {
             name: self.name,
             type_params: self.type_params.into_iter().map(|p| p.into_thin()).collect(),
             supertypes: self.inherited.super_ids.into_iter()
-                .map(|id| FatType::Nominal {
+                .map(|id| ThinType::Nominal {
                     nullability: Nullability::NonNullable,
-                    id,
-                    // FUTURE: Merge inherited super_ids and structure?
-                    inherited: Box::new(FatTypeInherited::empty()),
+                    id: id.into_thin(),
                 })
                 .chain(self.inherited.structure.map(|structure| {
-                    FatType::Structural { nullability: Nullability::NonNullable, structure }
+                    ThinType::Structural {
+                        nullability: Nullability::NonNullable,
+                        structure: structure.into_thin()
+                    }
                 }))
                 .collect(),
             // TODO: typescript union of self.inherited.typescript_types
@@ -314,7 +315,7 @@ impl IntoThin<ThinTypeDecl> for FatTypeDecl {
 
 impl_by_map!(IntoThin (fn into_thin(self)) for TypeIdent, TypeStructure, TypeParam, ReturnType);
 
-impl<Hole> ResolveInto<FatType<Hole>> for ThinType {
+impl<Hole: FatTypeHoleTrait> ResolveInto<FatType<Hole>> for ThinType {
     fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType<Hole> {
         ctx; todo!()
     }
@@ -366,19 +367,19 @@ impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &m
 
 impl RlType {
     pub const ANY: Self = Self {
-        scope_origin: RawScopePtr::null(),
+        scope_origin: None,
         thin: ThinType::Any,
         fat: OnceCell::with_value(FatType::Any)
     };
 
     pub const NEVER: Self = Self {
-        scope_origin: RawScopePtr::null(),
+        scope_origin: None,
         thin: ThinType::NEVER,
         fat: OnceCell::with_value(FatType::NEVER)
     };
 
     pub const NULL: Self = Self {
-        scope_origin: RawScopePtr::null(),
+        scope_origin: None,
         thin: ThinType::NEVER,
         fat: OnceCell::with_value(FatType::NEVER)
     };
@@ -386,7 +387,7 @@ impl RlType {
 
 impl RlTypeDecl {
     pub const MISSING: Self = Self {
-        scope_origin: RawScopePtr::null(),
+        scope_origin: None,
         thin: ThinTypeDecl::MISSING,
         // Cannot create because FatTypeDecl has a Box, so we just leave empty
         fat: OnceCell::new()
@@ -407,7 +408,7 @@ impl Debug for ResolveCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolveCache")
             .field("types_in_progress", &self.types_in_progress.borrow())
-            .field("types", "...")
+            .field("types", &"...")
             .finish()
     }
 }

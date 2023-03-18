@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::ptr::addr_of;
+use std::ptr::{addr_of, NonNull};
 use std::rc::{Rc, Weak};
 
 use crate::analyses::scopes::{Scope, TypeScope, ValueScope};
@@ -9,8 +9,8 @@ use crate::ast::typed_nodes::{AstImportStatement, AstParameter};
 use crate::diagnostics::FileLogger;
 
 /// Raw pointer to scope which can be dereferenced and re-assigned a lifetime if we know the scope exists
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub(crate) struct RawScopePtr(*const Scope<'static>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RawScopePtr(NonNull<Scope<'static>>);
 
 /// Pointer to a scope
 #[derive(Debug, Clone)]
@@ -55,7 +55,8 @@ impl<'tree> ScopePtr<'tree> {
     /// Erase the lifetime and forget that this is reference counted
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn as_raw(this: &Self) -> RawScopePtr {
-        RawScopePtr(Self::as_ptr(this) as *const Scope<'static>)
+        // SAFETY: The pointer returned from as_ptr is not null since this exists
+        RawScopePtr(unsafe { NonNull::new_unchecked(Self::as_ptr(this) as *const Scope<'static> as *mut _) })
     }
 
     /// Downgrade to a weak scope pointer
@@ -170,16 +171,6 @@ impl<'tree> PartialEq<ScopePtr<'tree>> for WeakScopePtr<'tree> {
 }
 
 impl RawScopePtr {
-    /// Null pointer
-    pub const fn null() -> RawScopePtr {
-        RawScopePtr(std::ptr::null())
-    }
-
-    /// Is this the null pointer?
-    pub fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-
     /// Re-assign a lifetime and increment the reference count.
     ///
     /// SAFETY: You must statically know that the scope being pointed to is alive.
@@ -188,13 +179,8 @@ impl RawScopePtr {
     /// Note that if you call [as_raw] and then drop the pointer, it decrements the count, and so
     /// if there are no active references, the scope will be dropped calling `upgrade` will cause UB
     ///
-    /// Returns `None` (not UB) if this is null.
-    ///
     /// *Panics* (not UB) if the scope is currently being mutated
-    pub(crate) unsafe fn upgrade<'tree>(self) -> Option<ScopePtr<'tree>> {
-        if self.is_null() {
-            return None
-        }
+    pub(crate) unsafe fn upgrade<'tree>(self) -> ScopePtr<'tree> {
         unsafe {
             // SAFETY: Rc::into_raw is equivalent to Rc::as_ptr and then mem::forget.
             // We don't call forget (letting the reference from as_raw be dropped)
@@ -208,7 +194,7 @@ impl RawScopePtr {
                 panic!("Cannot upgrade a scope while it is being mutated")
             }
             Rc::increment_strong_count(ptr);
-            Some(ScopePtr(Pin::new_unchecked(Rc::from_raw(ptr))))
+            ScopePtr(Pin::new_unchecked(Rc::from_raw(ptr)))
         }
     }
 }
@@ -242,7 +228,7 @@ impl<'a, 'tree> ScopeMut<'a, 'tree> {
         &mut unsafe { Self::unpinned_mut(self) }.types
     }
 
-    pub fn set_params(&mut self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
+    pub fn set_params(&mut self, params: impl Iterator<Item=AstParameter<'tree>>) {
         unsafe { Self::unpinned_mut(self) }.set_params(params)
     }
 

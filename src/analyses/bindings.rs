@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use derive_more::Display;
 use smol_str::SmolStr;
 use crate::analyses::scopes::ExprTypeMap;
@@ -17,19 +18,19 @@ pub enum Locality {
 
 /// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
-pub trait ValueBinding {
+pub trait ValueBinding: Debug {
     fn name(&self) -> &ValueName;
     fn value_type(&self) -> &DynRlType;
     fn locality(&self) -> Locality;
 
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
         self.value_type()
     }
 }
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
-pub trait TypeBinding {
+pub trait TypeBinding: Debug {
     fn name(&self) -> &TypeName;
     fn type_decl(&self) -> &DynRlTypeDecl;
     fn locality(&self) -> Locality;

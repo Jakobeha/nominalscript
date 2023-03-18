@@ -98,10 +98,10 @@ impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
         }
     }
 
-    fn base(&mut self) -> &mut TypeLoggerBase<'b, 'c> {
+    fn base(&mut self) -> Option<&mut TypeLoggerBase<'b, 'c>> {
         match &mut self.0 {
-            _TypeLogger::Base { base } => base,
-            _TypeLogger::Derived { base } => base
+            _TypeLogger::Base { base } => Some(base),
+            _TypeLogger::Derived { base } => Some(base),
             _TypeLogger::Ignore => None
         }
     }

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -74,10 +75,10 @@ impl<'a> ProjectImportCtx<'a> {
         importer_path: &Path,
         module_path: &ImportPath,
         transpile: impl FnOnce(&Path, ProjectImportCtx<'_>) -> Result<Module, ImportError>
-    ) -> Result<(&Path, &Module), ImportError> {
+    ) -> Result<(&Path, &Module), Cow<'_, ImportError>> {
         let fat_path = self.resolve_and_cache_fat_path(importer_path, module_path);
         if fat_path.is_null() {
-            return Err(ImportError::CouldNotResolve { module_path: module_path.to_string() });
+            return Err(Cow::Owned(ImportError::CouldNotResolve { module_path: module_path.to_string() }));
         }
         self.cache.cache_transpile(
             fat_path,
@@ -89,7 +90,7 @@ impl<'a> ProjectImportCtx<'a> {
             }
         ).as_ref()
             .map(|module| (fat_path.nominalscript_path.as_deref().unwrap(), module))
-            .map_err(|e| e.clone())
+            .map_err(Cow::Borrowed)
     }
 
     /// Resolves declarations / nominal exports and also checks that `scriptPath` is correct.
@@ -99,17 +100,17 @@ impl<'a> ProjectImportCtx<'a> {
         &mut self,
         script_path: &Path,
         transpile: impl FnOnce(ProjectImportCtx<'_>) -> Result<Module, ImportError>
-    ) -> Result<&Module, ImportError> {
+    ) -> Result<&Module, Cow<'_, ImportError>> {
         let fat_path = self.resolver
             .fat_script_path(script_path)
             .map_err(|resolve_failure| ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure })?;
         if fat_path.nominalscript_path.is_none() {
-            return Err(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() });
+            return Err(Cow::Owned(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() }));
         }
         self.cache.cache_transpile2(
             fat_path,
             |_fat_path, cache| transpile(ProjectImportCtx::new(cache, &self.resolver))
-        ).as_ref().map_err(|e| e.clone())
+        ).as_ref().map_err(Cow::Borrowed)
     }
 
     pub fn resolve_and_cache_script_path(&mut self, importer_path: &Path, module_path: &ImportPath) -> Result<&Path, ImportError> {

@@ -145,10 +145,11 @@ impl GlobalDiagnostic {
 // region display
 impl Display for ProjectDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        for diagnostic in self.global.borrow() {
+        let global = self.global.borrow();
+        for diagnostic in &*global {
             writeln!(f, "{}", diagnostic)?;
         }
-        for (path, diagnostics) in &self.by_file {
+        for (path, diagnostics) in FrozenMapIter(&self.by_file) {
             for diagnostic in diagnostics {
                 write!(f, "{}:", path.display())?;
                 writeln!(f, "{}", diagnostic)?;
@@ -242,7 +243,7 @@ impl Debug for ProjectDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProjectDiagnostics")
             .field("global", &self.global)
-            .field("by_file", "...")
+            .field("by_file", &"...")
             .finish()
     }
 }

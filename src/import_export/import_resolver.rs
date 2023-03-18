@@ -189,11 +189,11 @@ impl ImportResolver {
         }
     }
 
-    fn resolve_candidates_for_module_path(
-        &self,
-        module_path: &ImportPath,
-        importer_path: Option<&Path>
-    ) -> impl Iterator<Item=ResolvedPath> {
+    fn resolve_candidates_for_module_path<'a>(
+        &'a self,
+        module_path: &'a ImportPath,
+        importer_path: Option<&'a Path>
+    ) -> impl Iterator<Item=ResolvedPath> + 'a {
         let importer_dir = importer_path.and_then(|importer_path| importer_path.parent());
         let relative = importer_dir
             .map(|importer_dir| importer_dir.join(module_path))
@@ -227,7 +227,7 @@ impl ImportResolver {
 
 impl GlobPaths {
     pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a str) -> impl Iterator<Item=PathBuf> + 'a {
-        self.globs.matches(path).into_iter().flat_map(|match_idx| {
+        self.globs.matches(path).into_iter().flat_map(move |match_idx| {
             self.glob_paths[match_idx].clone().map(|resolved_path| {
                 mk_path!(base_path.clone(), resolved_path, path)
             })
@@ -245,7 +245,7 @@ impl FromIterator<(String, Vec<String>)> for GlobPaths {
     fn from_iter<T: IntoIterator<Item=(String, Vec<String>)>>(iter: T) -> Self {
         iter.into_iter()
             .filter(|(_, paths)| !paths.is_empty())
-            .filter_map(|(glob, paths)| match Glob::new(glob) {
+            .filter_map(|(glob, paths)| match Glob::new(&glob) {
                 Err(err) => {
                     log::warn!("Invalid glob pattern: {}", err);
                     None

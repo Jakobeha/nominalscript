@@ -6,7 +6,7 @@ use self_cell::self_cell;
 
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::{ModuleCtx, ScopeImportAlias};
-use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolvedLazyTrait};
+use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl};
 use crate::ast::tree_sitter::TSTree;
 use crate::compile::finish_transpile;
 use crate::ProjectCtx;

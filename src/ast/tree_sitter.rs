@@ -6,6 +6,7 @@ use std::str::Utf8Error;
 use derive_more::{Display, From, Error};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::ptr::NonNull;
 use crate::misc::id_maps::{Id, IdSet};
 
 #[derive(Debug)]
@@ -23,6 +24,22 @@ struct CachedTreeData {}
 pub struct TSNode<'tree> {
     node: tree_sitter::Node<'tree>,
     tree: &'tree TSTree,
+}
+
+/// Raw pointer equivalent of [TSNode]
+#[derive(Debug, Clone, Copy)]
+pub struct TSNodePtr {
+    node_data: TSNodeData,
+    tree: NonNull<TSTree>
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+/// Taken straight from [tree_sitter::ffi::TSNode], they must both have the same size
+struct TSNodeData {
+    context: [u32; 4usize],
+    id: *const (),
+    tree: *const (),
 }
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, Hash)]
@@ -82,7 +99,15 @@ pub enum TreeCreateError {
     NotUtf8 { actual_index: usize, error: Utf8Error }
 }
 
-pub type TSSubTree = TSTree;
+/// Allows you to store TSNode separately from the tree
+#[derive(Debug, Clone)]
+pub struct SubTree {
+    pub text: String,
+    pub range: TSRange,
+    /// Node which can be dereferenced in case the tree is still alive,
+    /// otherwise it is dangling
+    pub root: Option<TSNodePtr>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TraversalState {
@@ -93,7 +118,7 @@ pub enum TraversalState {
     End
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PreorderTraversal<'tree> {
     cursor: TSCursor<'tree>,
     last_state: TraversalState
@@ -238,11 +263,11 @@ impl<'tree> TSNode<'tree> {
         unsafe { std::str::from_utf8_unchecked(self.byte_text()) }
     }
 
-    pub fn all_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
+    pub fn all_children<'a>(&'a self, cursor: &'a mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'a {
         self.node.children(&mut cursor.cursor).map(move |node| TSNode::new(node, self.tree))
     }
 
-    pub fn named_children(&self, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
+    pub fn named_children<'a>(&'a self, cursor: &'a mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'a {
         self.node.named_children(&mut cursor.cursor).map(move |node| TSNode::new(node, self.tree))
     }
 
@@ -324,11 +349,19 @@ impl<'tree> TSNode<'tree> {
         TSCursor::new(self.node.walk(), self.tree)
     }
 
-    /// NOTE: If tree-sitter has a better way to convert a node into a sub-tree that would be great...
-    ///   we cannot and don't really want to store a reference to a node here, and currently
-    ///   we need to re-parse the node's text to get a sub-tree.
-    pub fn into_subtree(self, parser: &mut TSParser) -> Result<TSSubTree, TreeCreateError> {
-        parser.parse_bytes(self.byte_text().to_vec())
+    pub fn to_ptr(&self) -> TSNodePtr {
+        TSNodePtr {
+            node_data: TSNodeData::from(self.node),
+            tree: NonNull::from(self.tree),
+        }
+    }
+
+    pub fn to_subtree(&self) -> SubTree {
+        SubTree {
+            text: self.text().to_string(),
+            range: self.range(),
+            root: Some(self.to_ptr()),
+        }
     }
 
     /// *Panics* if already marked
@@ -373,6 +406,33 @@ impl<'tree> Eq for TSNode<'tree> {}
 impl<'tree> Hash for TSNode<'tree> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id().hash(state)
+    }
+}
+
+impl TSNodePtr {
+    /// SAFETY: You must ensure that the tree the node came from is alive
+    pub unsafe fn to_node(&self) -> TSNode {
+        TSNode {
+            node: self.node_data.to_node(),
+            tree: self.tree.as_ref(),
+        }
+    }
+}
+
+impl TSNodeData {
+    /// SAFETY: You must ensure that the tree the node came from is alive
+    pub unsafe fn to_node<'tree>(self) -> tree_sitter::Node<'tree> {
+        // SAFETY: tree_sitter::Node is POD (no Drop, Copy),
+        // and sizes are compile_time checked to be the same
+        std::mem::transmute(self)
+    }
+}
+
+impl<'tree> From<tree_sitter::Node<'tree>> for TSNodeData {
+    fn from(node: tree_sitter::Node) -> Self {
+        // SAFETY: We are storing this as opaquely, tree_sitter::Node is POD (no Drop, Copy),
+        // and sizes are compile_time checked to be the same
+        unsafe { std::mem::transmute::<tree_sitter::Node<'_>, TSNodeData>(node) }
     }
 }
 
@@ -496,7 +556,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
         self.iter_captures().find(|capture| capture.name == name)
     }
 
-    pub fn captures_named(&self, name: &str) -> impl Iterator<Item = TSQueryCapture<'query, 'tree>> + 'tree {
+    pub fn captures_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = TSQueryCapture<'query, 'tree>> + 'a {
         self.iter_captures().filter(|capture| capture.name == name)
     }
 
@@ -516,7 +576,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
         self.query_match.remove()
     }
 
-    pub fn nodes_for_capture_index(&self, capture_index: u32) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
+    pub fn nodes_for_capture_index(&self, capture_index: u32) -> impl Iterator<Item = TSNode<'tree>> + '_ {
         self.query_match
             .nodes_for_capture_index(capture_index)
             .map(move |node| TSNode::new(node, self.tree))
@@ -559,6 +619,15 @@ impl CachedTreeData {
         CachedTreeData {}
     }
 }
+
+impl PartialEq<SubTree> for SubTree {
+    fn eq(&self, other: &SubTree) -> bool {
+        self.text == other.text &&
+            self.range == other.range
+    }
+}
+
+impl Eq for SubTree {}
 
 impl TraversalState {
     pub fn is_up(&self) -> bool {

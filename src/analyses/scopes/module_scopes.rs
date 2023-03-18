@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::iter::once;
 
 use smallvec::SmallVec;
+use crate::analyses::scopes::ExprTypeMap;
 
 use crate::analyses::scopes::scope_ptr::ScopePtr;
 use crate::analyses::types::DeterminedReturnType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 
 /// The hierarchy of scopes within a file or module (including submodules)
+#[derive(Debug)]
 pub struct ModuleScopes<'tree> {
     root_node: TSNode<'tree>,
     scopes: HashMap<TSNode<'tree>, ScopePtr<'tree>>,
@@ -94,13 +96,13 @@ impl<'tree> ModuleScopes<'tree> {
         scope.unwrap()
     }
 
-    pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> + 'tree {
+    pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> + '_ {
         SeenLexicalDescendantsOf::new(self, node)
     }
 
-    pub fn seen_return_types(&self, node: TSNode<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'tree {
+    pub fn seen_return_types<'a>(&'a self, node: TSNode<'tree>, typed_exprs: &'a ExprTypeMap<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'a {
         once(node).chain(self.seen_lexical_descendants_of(node))
-            .map(|node| self.scopes[&node].values.return_type())
+            .map(|node| self.scopes[&node].values.return_type(typed_exprs))
     }
 }
 

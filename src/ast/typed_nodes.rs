@@ -4,8 +4,7 @@ use smol_str::SmolStr;
 
 use crate::analyses::bindings::{HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{Field, LocalFatType, NominalGuard, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
-use crate::ast::NOMINALSCRIPT_PARSER;
+use crate::analyses::types::{DynRlType, DynRlTypeDecl, Field, LocalFatType, NominalGuard, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::import_export::export::{Exports, ImportPath};
 
@@ -510,7 +509,7 @@ impl<'tree> AstParameter<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstParameter<'tree> {
-    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
@@ -562,7 +561,7 @@ impl<'tree> AstValueDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstValueDecl<'tree> {
-    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+    fn infer_type(&self, typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
@@ -623,7 +622,7 @@ impl<'tree> AstFunctionDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstFunctionDecl<'tree> {
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
         &self.fn_type
     }
 }
@@ -636,8 +635,7 @@ impl<'tree> AstNominalGuard<'tree> {
         let body = node.named_child(1).unwrap();
         let shape = NominalGuard {
             param: parameter.name.clone(),
-            body: body.into_subtree(&mut *NOMINALSCRIPT_PARSER.lock())
-                .expect("nominal guard body is invalid syntax"),
+            body: body.to_subtree().expect("nominal guard body is invalid syntax"),
         };
         Self {
             node,
@@ -717,7 +715,7 @@ impl<'tree> AstValueImportSpecifier<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstValueImportSpecifier<'tree> {
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &RlType {
+    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
         self.shape.get().expect("must call resolve_from_exports before getting or inferring type")
     }
 }
@@ -768,7 +766,7 @@ impl<'tree> AstImportPath<'tree> {
 
 impl_ast!(AstImportStatement);
 impl<'tree> AstImportStatement<'tree> {
-    pub fn new<E>(
+    pub fn new(
         scope: &ScopePtr,
         import_path_idx: usize,
         node: TSNode<'tree>,

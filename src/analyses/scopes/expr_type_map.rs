@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::analyses::bindings::LocalValueBinding;
 use crate::analyses::types::DeterminedType;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
 
 /// Keeps track of an expression's required type (from context) and assigned type (actually inferred).
+#[derive(Debug)]
 pub struct ExprTypeMap<'tree> {
     required_types: HashMap<TSNode<'tree>, DeterminedType<'tree>>,
     runtime_required_types: HashMap<TSNode<'tree>, DeterminedType<'tree>>,
