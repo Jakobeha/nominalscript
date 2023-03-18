@@ -74,9 +74,8 @@ impl ProjectDiagnostics {
     }
 
     pub fn insert_global(&self, diagnostic: GlobalDiagnostic) {
-        let did_insert = self.global.borrow_mut().insert(diagnostic);
-        if !did_insert {
-            debug!("Duplicate diagnostic: {}", diagnostic);
+        if let Some(existing) = self.global.borrow_mut().replace(diagnostic) {
+            debug!("Duplicate diagnostic was replaced: {}", existing);
         }
     }
 
@@ -101,9 +100,8 @@ impl FileDiagnostics {
     }
 
     pub fn insert(&self, diagnostic: FileDiagnostic) {
-        let did_insert = self.diagnostics.borrow_mut().insert(diagnostic);
-        if !did_insert {
-            debug!("Duplicate diagnostic: {}", diagnostic);
+        if let Some(existing) = self.diagnostics.borrow_mut().replace(diagnostic) {
+            debug!("Duplicate diagnostic was replaced: {}", existing);
         }
     }
 

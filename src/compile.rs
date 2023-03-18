@@ -114,7 +114,7 @@ fn begin_transpile_ast<'tree>(
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {
         let value_export_id = export_id_match.capture_named("value_export_id").map(|c| AstValueIdent::new(c.node));
         let type_export_id = export_id_match.capture_named("nominal_export_id").map(|c| AstTypeIdent::new(c.node));
-        let export_id_node = value_export_id.map(|v| v.node).or_else(|| type_export_id.map(|t| t.node))
+        let export_id_node = value_export_id.as_ref().map(|v| v.node).or_else(|| type_export_id.as_ref().map(|t| t.node))
             .expect("export_id_match should have either a value_export_id or a nominal_export_id");
         let export_alias_id_node = export_id_match.capture_named("export_alias_id").map(|c| c.node);
 
@@ -141,7 +141,7 @@ fn begin_transpile_ast<'tree>(
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.types.add_exported(original_name, alias, &mut e);
+                scope.borrow_mut().types_mut().add_exported(original_name, alias, &mut e);
             }
             Export::Value { original_name, alias } => {
                 if scope.downgrade() == root_scope {
@@ -150,7 +150,7 @@ fn begin_transpile_ast<'tree>(
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.values.add_exported(original_name, alias, &mut e);
+                scope.borrow_mut().values_mut().add_exported(original_name, alias, &mut e);
             }
         }
     }

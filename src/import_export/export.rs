@@ -28,7 +28,7 @@ pub struct Module {
 self_cell!(
     struct _Module {
         owner: TSTree,
-        #[covariant]
+        #[not_covariant]
         dependent: ModuleCtx,
     }
 
@@ -50,7 +50,7 @@ impl Module {
     pub fn new(ast: TSTree) -> Module {
         Module {
             exports: Exports::new(),
-            module_data: _Module::new(ast, ModuleCtx::new)
+            module_data: _Module::new(ast, |tree| ModuleCtx::new(tree))
         }
     }
 
@@ -62,7 +62,7 @@ impl Module {
         self.module_data.borrow_dependent()
     }
 
-    pub fn with_module_data_mut<'outer, R>(&mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
+    pub fn with_module_data_mut<'outer, R>(&'outer mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
         self.module_data.with_dependent_mut(|ast, module_ctx| fun(&mut self.exports, ast, module_ctx))
     }
 

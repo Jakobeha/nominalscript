@@ -131,17 +131,9 @@ pub type DynRlTypeDecl = DynResolvedLazy<FatTypeDecl>;
 
 /// A fat (with resolved context) version of data which can be stripped and converted back into the
 /// thin (without resolved context) version.
-pub trait IntoThin<Thin> {
-    /// Strips excess data and converts back into the thin version.
-    fn into_thin(self) -> Thin;
-
+pub trait ToThin<Thin> {
     /// Strips excess data and converts back into the thin version, cloning anything necessary.
-    ///
-    /// This defaults to cloning and calling `into_thin` but you may be able to implement without
-    /// cloning the excess data.
-    fn ref_into_thin(&self) -> Thin where Self: Sized {
-        self.clone().into_thin()
-    }
+    fn thin(&self) -> Thin;
 }
 
 /// A thin (without resolved context) version of data which can be resolved into the fat version
@@ -151,7 +143,7 @@ pub trait ResolveInto<Fat> {
     /// the thin version was already computed before, it is cached and `resolve` may be skipped.
     /// Therefore `resolve` should have no side-effects except for ones that would be redundant
     /// (e.g. logging diagnostics and going through imports is ok).
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Fat;
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Fat;
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -171,7 +163,7 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    fn with_other_file<R>(&mut self, path: &Path, fun: impl FnOnce(&mut Self) -> R) -> R {
+    fn with_other_file<R>(&mut self, path: &'a Path, fun: impl FnOnce(&mut Self) -> R) -> R {
         let original_path = self.imports.importer_path;
         self.imports.importer_path = path;
         let result = fun(self);
@@ -203,11 +195,11 @@ impl ResolveCache {
     }
 }
 
-impl<Thin, Fat: IntoThin<Thin>> ResolvedLazy<Thin, Fat> {
+impl<Thin, Fat: ToThin<Thin>> ResolvedLazy<Thin, Fat> {
     pub fn resolved(fat: Fat) -> Self {
         Self {
             scope_origin: None,
-            thin: fat.ref_into_thin(),
+            thin: fat.thin(),
             fat: OnceCell::with_value(fat)
         }
     }
@@ -228,7 +220,7 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
             let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade() } );
-            self.thin.resolve(scope, ctx)
+            self.thin.resolve(scope.as_ref(), ctx)
         })
     }
 }
@@ -249,7 +241,7 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
     /// **SAFETY:** The transformations must ensure that the following rules hold:
     ///
     /// ```coq
-    /// (∀ thin fat,     thin == fat.into_thin()  => f_thin(thin)              == f_fat(fat).into_thin()) /\
+    /// (∀ thin fat,     thin == fat.thin()       => f_thin(thin)              == f_fat(fat).thin()) /\
     /// (∀ thin fat ctx, thin.resolve(ctx) == fat => f_thin(thin.resolve(ctx)) == f_fat(fat))
     /// ```
     ///
@@ -268,50 +260,36 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
-impl IntoThin<ThinType> for FatType {
-    fn into_thin(self) -> ThinType {
-        match self {
-            FatType::Any => ThinType::Any,
-            FatType::Never { nullability } => ThinType::Never { nullability },
-            FatType::Structural { nullability, structure } => {
-                ThinType::Structural { nullability, structure: structure.into_thin() }
-            },
-            FatType::Nominal { nullability, id, inherited: _ } => {
-                ThinType::Nominal { nullability, id: id.into_thin() }
-            }
-            FatType::Hole { nullability, hole: _ } => ThinType::dummy_for_hole(nullability),
-        }
-    }
-
-    fn ref_into_thin(&self) -> ThinType {
+impl ToThin<ThinType> for FatType {
+    fn thin(&self) -> ThinType {
         match self {
             FatType::Any => ThinType::Any,
             FatType::Never { nullability } => ThinType::Never { nullability: *nullability },
             FatType::Structural { nullability, structure } => {
-                ThinType::Structural { nullability: *nullability, structure: structure.ref_into_thin() }
+                ThinType::Structural { nullability: *nullability, structure: structure.thin() }
             },
             FatType::Nominal { nullability, id, inherited: _ } => {
-                ThinType::Nominal { nullability: *nullability, id: id.ref_into_thin() }
+                ThinType::Nominal { nullability: *nullability, id: id.thin() }
             }
             FatType::Hole { nullability, hole: _ } => ThinType::dummy_for_hole(*nullability),
         }
     }
 }
 
-impl IntoThin<ThinTypeDecl> for FatTypeDecl {
-    fn into_thin(self) -> ThinTypeDecl {
+impl ToThin<ThinTypeDecl> for FatTypeDecl {
+    fn thin(&self) -> ThinTypeDecl {
         ThinTypeDecl {
-            name: self.name,
-            type_params: self.type_params.into_iter().map(|p| p.into_thin()).collect(),
-            supertypes: self.inherited.super_ids.into_iter()
+            name: self.name.clone(),
+            type_params: self.type_params.iter().map(|p| p.thin()).collect(),
+            supertypes: self.inherited.super_ids.iter()
                 .map(|id| ThinType::Nominal {
                     nullability: Nullability::NonNullable,
-                    id: id.into_thin(),
+                    id: id.thin(),
                 })
-                .chain(self.inherited.structure.map(|structure| {
+                .chain(self.inherited.structure.as_ref().map(|structure| {
                     ThinType::Structural {
                         nullability: Nullability::NonNullable,
-                        structure: structure.into_thin()
+                        structure: structure.thin()
                     }
                 }))
                 .collect(),
@@ -323,35 +301,35 @@ impl IntoThin<ThinTypeDecl> for FatTypeDecl {
     }
 }
 
-impl_by_map!(IntoThin (fn into_thin(self)) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
+impl_by_map!(ToThin (fn thin(&self) by map_ref) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
 
 impl ResolveInto<FatType> for ThinType {
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatType {
         ctx; todo!()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
         fat_param.into_decl(ctx.type_logger())
     }
 }
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> FatTypeDecl {
         ctx; todo!()
     }
 }
 
 impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> {
-    fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Alias::Fat {
+    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) -> Alias::Fat {
         let e = FileLogger::new(ctx.diagnostics);
         let scope = scope.expect("ScopeValueImportIdx::resolve: scope must be Some");
         let (import_path, import_node) = scope.import(self);
 
-        let (imported_ctx, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path, import_ctx| {
-            begin_transpile_file_no_cache(script_path, ctx.diagnostics).map_err(ImportError::from)
+        let (script_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path, import_ctx| {
+            begin_transpile_file_no_cache(script_path, ctx.project_diagnostics.file(script_path)).map_err(ImportError::from)
         }) {
             Err(import_error) => {
                 error!(e,
@@ -361,20 +339,18 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
             }
             Ok(module) => module
         };
-        ctx.with_other_file(script_path, |ctx| {
-            let imported = match module.exports.get(&self.imported_name) {
-                None => {
-                    error!(e, "{} not exported from module '{}': `{}`", Alias::capital_name_str(), import_path.module_path, self.imported_name => import_node);
-                    return Alias::Fat::default()
-                }
-                Some(imported) => imported
-            };
-            imported.resolve(ctx).clone()
-        })
+        let imported = match module.exports.get(&self.imported_name) {
+            None => {
+                error!(e, "{} not exported from module '{}': `{}`", Alias::capital_name_str(), import_path.module_path, self.imported_name => import_node);
+                return Alias::Fat::default()
+            }
+            Some(imported) => imported
+        };
+        ctx.with_other_file(script_path, move |ctx| imported.resolve(ctx).clone())
     }
 }
 
-impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>)) for TypeParam, OptionalType, ReturnType);
+impl_by_map!(ResolveInto (fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &mut ResolveCtx<'_>) by map_ref) for TypeParam, OptionalType, ReturnType);
 
 impl RlType {
     pub const ANY: Self = Self {
@@ -394,6 +370,10 @@ impl RlType {
         thin: ThinType::NEVER,
         fat: OnceCell::with_value(FatType::NEVER)
     };
+
+    pub const ANY_REF: &'static Self = &RlType::ANY as &'static Self;
+    pub const NEVER_REF: &'static Self = &RlType::NEVER as &'static Self;
+    pub const NULL_REF: &'static Self = &RlType::NULL as &'static Self;
 }
 
 impl RlTypeDecl {

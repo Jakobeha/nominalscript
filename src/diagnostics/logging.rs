@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::Path;
 
 use smallvec::SmallVec;
@@ -28,21 +29,21 @@ pub struct FileLogger<'a>(&'a FileDiagnostics);
 /// Type methods which can log diagnostics (e.g. unification) take this as a parameter named `e: TypeLogger` or
 /// `mut e: TypeLogger`. Instead of passing `e` directly to multiple children, you must use `e.with_context(...)`
 #[derive(Debug)]
-pub struct TypeLogger<'a, 'b: 'a, 'c: 'b>(_TypeLogger<'a, 'b, 'c>);
+pub struct TypeLogger<'a, 'b, 'tree>(_TypeLogger<'a, 'b, 'tree>);
 
 #[derive(Debug)]
-enum _TypeLogger<'a, 'b: 'a, 'c: 'b> {
-    Base { base: TypeLoggerBase<'b, 'c> },
-    Derived { base: &'a mut TypeLoggerBase<'b, 'c> },
+enum _TypeLogger<'a, 'b, 'tree> {
+    Base { base: TypeLoggerBase<'b, 'tree> },
+    Derived { base: &'a TypeLoggerBase<'b, 'tree> },
     Ignore
 }
 
 #[derive(Debug)]
-struct TypeLoggerBase<'b, 'c: 'b> {
-    file: &'b FileLogger<'c>,
-    inferred_loc: TSNode<'b>,
+struct TypeLoggerBase<'b, 'tree> {
+    diagnostics: &'b FileDiagnostics,
+    inferred_loc: TSNode<'tree>,
     // RULE A: these are always active references (though may have different lifetimes)
-    context: SmallVec<[TypeLocPtr; 2]>
+    context: RefCell<SmallVec<[TypeLocPtr; 2]>>
 }
 
 impl<'a> ProjectLogger<'a> {
@@ -67,46 +68,44 @@ impl<'a> FileLogger<'a> {
     pub fn log(&self, diagnostic: FileDiagnostic) {
         self.0.insert(diagnostic)
     }
-}
 
-impl<'c> FileLogger<'c> {
-    pub fn type_<'b>(&'b self, inferred_loc: TSNode<'b>) -> TypeLogger<'b, 'b, 'c> {
+    pub fn type_<'b, 'tree>(&'b self, inferred_loc: TSNode<'tree>) -> TypeLogger<'static, 'b, 'tree> {
         TypeLogger(_TypeLogger::Base { base: TypeLoggerBase {
-            file: self,
+            diagnostics: self.0,
             inferred_loc,
-            context: SmallVec::new()
+            context: RefCell::new(SmallVec::new())
         } })
     }
 }
 
-impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
-    pub fn ignore() -> TypeLogger<'a, 'b, 'c> {
+impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
+    pub fn ignore() -> TypeLogger<'a, 'b, 'tree> {
         TypeLogger(_TypeLogger::Ignore)
     }
 
     pub fn with_context<'a2>(
-        &'a2 mut self,
+        &'a2 self,
         context: TypeLoc<'_>
-    ) -> TypeLogger<'a2, 'b, 'c> {
+    ) -> TypeLogger<'a2, 'b, 'tree> {
         // ^ RULE A -> will pop context on derived drop
         match self.base() {
             None => TypeLogger::ignore(),
             Some(base) => {
-                base.context.push(context.as_ptr());
+                base.context.borrow_mut().push(context.as_ptr());
                 TypeLogger(_TypeLogger::Derived { base })
             }
         }
     }
 
-    fn base(&mut self) -> Option<&mut TypeLoggerBase<'b, 'c>> {
-        match &mut self.0 {
+    fn base(&self) -> Option<&TypeLoggerBase<'b, 'tree>> {
+        match &self.0 {
             _TypeLogger::Base { base } => Some(base),
             _TypeLogger::Derived { base } => Some(base),
             _TypeLogger::Ignore => None
         }
     }
 
-    pub fn log(&mut self, diagnostic: GlobalDiagnostic) {
+    pub fn log(&self, diagnostic: GlobalDiagnostic) {
         let Some(base) = self.base() else {
             return
         };
@@ -114,25 +113,26 @@ impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
             diagnostic,
             base.inferred_loc.range()
         );
-        for context in &base.context {
+        let context_borrow = base.context.borrow();
+        for context in &*context_borrow {
             // v RULE A
             let context = unsafe { context.as_ref() };
             diagnostic.add_info(note!("in {}", context));
         }
-        base.file.log(diagnostic)
+        base.diagnostics.insert(diagnostic)
     }
 }
 
-impl<'a, 'b: 'a, 'c: 'b> Drop for _TypeLogger<'a, 'b, 'c> {
+impl<'a, 'b, 'tree> Drop for _TypeLogger<'a, 'b, 'tree> {
     fn drop(&mut self) {
         match self {
             _TypeLogger::Base { base } => {
                 // Sanity check
-                debug_assert!(base.context.is_empty());
+                debug_assert!(base.context.borrow().is_empty());
             },
             _TypeLogger::Derived { base } => {
                 // ^ RULE A: Must pop top context as it's no longer live
-                base.context.pop();
+                base.context.borrow_mut().pop();
             },
             _TypeLogger::Ignore => {}
         }
@@ -276,7 +276,7 @@ mod tests {
 
         let mut diagnostics = ProjectDiagnostics::new();
         let p = Path::new("p");
-        let mut e = ProjectLogger::new(&mut diagnostics);
+        let e = ProjectLogger::new(&mut diagnostics);
         error!(e, "hello");
         warning!(e, "hello");
         info!(e, "hello");

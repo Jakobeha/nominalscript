@@ -125,9 +125,9 @@ pub struct PreorderTraversal<'tree> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TraversalItem<'tree> {
+pub struct TraversalItem<'a, 'tree> {
     node: TSNode<'tree>,
-    field_name: Option<&'static str>,
+    field_name: Option<&'a str>,
     last_state: TraversalState
 }
 
@@ -332,7 +332,7 @@ impl<'tree> TSNode<'tree> {
         self.node.child_by_field_name(field_name).map(|node| TSNode::new(node, self.tree))
     }
 
-    pub fn field_name(&self, cursor: &mut TSCursor<'tree>) -> Option<&str> {
+    pub fn field_name<'a>(&self, cursor: &'a mut TSCursor<'tree>) -> Option<&'a str> {
         self.parent().and_then(|parent| {
             cursor.goto(parent);
             cursor.goto_first_child();
@@ -483,7 +483,7 @@ impl TSQueryCursor {
         Self { query_cursor: tree_sitter::QueryCursor::new() }
     }
 
-    pub fn matches<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryMatches<'query, 'tree> {
+    pub fn matches<'query, 'tree: 'query>(&'query mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryMatches<'query, 'tree> {
         TSQueryMatches {
             query_matches: self.query_cursor.matches(&query, node.node, node.tree),
             tree: node.tree,
@@ -491,7 +491,7 @@ impl TSQueryCursor {
         }
     }
 
-    pub fn captures<'query, 'tree: 'query>(&mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryCaptures<'query, 'tree> {
+    pub fn captures<'query, 'tree: 'query>(&'query mut self, query: &'query TSQuery, node: TSNode<'tree>) -> TSQueryCaptures<'query, 'tree> {
         TSQueryCaptures {
             query_captures: self.query_cursor.captures(&query, node.node, node.tree),
             tree: node.tree,
@@ -572,7 +572,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
         self.query_match.id()
     }
 
-    pub fn remove(&mut self) {
+    pub fn remove(self) {
         self.query_match.remove()
     }
 
@@ -584,7 +584,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
 }
 
 impl<'query, 'tree> TSQueryCapture<'query, 'tree> {
-    fn new(query_capture: tree_sitter::QueryCapture, tree: &'tree TSTree, query: &'query TSQuery) -> Self {
+    fn new(query_capture: tree_sitter::QueryCapture<'tree>, tree: &'tree TSTree, query: &'query TSQuery) -> Self {
         Self {
             node: TSNode::new(query_capture.node, tree),
             name: &query.capture_names()[query_capture.index as usize]
@@ -659,7 +659,7 @@ impl<'tree> PreorderTraversal<'tree> {
         Self::with_cursor(node.walk())
     }
 
-    pub fn peek(&self) -> TraversalItem<'tree> {
+    pub fn peek(&self) -> TraversalItem<'_, 'tree> {
         TraversalItem {
             node: self.cursor.node(),
             field_name: self.cursor.field_name(),
@@ -675,12 +675,8 @@ impl<'tree> PreorderTraversal<'tree> {
             true
         }
     }
-}
 
-impl<'tree> Iterator for PreorderTraversal<'tree> {
-    type Item = TraversalItem<'tree>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<TraversalItem<'_, 'tree>> {
         if self.last_state.is_end() {
             None
         } else {
@@ -689,4 +685,4 @@ impl<'tree> Iterator for PreorderTraversal<'tree> {
             Some(item)
         }
     }
-}
+}}

@@ -10,8 +10,9 @@ use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, S
 use crate::analyses::scopes::scope_ptr::{ScopePtr, WeakScopePtr};
 use crate::analyses::types::{DeterminedReturnType, FatType, Nullability, ResolveCache, ReturnType, RlReturnType, RlType, ThinType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier};
+use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
 use crate::diagnostics::FileLogger;
+use crate::misc::InsertEntryExt;
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -35,7 +36,7 @@ pub struct Scope<'tree> {
 #[derive(Debug)]
 pub struct ValueScope<'tree> {
     params: IndexMap<ValueName, Box<AstParameter<'tree>>>,
-    hoisted: HashMap<ValueName, Box<dyn AstValueBinding<'tree>>>,
+    hoisted: HashMap<ValueName, Box<DynAstValueBinding<'tree>>>,
     sequential: HashMap<ValueName, Vec<Box<AstValueDecl<'tree>>>>,
     exported: HashMap<ValueName, ExportedId<'tree, ValueName>>,
     return_: Option<AstReturn<'tree>>,
@@ -46,7 +47,7 @@ pub struct ValueScope<'tree> {
 /// (top level, module, statement block, class declaration, arrow function, etc.)
 #[derive(Debug)]
 pub struct TypeScope<'tree> {
-    hoisted: HashMap<TypeName, Box<dyn AstTypeBinding<'tree>>>,
+    hoisted: HashMap<TypeName, Box<DynAstTypeBinding<'tree>>>,
     exported: HashMap<TypeName, ExportedId<'tree, TypeName>>,
 }
 
@@ -93,7 +94,7 @@ impl<'tree> Scope<'tree> {
     ///
     /// This expects idx to be from this scope as it also indexes `imported_script_paths` to get the
     /// [AstImportPath]. If you don't have this assumption this could return random unrelated values
-    pub fn value_import(&self, idx: &ScopeValueImportIdx) -> (&AstImportPath<'tree>, &dyn AstValueBinding<'tree>) {
+    pub fn value_import(&self, idx: &ScopeValueImportIdx) -> (&AstImportPath<'tree>, &DynAstValueBinding<'tree>) {
         let import_path = &self.imported_script_paths[idx.import_path_idx];
         (import_path, self.values.hoisted(&idx.imported_name).expect("value_import idx not in scope"))
     }
@@ -102,7 +103,7 @@ impl<'tree> Scope<'tree> {
     ///
     /// This expects idx to be from this scope as it also indexes `imported_script_paths` to get the
     /// [AstImportPath]. If you don't have this assumption this could return random unrelated values
-    pub fn type_import(&self, idx: &ScopeTypeImportIdx) -> (&AstImportPath<'tree>, &dyn AstTypeBinding<'tree>) {
+    pub fn type_import(&self, idx: &ScopeTypeImportIdx) -> (&AstImportPath<'tree>, &DynAstTypeBinding<'tree>) {
         let import_path = &self.imported_script_paths[idx.import_path_idx];
         (import_path, self.types.get(&idx.imported_name).expect("value_import idx not in scope"))
     }
@@ -164,18 +165,18 @@ impl<'tree> ValueScope<'tree> {
         self.sequential.entry(decl.name().clone()).or_default().push(Box::new(decl))
     }
 
-    pub fn add_exported(&mut self, original_name: AstValueIdent, alias: AstValueIdent, e: &mut FileLogger<'_>) {
+    pub fn add_exported(&mut self, original_name: AstValueIdent<'tree>, alias: AstValueIdent<'tree>, e: &mut FileLogger<'_>) {
         if !self.has_any(&original_name.name) {
             error!(e, "Value to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }
-        if let Some(prev_exported) = self.exported.insert(alias.name, ExportedId {
-            name: original_name.name,
-            alias_node: alias.node
-        }) {
-            error!(e, "Duplicate value export '{}'", &alias.name => alias.node;
+        self.exported.entry(alias.name).and_modify(|prev_exported| {
+            error!(e, "Duplicate value export '{}'", alias.name => alias.node;
                 issue!("there are multiple exported values with this name in the same scope");
                 hint!("previous export" => prev_exported.alias_node));
-        }
+        }).insert(ExportedId {
+            name: original_name.name,
+            alias_node: alias.node
+        })
     }
 
     pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
@@ -218,18 +219,18 @@ impl<'tree> ValueScope<'tree> {
         self.params.values().map(|param| param.as_ref())
     }
 
-    pub fn hoisted(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
-        self.hoisted.get(name).map(|x| x.as_ref() as &dyn AstValueBinding<'tree>)
-            .or_else(|| self.params.get(name).map(|x| x.as_ref() as &dyn AstValueBinding<'tree>))
+    pub fn hoisted(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
+        self.hoisted.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>)
+            .or_else(|| self.params.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>))
     }
 
     pub fn has_any(&self, name: &ValueName) -> bool {
         self.sequential.contains_key(name) || self.hoisted.contains_key(name) || self.params.contains_key(name)
     }
 
-    pub fn last(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
+    pub fn last(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
         self.sequential.get(name).map(|sequential| {
-            sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &dyn AstValueBinding<'tree>
+            sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &DynAstValueBinding<'tree>
         }).or_else(|| self.hoisted(name))
     }
 
@@ -237,10 +238,10 @@ impl<'tree> ValueScope<'tree> {
         self.at_pos(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
         return self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
-                .map(|decl| decl.as_ref() as &dyn AstValueBinding<'tree>)
+                .map(|decl| decl.as_ref() as &DynAstValueBinding<'tree>)
         }).or_else(|| self.hoisted(name))
     }
 
@@ -307,7 +308,7 @@ impl<'tree> TypeScope<'tree> {
         self.set(imported, e)
     }
 
-    pub fn set(&mut self, decl: impl AstTypeBinding<'tree>, e: &mut FileLogger<'_>) {
+    pub fn set(&mut self, decl: impl AstTypeBinding<'tree> + 'tree, e: &mut FileLogger<'_>) {
         if let Some(prev_decl) = self.get(decl.name()) {
             error!(e, "Duplicate nominal type declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
@@ -316,7 +317,7 @@ impl<'tree> TypeScope<'tree> {
         self.hoisted.insert(decl.name().clone(), Box::new(decl));
     }
 
-    pub fn add_exported(&mut self, original_name: AstTypeIdent, alias: AstTypeIdent, e: &mut FileLogger<'_>) {
+    pub fn add_exported(&mut self, original_name: AstTypeIdent<'tree>, alias: AstTypeIdent<'tree>, e: &mut FileLogger<'_>) {
         if !self.has_any(&original_name.name) {
             error!(e, "Type to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }
@@ -335,8 +336,8 @@ impl<'tree> TypeScope<'tree> {
         self.hoisted.contains_key(name)
     }
 
-    pub fn get(&self, name: &TypeName) -> Option<&dyn AstTypeBinding<'tree>> {
-        self.hoisted.get(name).map(|decl| decl.as_ref() as &dyn AstTypeBinding<'tree>)
+    pub fn get(&self, name: &TypeName) -> Option<&DynAstTypeBinding<'tree>> {
+        self.hoisted.get(name).map(|decl| decl.as_ref() as &DynAstTypeBinding<'tree>)
     }
 
     // TODO is the return type even correct?

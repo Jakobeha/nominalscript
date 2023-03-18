@@ -1,8 +1,8 @@
-use crate::analyses::bindings::{GlobalValueBinding, ValueBinding, ValueName};
+use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, scope_parent_of, ScopePtr};
 use crate::analyses::types::{DynRlType, RlType};
 use crate::ast::tree_sitter::{TSCursor, TSNode};
-use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueBinding, AstValueDecl};
+use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueBinding, AstValueDecl, DynAstValueBinding};
 use crate::diagnostics::{FileLogger};
 use crate::error;
 
@@ -40,22 +40,26 @@ impl<'tree> ScopeChain<'tree> {
         self.scopes.last().map(|(node, scope)| (*node, scope))
     }
 
+    fn top_mut(&mut self) -> Option<(TSNode<'tree>, &mut ScopePtr<'tree>)> {
+        self.scopes.last_mut().map(|(node, scope)| (*node, scope))
+    }
+
     pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
         // TODO: Fix so no double borrow
-        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_sequential(decl, e);
+        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_sequential(decl, e);
     }
 
     pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
         // TODO: Fix so no double borrow
-        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_return(return_, e);
+        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_return(return_, e);
     }
 
     pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
         // TODO: Fix so no double borrow
-        self.top().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_throw(throw, e);
+        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_throw(throw, e);
     }
 
-    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
+    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
         self.top().expect("ScopeChain is empty").1.values.hoisted(name)
     }
 
@@ -70,7 +74,7 @@ impl<'tree> ScopeChain<'tree> {
             GlobalValueBinding::has(name)
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn ValueBinding> {
+    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&DynValueBinding<'tree>> {
         let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
             if let Some(decl) = top.values.at_pos(name, pos_node) {
@@ -78,7 +82,7 @@ impl<'tree> ScopeChain<'tree> {
             }
         }
         top_to_bottom.find_map(|(_, scope)| scope.values.last(name).map(|decl| decl.up()))
-            .or_else(|| GlobalValueBinding::get(name).map(|decl| decl as &dyn ValueBinding))
+            .or_else(|| GlobalValueBinding::get(name).map(|decl| decl as &DynValueBinding<'tree>))
     }
 
     pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
@@ -95,11 +99,11 @@ impl<'tree> ScopeChain<'tree> {
     /// for subsequent calls (backwards inference).
     ///
     /// If the identifier has no binding, then logs an error and returns `NEVER`.
-    pub fn lookup<'a>(
+    pub fn lookup<'a, 'tree>(
         use_id: &ValueName,
-        use_node: TSNode<'_>,
-        scope: &'a ScopeChain,
-        typed_exprs: &'a ExprTypeMap,
+        use_node: TSNode<'tree>,
+        scope: &'a ScopeChain<'tree>,
+        typed_exprs: &'a ExprTypeMap<'tree>,
         e: &mut FileLogger<'_>,
     ) -> &'a DynRlType {
         scope
@@ -107,7 +111,7 @@ impl<'tree> ScopeChain<'tree> {
             .map(|def| def.infer_type(Some(typed_exprs)))
             .unwrap_or_else(|| {
                 error!(e, "undeclared identifier `{}`", use_id => use_node);
-                &RlType::NEVER as &DynRlType
+                RlType::NEVER_REF
             })
     }
 

@@ -19,15 +19,16 @@ pub enum Locality {
 
 /// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
-pub trait ValueBinding: Debug {
+pub trait ValueBinding<'tree>: Debug {
     fn name(&self) -> &ValueName;
     fn value_type(&self) -> &DynRlType;
     fn locality(&self) -> Locality;
 
-    fn infer_type(&self, _typed_exprs: Option<&ExprTypeMap<'_>>) -> &DynRlType {
+    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         self.value_type()
     }
 }
+pub type DynValueBinding<'tree> = dyn ValueBinding<'tree> + 'tree;
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
@@ -40,7 +41,7 @@ pub trait TypeBinding: Debug {
 /// [ValueBinding] inside the file. We track its local uses for type inference.
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
-pub trait LocalValueBinding<'tree>: AstNode<'tree> + ValueBinding {
+pub trait LocalValueBinding<'tree>: AstNode<'tree> + ValueBinding<'tree> {
     // Currently it doesn't seem we need this, since we only use them for backwards inference
     // and we can do backwards inference for type holes. Maybe in the future...
     // fn local_uses(&self) -> &LocalUses<'tree>;
@@ -59,7 +60,7 @@ pub trait LocalTypeBinding<'tree>: AstNode<'tree> + TypeBinding {}
 /// (although all imported bindings are currently hoisted unless `require` becomes supported).
 ///
 /// Also, all [TypeBinding]s are hoisted so this kind of trait doesn't make sense for them.
-pub trait HoistedValueBinding: ValueBinding {}
+pub trait HoistedValueBinding<'tree>: ValueBinding<'tree> {}
 
 /// [ValueBinding] which is implicitly available to the file (available and not imported).
 ///
@@ -107,12 +108,12 @@ impl GlobalValueBinding {
         todo!("something with lazy_static")
     }
 
-    pub fn get(name: &ValueName) -> Option<&GlobalValueBinding> {
+    pub fn get(name: &ValueName) -> Option<&'static GlobalValueBinding> {
         todo!("something with lazy_static")
     }
 }
 
-impl ValueBinding for GlobalValueBinding {
+impl<'tree> ValueBinding<'tree> for GlobalValueBinding {
     fn name(&self) -> &ValueName {
         &self.name
     }
@@ -154,7 +155,7 @@ impl GlobalTypeBinding {
         todo!("something with lazy_static")
     }
 
-    pub fn get(name: &TypeName) -> Option<&GlobalTypeBinding> {
+    pub fn get(name: &TypeName) -> Option<&'static GlobalTypeBinding> {
         todo!("something with lazy_static")
     }
 }
@@ -189,7 +190,7 @@ impl Hash for GlobalTypeBinding {
     }
 }
 
-impl HoistedValueBinding for GlobalValueBinding {}
+impl<'tree> HoistedValueBinding<'tree> for GlobalValueBinding {}
 
 // impl<'tree> LocalUses<'tree> {
 //     pub fn new() -> Self {
@@ -240,7 +241,7 @@ impl TypeName {
     }
 
     pub const fn new_inline(name: &'static str) -> Self {
-        assert!(!Self::RESERVED.contains(&name));
+        // const_assert!(!Self::RESERVED.contains(&name));
         Self(SmolStr::new_inline(name))
     }
 }

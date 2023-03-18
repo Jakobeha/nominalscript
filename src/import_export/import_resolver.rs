@@ -84,23 +84,18 @@ impl ImportResolver {
         let mut module_root_path = tsconfig_path;
         module_root_path.pop();
 
+        let (paths, base_url, module_resolution) = tsconfig
+            .and_then(|tsconfig| tsconfig.compiler_options)
+            .map(|compiler_options| (compiler_options.paths, compiler_options.base_url, compiler_options.module_resolution))
+            .unwrap_or_default();
         Ok(ImportResolver {
-            resolve_node_modules: tsconfig
-                .and_then(|tsconfig| tsconfig.compiler_options)
-                .and_then(|compiler_options| compiler_options.module_resolution)
+            resolve_node_modules: module_resolution.as_ref()
                 .filter(|module_resolution| matches!(module_resolution, tsconfig::ModuleResolutionMode::Node))
                 .is_some(),
-            absolute_import_source_paths: tsconfig
-                .and_then(|tsconfig| tsconfig.compiler_options)
-                .and_then(|compiler_options| compiler_options.paths)
+            absolute_import_source_paths: paths
                 .map(GlobPaths::from)
                 .unwrap_or_default(),
-            absolute_import_base_path: module_root_path.join(
-                tsconfig
-                    .and_then(|tsconfig| tsconfig.compiler_options)
-                    .and_then(|compiler_options| compiler_options.base_url)
-                    .unwrap_or_default()
-            ),
+            absolute_import_base_path: module_root_path.join(base_url.unwrap_or_default()),
             module_root_path,
         })
     }
@@ -136,14 +131,14 @@ impl ImportResolver {
                     }
                 },
                 ResolvedPath::NodeModule { node_module, remainder_path } => {
-                    let node_module_path = mk_path!(self.module_root_path.clone(), "node_modules", node_module);
-                    let d_ns_path = if_exists(mk_path!(node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
-                    let d_ts_path = if_exists(mk_path!(node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
-                    let js_path = if_exists(mk_path!(node_module_path, "out", "lib", remainder_path).with_extension("js"));
+                    let node_module_path = mk_path!(&self.module_root_path, "node_modules", node_module);
+                    let d_ns_path = if_exists(mk_path!(&node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
+                    let d_ts_path = if_exists(mk_path!(&node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
+                    let js_path = if_exists(mk_path!(&node_module_path, "out", "lib", remainder_path).with_extension("js"));
                     let arbitrary_path = if js_path.is_some() {
                         None
                     } else {
-                        if_exists(mk_path!(node_module_path, "out", "resources", remainder_path))
+                        if_exists(mk_path!(&node_module_path, "out", "resources", remainder_path))
                     };
                     if d_ns_path.is_none() || d_ts_path.is_none() || js_path.is_none() || arbitrary_path.is_none() {
                         return Ok(ResolvedFatPath {
@@ -229,7 +224,7 @@ impl GlobPaths {
     pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a str) -> impl Iterator<Item=PathBuf> + 'a {
         self.globs.matches(path).into_iter().flat_map(move |match_idx| {
             self.glob_paths[match_idx].clone().map(|resolved_path| {
-                mk_path!(base_path.clone(), resolved_path, path)
+                mk_path!(base_path, resolved_path, path)
             })
         })
     }

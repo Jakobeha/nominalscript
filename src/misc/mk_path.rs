@@ -22,5 +22,8 @@ mod tests {
 
         let b = mk_path!(PathBuf::from("z"), OsStr::new("x"), Path::new("y"));
         println!("{:?}", b);
+
+        let c = mk_path!(&PathBuf::from("z"), mk_path!(OsStr::new("x"), "y"));
+        println!("{:?}", b);
     }
 }

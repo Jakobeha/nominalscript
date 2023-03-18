@@ -57,16 +57,16 @@ impl<'tree> ModuleScopes<'tree> {
     /// Gets the parent scope containing the node
     ///
     /// *Panics* if the node is the tree root
-    pub fn of_node(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> &mut ScopePtr<'tree> {
+    pub fn of_node(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &mut ScopePtr<'tree> {
         let parent = scope_parent_of(node, c).expect("node is root so does not have a parent");
         self.get(parent, c)
     }
 
     /// Gets the scope denoted by the node (which should be a statement block, etc.)
-    pub fn get(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'_>) -> &mut ScopePtr<'tree> {
-        if let Some(scope) = self.scopes.get_mut(&node) {
+    pub fn get(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &mut ScopePtr<'tree> {
+        /*if let Some(scope) = self.scopes.get_mut(&node) {
             return scope
-        }
+        }*/
         // Truly awful pre-optimized code: what it does is add missing scopes for this node and
         // any parents which are also missing scopes, as well as lexical relations.
         let mut ancestors = scope_ancestors_and_types_of(node, c);

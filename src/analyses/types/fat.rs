@@ -270,11 +270,11 @@ impl FatType {
         todo!();
     }
 
-    pub fn unify_optionals<'a>(
+    pub fn unify_optionals<'a, 'b: 'a, 'tree: 'a>(
         this: &mut Vec<OptionalType<Self>>,
         other: Vec<OptionalType<Self>>,
         bias: Variance,
-        e: impl Fn(usize) -> TypeLogger<'a, 'a, 'a>
+        e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
     ) {
         todo!();
         /* let len = this.len().max(other.len());
@@ -285,11 +285,11 @@ impl FatType {
         } */
     }
 
-    pub fn unify_fields(
+    pub fn unify_fields<'a, 'b: 'a, 'tree: 'a>(
         this: &mut Vec<Field<OptionalType<Self>>>,
         other: Vec<Field<OptionalType<Self>>>,
         bias: Variance,
-        e: impl Fn(&ValueName) -> TypeLogger<'_, '_, '_>
+        e: impl Fn(&ValueName) -> TypeLogger<'a, 'b, 'tree>
     ) {
         todo!();
         /* for (name, this) in this.iter_mut() {

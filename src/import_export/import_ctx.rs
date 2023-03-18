@@ -59,7 +59,7 @@ impl<'a> ProjectImportCtx<'a> {
         Self { cache, resolver }
     }
 
-    pub(crate) fn shorten_lifetime(&self) -> ProjectImportCtx {
+    pub(crate) fn shorten_lifetime(&mut self) -> ProjectImportCtx<'_> {
         ProjectImportCtx { cache: self.cache, resolver: self.resolver }
     }
 
@@ -143,7 +143,7 @@ impl<'a> FileImportCtx<'a> {
     pub(crate) fn with_other_file<R>(&mut self, path: &Path, fun: impl FnOnce(&mut Self) -> R) -> R {
         let original_path = self.importer_path;
         self.importer_path = path;
-        let result = fun(&mut other);
+        let result = fun(self);
         self.importer_path = original_path;
         result
     }

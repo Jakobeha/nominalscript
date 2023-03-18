@@ -53,7 +53,7 @@ impl Project {
 }
 
 impl<'a> ProjectCtx<'a> {
-    pub fn file(&mut self, importer_path: &Path) -> FileCtx<'a> {
+    pub fn file<'b>(&'b mut self, importer_path: &'b Path) -> FileCtx<'b> {
         FileCtx {
             import_ctx: self.import_ctx.file(importer_path),
             diagnostics: &self.diagnostics.file(importer_path),
