@@ -13,6 +13,7 @@ use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
 use crate::{error, issue};
 use crate::analyses::bindings::ValueBinding;
+use crate::misc::Oob;
 
 #[derive(Debug, Display, From, Error)]
 pub enum FatalTranspileError {
@@ -27,7 +28,7 @@ pub enum FatalTranspileError {
 fn begin_transpile_file<'a>(
     script_path: &Path,
     ctx: &'a mut ProjectCtx<'_>
-) -> Result<&'a Module, ImportError> {
+) -> Result<&'a Module, Oob<'a, ImportError>> {
     let header = begin_transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
         let e = ProjectLogger::new(&ctx.diagnostics);
@@ -41,7 +42,7 @@ fn begin_transpile_file<'a>(
 fn begin_transpile_file_no_log_err<'a>(
     script_path: &Path,
     ctx: &'a mut ProjectCtx<'_>
-) -> Result<&'a Module, ImportError> {
+) -> Result<&'a Module, Oob<'a, ImportError>> {
     ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |import_ctx| {
         begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(script_path)).map_err(ImportError::from)
     })

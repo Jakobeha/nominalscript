@@ -219,7 +219,8 @@ impl<'tree> ValueScope<'tree> {
     }
 
     pub fn hoisted(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
-        self.hoisted.get(name).or_else(|| self.params.get(name)).as_deref()
+        self.hoisted.get(name).map(|x| x.as_ref() as &dyn AstValueBinding<'tree>)
+            .or_else(|| self.params.get(name).map(|x| x.as_ref() as &dyn AstValueBinding<'tree>))
     }
 
     pub fn has_any(&self, name: &ValueName) -> bool {
@@ -227,10 +228,9 @@ impl<'tree> ValueScope<'tree> {
     }
 
     pub fn last(&self, name: &ValueName) -> Option<&dyn AstValueBinding<'tree>> {
-        // `as_deref`s convert &Box<dyn ValueBinding> to &dyn ValueBinding
         self.sequential.get(name).map(|sequential| {
-            sequential.last().expect("sequential should never be Some(<empty vec>)") as &Box<dyn AstValueBinding<'tree>>
-        }).or_else(|| self.hoisted(name)).as_deref()
+            sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &dyn AstValueBinding<'tree>
+        }).or_else(|| self.hoisted(name))
     }
 
     pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
@@ -239,15 +239,16 @@ impl<'tree> ValueScope<'tree> {
 
     pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&dyn AstValueBinding<'tree>> {
         return self.sequential.get(name).and_then(|sequential| {
-            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte()) as Option<&Box<dyn AstValueBinding<'tree>>>
-        }).or_else(|| self.hoisted(name)).as_deref()
+            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
+                .map(|decl| decl.as_ref() as &dyn AstValueBinding<'tree>)
+        }).or_else(|| self.hoisted(name))
     }
 
     pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.sequential.get(name).and_then(|sequential| {
-            sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte() &&
-                decl.node().end_byte() >= pos_node.end_byte())
-        }).map(|decl| decl.as_ref())
+            sequential.iter().rfind(|decl| decl.node().end_byte() >= pos_node.end_byte() && decl.node().start_byte() <= pos_node.start_byte())
+                .map(|decl| decl.as_ref() as &AstValueDecl<'tree>)
+        })
     }
 
     pub fn exported(&self, alias: &ValueName) -> Option<&ExportedId<ValueName>> {
@@ -335,7 +336,7 @@ impl<'tree> TypeScope<'tree> {
     }
 
     pub fn get(&self, name: &TypeName) -> Option<&dyn AstTypeBinding<'tree>> {
-        self.hoisted.get(name).as_deref()
+        self.hoisted.get(name).map(|decl| decl.as_ref() as &dyn AstTypeBinding<'tree>)
     }
 
     // TODO is the return type even correct?

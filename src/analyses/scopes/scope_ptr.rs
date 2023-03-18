@@ -43,11 +43,11 @@ impl<'tree> ScopePtr<'tree> {
             panic!("Cannot borrow_mut a scope with multiple active pointers (has {})", Rc::strong_count(rc));
         }
         debug_assert!(!rc.is_being_mutated, "rc has one reference but is being mutated before borrow_mut call, how?");
-        rc.is_being_mutated = true;
         // SAFETY: There are no active Rc pointers, only Weak and raw pointers, and these ensure
         // that the value doesn't have a mutable refernence when they are upgraded.
         // Furthermore, all Weak pointers to Scope are of the same type (raw pointers don't matter)
         let mut_ = unsafe { rc_get_mut_unchecked(rc) };
+        mut_.is_being_mutated = true;
         // SAFETY: See first comment
         ScopeMut(unsafe { Pin::new_unchecked(mut_) })
     }
@@ -56,7 +56,7 @@ impl<'tree> ScopePtr<'tree> {
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn as_raw(this: &Self) -> RawScopePtr {
         // SAFETY: The pointer returned from as_ptr is not null since this exists
-        RawScopePtr(unsafe { NonNull::new_unchecked(Self::as_ptr(this) as *const Scope<'static> as *mut _) })
+        RawScopePtr(unsafe { NonNull::new_unchecked(Self::as_ptr(this).cast::<Scope<'static>>().cast_mut()) })
     }
 
     /// Downgrade to a weak scope pointer
@@ -188,7 +188,7 @@ impl RawScopePtr {
             // So this is equivalent to Rc::from_raw and Rc::into_raw.
             // And the pin is ok because Rc::pin trivially calls Pin::new_unchecked
             // (Rc is intrinsically Pinned since it's a pointer)
-            let ptr = self.0 as *const Scope<'tree>;
+            let ptr = self.0.as_ptr().cast_const().cast::<Scope<'tree>>();
             // We can't create the Rc if it's being mutated, so we read the raw address
             if addr_of!((*ptr).is_being_mutated).read() {
                 panic!("Cannot upgrade a scope while it is being mutated")

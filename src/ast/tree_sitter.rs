@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 use std::fs;
 use std::iter::{once, Once};
@@ -7,14 +8,13 @@ use derive_more::{Display, From, Error};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::ptr::NonNull;
-use crate::misc::id_maps::{Id, IdSet};
 
 #[derive(Debug)]
 pub struct TSTree {
     byte_text: Vec<u8>,
     tree: tree_sitter::Tree,
     cached_data: CachedTreeData,
-    marked_nodes: RefCell<IdSet<TSNodeId>>
+    marked_nodes: RefCell<HashSet<TSNodeId>>
 }
 
 #[derive(Debug)]
@@ -164,7 +164,7 @@ impl TSTree {
     fn new(tree: tree_sitter::Tree, byte_text: Vec<u8>) -> Result<Self, TreeCreateError> {
         Self::validate_utf8(&tree, &byte_text)?;
         let cached_data = CachedTreeData::new(&tree);
-        Ok(Self { byte_text, tree, cached_data, marked_nodes: RefCell::new(IdSet::new()) })
+        Ok(Self { byte_text, tree, cached_data, marked_nodes: RefCell::new(HashSet::new()) })
     }
 
     fn validate_utf8(tree: &tree_sitter::Tree, byte_text: &[u8]) -> Result<(), TreeCreateError> {
@@ -322,7 +322,7 @@ impl<'tree> TSNode<'tree> {
             .map(|node| TSNode::new(node, self.tree))
     }
 
-    pub fn children_of_kind(&self, kind: &'static str, cursor: &mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'tree {
+    pub fn children_of_kind<'a>(&'a self, kind: &'static str, cursor: &'a mut TSCursor<'tree>) -> impl Iterator<Item = TSNode<'tree>> + 'a {
         self.node.named_children(&mut cursor.cursor)
             .filter(move |node| node.kind() == kind)
             .map(|node| TSNode::new(node, self.tree))
@@ -378,7 +378,7 @@ impl<'tree> TSNode<'tree> {
     }
 
     pub fn is_marked(&self) -> bool {
-        self.tree.marked_nodes.borrow().contains(self.id())
+        self.tree.marked_nodes.borrow().contains(&self.id())
     }
 
     /// *Panics* if a child is already marked
@@ -557,7 +557,7 @@ impl<'query, 'tree> TSQueryMatch<'query, 'tree> {
     }
 
     pub fn captures_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = TSQueryCapture<'query, 'tree>> + 'a {
-        self.iter_captures().filter(|capture| capture.name == name)
+        self.iter_captures().filter(move |capture| capture.name == name)
     }
 
     pub fn capture_count(&self) -> usize {
@@ -611,8 +611,6 @@ impl Into<u64> for TSNodeId {
         self.0 as u64
     }
 }
-
-impl Id for TSNodeId {}
 
 impl CachedTreeData {
     fn new(_tree: &tree_sitter::Tree) -> Self {

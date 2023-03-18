@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::hash::Hash;
 use derive_more::Display;
 use smol_str::SmolStr;
 use crate::analyses::scopes::ExprTypeMap;
@@ -63,6 +64,7 @@ pub trait HoistedValueBinding: ValueBinding {}
 /// [ValueBinding] which is implicitly available to the file (available and not imported).
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
+#[derive(Debug, Clone)]
 pub struct GlobalValueBinding {
     pub name: ValueName,
     pub type_: RlType,
@@ -71,6 +73,7 @@ pub struct GlobalValueBinding {
 /// [TypeBinding] which is implicitly available to the file (available and not imported).
 ///
 /// There are 3 kinds of bindings: local, imported, and global.
+#[derive(Debug, Clone)]
 pub struct GlobalTypeBinding {
     pub name: TypeName,
     pub decl: RlTypeDecl,
@@ -123,6 +126,22 @@ impl ValueBinding for GlobalValueBinding {
     }
 }
 
+impl PartialEq<GlobalValueBinding> for GlobalValueBinding {
+    fn eq(&self, other: &GlobalValueBinding) -> bool {
+        // Name is the only thing that matters:
+        // if 2 different global bindings had the same name, how would we resolve them?
+        self.name == other.name
+    }
+}
+
+impl Eq for GlobalValueBinding {}
+
+impl Hash for GlobalValueBinding {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
 impl GlobalTypeBinding {
     pub fn new(name: TypeName, decl: FatTypeDecl) -> Self {
         Self {
@@ -151,6 +170,22 @@ impl TypeBinding for GlobalTypeBinding {
 
     fn locality(&self) -> Locality {
         Locality::Global
+    }
+}
+
+impl PartialEq<GlobalTypeBinding> for GlobalTypeBinding {
+    fn eq(&self, other: &GlobalTypeBinding) -> bool {
+        // Name is the only thing that matters:
+        // if 2 different global bindings had the same name, how would we resolve them?
+        self.name == other.name
+    }
+}
+
+impl Eq for GlobalTypeBinding {}
+
+impl Hash for GlobalTypeBinding {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
     }
 }
 

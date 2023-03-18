@@ -107,7 +107,9 @@ impl<'a, 'b: 'a, 'c: 'b> TypeLogger<'a, 'b, 'c> {
     }
 
     pub fn log(&mut self, diagnostic: GlobalDiagnostic) {
-        let base = self.base();
+        let Some(base) = self.base() else {
+            return
+        };
         let mut diagnostic = FileDiagnostic::from_global(
             diagnostic,
             base.inferred_loc.range()

@@ -9,6 +9,7 @@ use log::debug;
 use smallvec::SmallVec;
 
 use crate::ast::tree_sitter::TSRange;
+use crate::misc::FrozenMapIter;
 
 pub struct ProjectDiagnostics {
     global: RefCell<BTreeSet<GlobalDiagnostic>>,
@@ -145,12 +146,13 @@ impl GlobalDiagnostic {
 // region display
 impl Display for ProjectDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let global = self.global.borrow();
-        for diagnostic in &*global {
+        let global_borrow = self.global.borrow();
+        for diagnostic in &*global_borrow {
             writeln!(f, "{}", diagnostic)?;
         }
-        for (path, diagnostics) in FrozenMapIter(&self.by_file) {
-            for diagnostic in diagnostics {
+        for (path, diagnostics) in FrozenMapIter::new(&self.by_file) {
+            let diagnostics_borrow = diagnostics.diagnostics.borrow();
+            for diagnostic in &*diagnostics_borrow {
                 write!(f, "{}:", path.display())?;
                 writeln!(f, "{}", diagnostic)?;
             }

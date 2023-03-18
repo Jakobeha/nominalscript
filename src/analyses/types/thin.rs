@@ -284,13 +284,25 @@ impl ThinType {
 
     impl_structural_type_constructors!();
 
-    pub fn nullable(self) -> Self {
+    pub fn make_nullable(&mut self) {
         match self {
-            Self::Any => Self::Any,
-            Self::Never { nullability: _ } => Self::Never { nullability: Nullability::Nullable },
-            Self::Structural { nullability: _, structure } => Self::Structural { nullability: Nullability::Nullable, structure },
-            Self::Nominal { nullability: _, id } => Self::Nominal { nullability: Nullability::Nullable, id },
+            Self::Any => {},
+            Self::Never { nullability } => *nullability = Nullability::Nullable,
+            Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
+            Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
         }
+    }
+
+    pub fn make_nullable_if(&mut self, nullable: bool) {
+        if nullable {
+            self.make_nullable();
+        }
+    }
+
+    pub fn nullable(self) -> Self {
+        let mut clone = self.clone();
+        clone.make_nullable();
+        clone
     }
 
     pub fn nullable_if(self, nullable: bool) -> Self {
@@ -298,16 +310,6 @@ impl ThinType {
             self.nullable()
         } else {
             self
-        }
-    }
-
-    pub fn make_nullable(&mut self) {
-        *self = self.nullable();
-    }
-
-    pub fn make_nullable_if(&mut self, nullable: bool) {
-        if nullable {
-            self.make_nullable();
         }
     }
 }
@@ -341,7 +343,7 @@ impl<Type> TypeStructure<Type> {
         }
     }
 
-    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
+    pub fn map<NewType>(self, mut f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
         match self {
             TypeStructure::Fn { fn_type } => TypeStructure::Fn {
                 fn_type: Box::new(fn_type.map(f)),
@@ -350,10 +352,10 @@ impl<Type> TypeStructure<Type> {
                 element_type: Box::new(f(*element_type)),
             },
             TypeStructure::Tuple { element_types } => TypeStructure::Tuple {
-                element_types: element_types.into_iter().map(|elem| elem.map(f)).collect(),
+                element_types: element_types.into_iter().map(|elem| elem.map(&mut f)).collect(),
             },
             TypeStructure::Object { field_types } => TypeStructure::Object {
-                field_types: field_types.into_iter().map(|field| field.map(|opt| opt.map(f))).collect(),
+                field_types: field_types.into_iter().map(|field| field.map(|opt| opt.map(&mut f))).collect(),
             },
         }
     }
