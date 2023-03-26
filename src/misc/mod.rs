@@ -7,8 +7,6 @@ mod frozen_map_iter;
 mod mk_path;
 /// Generate impl which just calls `map` on the inner value
 mod impl_by_map;
-/// [std::collections::hash_map::Entry::insert_entry] but stable and doesn't return anything
-mod entry_insert;
 /// `OnceCell::with_option`
 mod once_cell_with_option;
 
