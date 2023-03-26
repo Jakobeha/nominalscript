@@ -1,5 +1,5 @@
-/// [HashMap::insert_entry] but stable and doesn't return anything
-pub trait InsertEntryExt<'a, K, V> {
+/// [std::collections::hash_map::Entry::insert_entry] but stable and doesn't return anything
+pub trait EntryInsertExt<'a, K, V> {
     /// Sets the value of the entry, replacing the old value if it exists.
     ///
     /// # Examples
@@ -15,7 +15,7 @@ pub trait InsertEntryExt<'a, K, V> {
     fn insert(self, value: V);
 }
 
-impl<'a, K, V> InsertEntryExt<'a, K, V> for std::collections::hash_map::Entry<'a, K, V> {
+impl<'a, K, V> EntryInsertExt<'a, K, V> for std::collections::hash_map::Entry<'a, K, V> {
     fn insert(self, value: V) {
         match self {
             std::collections::hash_map::Entry::Occupied(mut entry) => { entry.insert(value); }

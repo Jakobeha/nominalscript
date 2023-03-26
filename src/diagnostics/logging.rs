@@ -1,11 +1,11 @@
 use std::cell::RefCell;
-use std::path::Path;
 
 use smallvec::SmallVec;
 
 use crate::analyses::types::{TypeLoc, TypeLocPtr};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
+use crate::import_export::ModulePath;
 use crate::note;
 
 /// Allows you to log project (global or file) diagnostics.
@@ -51,7 +51,7 @@ impl<'a> ProjectLogger<'a> {
         Self(diagnostics)
     }
 
-    pub fn file(&self, path: impl AsRef<Path>) -> FileLogger<'a> {
+    pub fn file(&self, path: &ModulePath) -> FileLogger<'a> {
         FileLogger(self.0.file(path))
     }
 
@@ -254,13 +254,14 @@ macro_rules! note_if {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::PathBuf;
 
     use tree_sitter_typescript::language_typescript;
 
     use crate::{debug, error, hint, info, issue, note, warning, hint_if, note_if, issue_if};
     use crate::ast::tree_sitter::TSParser;
     use crate::diagnostics::{ProjectDiagnostics, ProjectLogger};
+    use crate::import_export::ModulePath;
 
     #[test]
     pub fn test() {
@@ -275,16 +276,16 @@ mod tests {
         let b_node = a_node.named_child(1).unwrap();
 
         let mut diagnostics = ProjectDiagnostics::new();
-        let p = Path::new("p");
+        let p = ModulePath::ns(PathBuf::from("p.ns"));
         let e = ProjectLogger::new(&mut diagnostics);
         error!(e, "hello");
         warning!(e, "hello");
         info!(e, "hello");
         debug!(e, "hello");
-        error!(e.file(p), "hello" => a_node);
-        warning!(e.file(p), "hello {}", "hello" => a_node);
-        info!(e.file(p), "hello {:?} {:?}", "hello", a_node => a_node);
-        debug!(e.file(p), "hello" => a_node);
+        error!(e.file(&p), "hello" => a_node);
+        warning!(e.file(&p), "hello {}", "hello" => a_node);
+        info!(e.file(&p), "hello {:?} {:?}", "hello", a_node => a_node);
+        debug!(e.file(&p), "hello" => a_node);
         error!(e, "hello";
             issue!("hello"));
         warning!(e, "hello";
@@ -302,23 +303,23 @@ mod tests {
             issue!("hello {:?}", "hello");
             hint!("hello" => b_node);
             note!("hello"));
-        warning!(e.file(p), "hello" => a_node;
+        warning!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
             hint!("hello" => b_node);
             note!("hello"));
-        info!(e.file(p), "hello" => a_node;
+        info!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
             hint!("hello" => b_node);
             Some(5).into_iter().flat_map(|n| note!("hello {}", n)));
-        debug!(e.file(p), "hello" => a_node;
+        debug!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
             hint!("hello" => b_node);
             note_if!(Some(5) => n, "hello {}", n));
-        error!(e.file(p), "hello" => a_node;
+        error!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
             hint_if!(None::<String> => n, "hello {}", n);
             hint!("hello" => b_node));
-        warning!(e.file(p), "hello" => a_node;
+        warning!(e.file(&p), "hello" => a_node;
             issue_if!(Some(5) => n, "hello {}", n);
             hint!("hello {:?}", "hello");
             hint!("hello" => b_node));

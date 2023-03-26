@@ -1,6 +1,5 @@
-use std::cell::Ref;
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use derive_more::{Display, Error};
 
@@ -8,6 +7,7 @@ use crate::compile::FatalTranspileError;
 use crate::import_export::export::{ImportPath, Module};
 use crate::import_export::import_cache::ImportCache;
 use crate::import_export::import_resolver::{ImportResolver, ResolvedFatPath, ResolveFailure};
+use crate::import_export::ModulePath;
 
 /// Caches and resolves imports.
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub struct ProjectImportCtx<'a> {
 #[derive(Debug)]
 pub struct FileImportCtx<'a> {
     pub project_ctx: ProjectImportCtx<'a>,
-    pub(crate) importer_path: &'a Path
+    pub(crate) importer_path: &'a ModulePath
 }
 
 #[derive(Debug, Display, Error)]
@@ -47,7 +47,7 @@ impl<'a> ProjectImportCtx<'a> {
         Self { cache, resolver }
     }
 
-    pub(crate) fn file<'b>(&'b self, importer_path: &'b Path) -> FileImportCtx<'b> {
+    pub(crate) fn file<'b>(&'b self, importer_path: &'b ModulePath) -> FileImportCtx<'b> {
         FileImportCtx { project_ctx: ProjectImportCtx::new(&self.cache, &self.resolver), importer_path }
     }
 
@@ -58,22 +58,21 @@ impl<'a> ProjectImportCtx<'a> {
         &self,
         importer_path: &Path,
         module_path: &ImportPath,
-        transpile: impl FnOnce(&Path) -> Result<Module, ImportError>
-    ) -> Result<(&Path, Rc<Module>), Rc<ImportError>> {
+        transpile: impl FnOnce(&Path, &ResolvedFatPath) -> Result<Module, ImportError>
+    ) -> Result<(&ModulePath, &Module), Cow<'_, ImportError>> {
         let fat_path = self.resolve_and_cache_fat_path(importer_path, module_path);
         if fat_path.is_null() {
-            return Err(Rc::new(ImportError::CouldNotResolve { module_path: module_path.to_string() }));
+            return Err(Cow::Owned(ImportError::CouldNotResolve { module_path: module_path.to_string() }));
         }
-        let nominalscript_path = fat_path.nominalscript_path.clone();
         self.cache.cache_transpile(
             fat_path,
             || {
-                let Some(nominalscript_path) = nominalscript_path.as_ref() else {
+                let Some(nominalscript_path) = fat_path.nominalscript_path.as_ref() else {
                     return Err(ImportError::NoNominalScript { fat_path: fat_path.clone() });
                 };
-                transpile(nominalscript_path)
+                transpile(nominalscript_path, fat_path)
             }
-        ).map(|module| (nominalscript_path.expect("nullity should be checked in transpile or cached"), module))
+        ).map(|module| (fat_path, module)).map_err(Cow::Borrowed)
     }
 
     /// Resolves declarations / nominal exports and also checks that `scriptPath` is correct.
@@ -82,18 +81,18 @@ impl<'a> ProjectImportCtx<'a> {
     pub fn resolve_auxillary_and_cache_transpile(
         &self,
         script_path: &Path,
-        transpile: impl FnOnce() -> Result<Module, ImportError>
-    ) -> Result<Rc<Module>, Rc<ImportError>> {
+        transpile: impl FnOnce(&ModulePath) -> Result<Module, ImportError>
+    ) -> Result<&Module, Cow<'_, ImportError>> {
         let fat_path = self.resolver
             .fat_script_path(script_path)
-            .map_err(|resolve_failure| Rc::new(ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure }))?;
+            .map_err(|resolve_failure| Cow::Owned(ImportError::CouldNotResolvePath { path: script_path.to_path_buf(), resolve_failure }))?;
         if fat_path.nominalscript_path.is_none() {
-            return Err(Rc::new(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() }));
+            return Err(Cow::Owned(ImportError::NotNominalScriptPath { path: script_path.to_path_buf() }));
         }
-        self.cache.cache_transpile2(fat_path, transpile)
+        self.cache.cache_transpile2(fat_path, |fat_path| transpile(fat_path)).map_err(Cow::Borrowed)
     }
 
-    fn resolve_and_cache_fat_path(&self, importer_path: &Path, module_path: &ImportPath) -> Ref<'_, ResolvedFatPath> {
+    fn resolve_and_cache_fat_path(&self, importer_path: &Path, module_path: &ImportPath) -> &ResolvedFatPath {
         self.cache.cache_resolve_module(
             (importer_path, module_path),
             || self.resolver.locate(&module_path, Some(importer_path))
@@ -102,7 +101,7 @@ impl<'a> ProjectImportCtx<'a> {
 }
 
 impl<'a> FileImportCtx<'a> {
-    pub(crate) fn other_file<'b>(&'b self, path: &'b Path) -> FileImportCtx<'b> {
+    pub(crate) fn other_file<'b>(&'b self, path: &'b ModulePath) -> FileImportCtx<'b> {
         self.project_ctx.file(path)
     }
 
@@ -112,9 +111,9 @@ impl<'a> FileImportCtx<'a> {
     pub fn resolve_and_cache_transpile(
         &self,
         module_path: &ImportPath,
-        transpile: impl FnOnce(&Path) -> Result<Module, ImportError>
-    ) -> Result<(&Path, Rc<Module>), Rc<ImportError>> {
-        self.project_ctx.resolve_and_cache_transpile(self.importer_path, module_path, transpile)
+        transpile: impl FnOnce(&Path, &ResolvedFatPath) -> Result<Module, ImportError>
+    ) -> Result<(&ModulePath, &Module), Cow<'_, ImportError>> {
+        self.project_ctx.resolve_and_cache_transpile(self.importer_path.path(), module_path, transpile)
     }
 }
 

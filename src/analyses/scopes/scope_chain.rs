@@ -111,7 +111,7 @@ impl<'tree> ScopeChain<'tree> {
             .map(|def| def.infer_type(Some(typed_exprs)))
             .unwrap_or_else(|| {
                 error!(e, "undeclared identifier `{}`", use_id => use_node);
-                RlType::NEVER_REF
+                RlType::never_ref()
             })
     }
 

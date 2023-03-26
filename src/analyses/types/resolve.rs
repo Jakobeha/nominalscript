@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
-use std::path::Path;
+use std::ops::Deref;
 
 use elsa::FrozenMap;
 use once_cell::unsync::OnceCell;
@@ -12,6 +12,7 @@ use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, Re
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};
+use crate::import_export::ModulePath;
 use crate::misc::{impl_by_map, OnceCellExt};
 
 /// `ResolvedLazy` = lazy value which is "resolved" according to how NominalScript does unordered
@@ -147,7 +148,7 @@ pub trait ResolveInto<Fat> {
 }
 
 impl<'a> ResolveCtx<'a> {
-    fn other_file<'b>(&'b self, path: &'b Path) -> ResolveCtx<'b> {
+    fn other_file<'b>(&'b self, path: &'b ModulePath) -> ResolveCtx<'b> {
         ResolveCtx {
             imports: self.imports.other_file(path),
             diagnostics: self.project_diagnostics.file(path),
@@ -312,8 +313,8 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
         let scope = scope.expect("ScopeValueImportIdx::resolve: scope must be Some");
         let (import_path, import_node) = scope.import(self);
 
-        let (script_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path| {
-            begin_transpile_file_no_cache(script_path, ctx.project_diagnostics.file(script_path)).map_err(ImportError::from)
+        let (module_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path, module_path| {
+            begin_transpile_file_no_cache(script_path, ctx.project_diagnostics.file(module_path)).map_err(ImportError::from)
         }) {
             Err(import_error) => {
                 error!(e,
@@ -330,7 +331,7 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
             }
             Some(imported) => imported
         };
-        imported.resolve(&ctx.other_file(script_path)).clone()
+        imported.resolve(&ctx.other_file(module_path)).clone()
     }
 }
 
@@ -355,10 +356,50 @@ impl RlType {
         fat: OnceCell::with_value(FatType::NEVER)
     };
 
-    pub const ANY_REF: &'static Self = &RlType::ANY as &'static Self;
-    pub const NEVER_REF: &'static Self = &RlType::NEVER as &'static Self;
-    pub const NULL_REF: &'static Self = &RlType::NULL as &'static Self;
+    pub fn any_ref() -> &'static Self {
+        // SAFETY: THIS instance has no possible interior mutability (`fat` cell has a value)
+        ANY_STATIC.as_ref()
+    }
+
+    pub fn never_ref() -> &'static Self {
+        // SAFETY: THIS instance has no possible interior mutability (`fat` cell has a value)
+        NEVER_STATIC.as_ref()
+    }
+
+    pub fn null_ref() -> &'static Self {
+        // SAFETY: THIS instance has no possible interior mutability (`fat` cell has a value)
+        NULL_STATIC.as_ref()
+    }
 }
+
+/// [RlType] which is sync because the interior mutability is blocked ([OnceCell] is already filled).
+/// It can be shared across threads, but the inner value can only be accessed if there is no
+/// interior mutability, otherwise it will panic to prevent UB.
+#[repr(transparent)]
+struct SyncRlType(RlType);
+
+impl AsRef<RlType> for SyncRlType {
+    fn as_ref(&self) -> &RlType {
+        assert!(self.0.fat.get().is_some(), "can't get inner value because there is possible unsafe interior mutability");
+        // SAFETY: THIS instance is ok to be accessed across threads, because it has no interior mutability
+        &self.0
+    }
+}
+
+impl Deref for SyncRlType {
+    type Target = RlType;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+unsafe impl Sync for SyncRlType {}
+
+// SAFETY: THESE instances are sync because their `fat` cell has a value
+static ANY_STATIC: SyncRlType = SyncRlType(RlType::ANY);
+static NEVER_STATIC: SyncRlType = SyncRlType(RlType::NEVER);
+static NULL_STATIC: SyncRlType = SyncRlType(RlType::NULL);
 
 impl RlTypeDecl {
     pub const MISSING: Self = Self {

@@ -12,7 +12,6 @@ use crate::analyses::types::{DeterminedReturnType, FatType, Nullability, Resolve
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
 use crate::diagnostics::FileLogger;
-use crate::misc::InsertEntryExt;
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -52,7 +51,7 @@ pub struct TypeScope<'tree> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExportedId<'tree, Name> {
+pub struct ExportedId<'tree, Name> {
     pub alias_node: TSNode<'tree>,
     pub name: Name
 }
@@ -147,7 +146,7 @@ impl<'tree> ValueScope<'tree> {
         self.params.extend(params.map(|param| (param.name().clone(), Box::new(param))));
     }
 
-    pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree> + 'tree, e: &mut FileLogger<'_>) {
         if let Some(prev_decl) = self.hoisted(decl.name()) {
             error!(e, "Duplicate value declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
@@ -169,14 +168,24 @@ impl<'tree> ValueScope<'tree> {
         if !self.has_any(&original_name.name) {
             error!(e, "Value to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }
-        self.exported.entry(alias.name).and_modify(|prev_exported| {
-            error!(e, "Duplicate value export '{}'", alias.name => alias.node;
-                issue!("there are multiple exported values with this name in the same scope");
-                hint!("previous export" => prev_exported.alias_node));
-        }).insert(ExportedId {
-            name: original_name.name,
-            alias_node: alias.node
-        })
+        let entry = self.exported.entry(alias.name);
+        match entry {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(ExportedId {
+                    name: original_name.name,
+                    alias_node: alias.node
+                });
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                error!(e, "Duplicate value export '{}'", entry.key() => alias.node;
+                    issue!("there are multiple exported values with this name in the same scope");
+                    hint!("previous export" => entry.get().alias_node));
+                entry.insert(ExportedId {
+                    name: original_name.name,
+                    alias_node: alias.node
+                });
+            }
+        }
     }
 
     pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {

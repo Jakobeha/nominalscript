@@ -125,9 +125,9 @@ pub struct PreorderTraversal<'tree> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TraversalItem<'a, 'tree> {
+pub struct TraversalItem<'tree> {
     node: TSNode<'tree>,
-    field_name: Option<&'a str>,
+    field_name: Option<&'static str>,
     last_state: TraversalState
 }
 
@@ -445,7 +445,7 @@ impl<'tree> TSCursor<'tree> {
         TSNode::new(self.cursor.node(), self.tree)
     }
 
-    pub fn field_name(&self) -> Option<&str> {
+    pub fn field_name(&self) -> Option<&'static str> {
         self.cursor.field_name()
     }
 
@@ -671,7 +671,7 @@ impl<'tree> PreorderTraversal<'tree> {
         Self::with_cursor(node.walk())
     }
 
-    pub fn peek(&self) -> TraversalItem<'_, 'tree> {
+    pub fn peek(&self) -> TraversalItem<'tree> {
         TraversalItem {
             node: self.cursor.node(),
             field_name: self.cursor.field_name(),
@@ -687,14 +687,17 @@ impl<'tree> PreorderTraversal<'tree> {
             true
         }
     }
+}
 
-    fn next(&mut self) -> Option<TraversalItem<'_, 'tree>> {
+impl<'tree> Iterator for PreorderTraversal<'tree> {
+    type Item = TraversalItem<'tree>;
+
+    fn next(&mut self) -> Option<TraversalItem<'tree>> {
         if self.last_state.is_end() {
-            None
-        } else {
-            let item = self.peek();
-            self.last_state = self.cursor.goto_preorder(self.last_state);
-            Some(item)
+            return None
         }
+        let item = self.peek();
+        self.last_state = self.cursor.goto_preorder(self.last_state);
+        Some(item)
     }
 }

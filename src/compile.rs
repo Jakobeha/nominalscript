@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::path::Path;
-use std::rc::Rc;
 
 use derive_more::{Display, Error, From};
 
-use crate::ProjectCtx;
+use crate::{error, issue};
+use crate::analyses::bindings::ValueBinding;
 use crate::analyses::scopes::ModuleCtx;
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
@@ -12,8 +13,7 @@ use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, 
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
-use crate::{error, issue};
-use crate::analyses::bindings::ValueBinding;
+use crate::ProjectCtx;
 
 #[derive(Debug, Clone, Display, From, Error)]
 pub enum FatalTranspileError {
@@ -25,10 +25,10 @@ pub enum FatalTranspileError {
 ///
 /// If successful, the transpiled file (module) will be cached in `ctx`,
 /// so calling again will just return the same result
-fn begin_transpile_file(
+fn begin_transpile_file<'a>(
     script_path: &Path,
-    ctx: &ProjectCtx<'_>
-) -> Result<Rc<Module>, Rc<ImportError>> {
+    ctx: &'a ProjectCtx<'_>
+) -> Result<&'a Module, Cow<'a, ImportError>> {
     let header = begin_transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
         let e = ProjectLogger::new(&ctx.diagnostics);
@@ -41,10 +41,10 @@ fn begin_transpile_file(
 /// [begin_transpile_file] but doesn't log the import error
 fn begin_transpile_file_no_log_err<'a>(
     script_path: &Path,
-    ctx: &ProjectCtx<'_>
-) -> Result<Rc<Module>, Rc<ImportError>> {
-    ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, || {
-        begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(script_path)).map_err(ImportError::from)
+    ctx: &'a ProjectCtx<'_>
+) -> Result<&'a Module, Cow<'a, ImportError>> {
+    ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |module_path| {
+        begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(module_path)).map_err(ImportError::from)
     })
 }
 

@@ -84,16 +84,21 @@ impl<'tree> ModuleScopes<'tree> {
                 break
             }
         }
-        let mut scope = self.scopes.get_mut(&node_or_parent);
+        // This could be done with just references if Rust's borrow checker was smarter / more
+        // granular, because we set scope to None while doing the other borrow (see below)
+        let mut scope = self.scopes.get_mut(&node_or_parent).map(|x| x as *mut _);
         for child in descendants {
-            let child_scope = ScopePtr::new(scope.map(|x| x as &ScopePtr));
+            // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
+            let child_scope = ScopePtr::new(scope.map(|x| unsafe { &*x }));
             scope = None;
+            // Other borrow here, notice we had to set scope to None to not double-borrow
             let std::collections::hash_map::Entry::Vacant(child_entry) = self.scopes.entry(child) else {
                 unreachable!("we just checked that it's not in the map")
             };
-            scope = Some(child_entry.insert(child_scope));
+            scope = Some(child_entry.insert(child_scope) as *mut _);
         }
-        scope.unwrap()
+        // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
+        unsafe { &mut *scope.unwrap() }
     }
 
     pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> + '_ {

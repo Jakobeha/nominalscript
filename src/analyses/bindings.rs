@@ -257,7 +257,7 @@ impl ValueName {
     }
 
     pub const fn new_inline(name: &'static str) -> Self {
-        assert!(!Self::RESERVED.contains(&name));
+        // assert!(!Self::RESERVED.contains(&name));
         Self(SmolStr::new_inline(name))
     }
 }

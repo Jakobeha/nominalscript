@@ -72,8 +72,8 @@ pub enum ImportResolverCreateError {
 pub struct ResolveFailure;
 
 impl ImportResolver {
-    pub fn regular(module_root_path: PathBuf) -> Result<ImportResolver, ImportResolverCreateError> {
-        let mut tsconfig_path = module_root_path;
+    pub fn regular(package_path: PathBuf) -> Result<ImportResolver, ImportResolverCreateError> {
+        let mut tsconfig_path = package_path;
         tsconfig_path.push("tsconfig.json");
         let tsconfig = match TsConfig::parse_file(&tsconfig_path) {
             Ok(tsconfig) => Some(tsconfig),
@@ -132,13 +132,13 @@ impl ImportResolver {
                 },
                 ResolvedPath::NodeModule { node_module, remainder_path } => {
                     let node_module_path = mk_path!(&self.module_root_path, "node_modules", node_module);
-                    let d_ns_path = if_exists(mk_path!(&node_module_path, "out", "nominal", "lib", remainder_path).with_extension("d.ns"));
-                    let d_ts_path = if_exists(mk_path!(&node_module_path, "out", "types", "lib", remainder_path).with_extension("d.ts"));
-                    let js_path = if_exists(mk_path!(&node_module_path, "out", "lib", remainder_path).with_extension("js"));
+                    let d_ns_path = if_exists(mk_path!(&node_module_path, "out", "nominal", "lib", &remainder_path).with_extension("d.ns"));
+                    let d_ts_path = if_exists(mk_path!(&node_module_path, "out", "types", "lib", &remainder_path).with_extension("d.ts"));
+                    let js_path = if_exists(mk_path!(&node_module_path, "out", "lib", &remainder_path).with_extension("js"));
                     let arbitrary_path = if js_path.is_some() {
                         None
                     } else {
-                        if_exists(mk_path!(&node_module_path, "out", "resources", remainder_path))
+                        if_exists(mk_path!(&node_module_path, "out", "resources", &remainder_path))
                     };
                     if d_ns_path.is_none() || d_ts_path.is_none() || js_path.is_none() || arbitrary_path.is_none() {
                         return Ok(ResolvedFatPath {
@@ -275,6 +275,8 @@ impl FromIterator<(Glob, NonEmpty<PathBuf>)> for GlobPaths {
 }
 
 impl ResolvedFatPath {
+    const NULL_PATH: &'static str = "/dev/null";
+
     pub fn ns(nominalscript_path: PathBuf) -> Self {
         assert_eq!(nominalscript_path.extension(), Some("ns".as_ref()));
         Self {
@@ -346,6 +348,18 @@ impl ResolvedFatPath {
             && self.typescript_path.is_none()
             && self.javascript_path.is_none()
             && self.arbitrary_path.is_none()
+    }
+
+    pub fn path(&self) -> &Path {
+        self.nominalscript_path.as_deref()
+            .or(self.typescript_path.as_deref())
+            .or(self.javascript_path.as_deref())
+            .or(self.arbitrary_path.as_deref())
+            .unwrap_or(Self::null_path())
+    }
+
+    fn null_path() -> &'static Path {
+        Path::new(Self::NULL_PATH)
     }
 }
 

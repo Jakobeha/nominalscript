@@ -532,10 +532,10 @@ impl<'tree> TypedAstNode<'tree> for AstParameter<'tree> {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
                 .map(|determined_type| &determined_type.type_)
-                .unwrap_or(RlType::ANY_REF),
+                .unwrap_or(RlType::any_ref()),
             (None, _, _) => self.backwards_hole.as_ref()
                 .map(|hole| Lazy::force(hole))
-                .unwrap_or(RlType::ANY_REF),
+                .unwrap_or(RlType::any_ref()),
         }
     }
 }
@@ -585,8 +585,8 @@ impl<'tree> TypedAstNode<'tree> for AstValueDecl<'tree> {
             (Some(type_), _, _) => &type_.shape,
             (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
                 .map(|determined_type| &determined_type.type_)
-                .unwrap_or(RlType::ANY_REF),
-            (None, _, _) => RlType::ANY_REF
+                .unwrap_or(RlType::any_ref()),
+            (None, _, _) => RlType::any_ref()
         }
     }
 }

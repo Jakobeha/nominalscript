@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{btree_set, BTreeSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::path::{Path, PathBuf};
 
 use derive_more::Display;
 use elsa::FrozenMap;
@@ -9,11 +8,12 @@ use log::debug;
 use smallvec::SmallVec;
 
 use crate::ast::tree_sitter::TSRange;
+use crate::import_export::ModulePath;
 use crate::misc::FrozenMapIter;
 
 pub struct ProjectDiagnostics {
     global: RefCell<BTreeSet<GlobalDiagnostic>>,
-    by_file: FrozenMap<PathBuf, Box<FileDiagnostics>>,
+    by_file: FrozenMap<ModulePath, Box<FileDiagnostics>>,
 }
 
 #[derive(Debug)]
@@ -84,11 +84,11 @@ impl ProjectDiagnostics {
         self.global.get_mut().iter()
     }
 
-    pub fn file(&self, path: impl AsRef<Path>) -> &FileDiagnostics {
-        if let Some(file) = self.by_file.get(path.as_ref()) {
+    pub fn file(&self, path: &ModulePath) -> &FileDiagnostics {
+        if let Some(file) = self.by_file.get(path) {
             return file
         }
-        self.by_file.insert(path.as_ref().to_owned(), Box::new(FileDiagnostics::new()))
+        self.by_file.insert(path.clone(), Box::new(FileDiagnostics::new()))
     }
 }
 
@@ -151,7 +151,7 @@ impl Display for ProjectDiagnostics {
         for (path, diagnostics) in FrozenMapIter::new(&self.by_file) {
             let diagnostics_borrow = diagnostics.diagnostics.borrow();
             for diagnostic in &*diagnostics_borrow {
-                write!(f, "{}:", path.display())?;
+                write!(f, "{}:", path.path().display())?;
                 writeln!(f, "{}", diagnostic)?;
             }
         }
