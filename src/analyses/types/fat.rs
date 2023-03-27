@@ -618,7 +618,7 @@ impl FatRestArgType {
             FatRestArgKind::Any => Self::Array { element: FatType::Any },
             FatRestArgKind::Tuple => {
                 let mut elements = intended_type.into_structure().and_then(|x| x.into_tuple_element_types())
-                    .expect("FatRestArgType::from: intended_type is not a tuple but FatRestArgKind::of returned FatRestArgKind::Tuple")
+                    .expect("FatRestArgType::from: intended_type is not a tuple but FatRestArgKind::of returned FatRestArgKind::Tuple");
                 arg_types.append(&mut elements);
                 Self::None
             }
