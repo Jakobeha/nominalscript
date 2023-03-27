@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 use smol_str::SmolStr;
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::ast::tree_sitter::SubTree;
@@ -80,7 +81,7 @@ pub enum Variance {
 ///
 /// All inner types are boxed to reduce size and allow recursive definitions
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeStructure<Type> {
+pub enum TypeStructure<Type: TypeTrait> {
     Fn {
         /// Function type. Boxed because it's large
         fn_type: Box<FnType<Type>>,
@@ -109,7 +110,7 @@ pub enum StructureKind {
 
 /// Function type structure
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FnType<Type> {
+pub struct FnType<Type: TypeTrait> {
     /// Type parameters if polymorphic
     pub type_params: Vec<TypeParam<Type>>,
     /// The type of `this` in the function
@@ -117,7 +118,7 @@ pub struct FnType<Type> {
     /// The types of the arguments
     pub arg_types: Vec<OptionalType<Type>>,
     /// The type of the rest argument, pass `[]` for no rest argument
-    pub rest_arg_type: Type,
+    pub rest_arg_type: Type::RestArgType,
     /// The type of the return value
     pub return_type: ReturnType<Type>,
 }
@@ -141,6 +142,71 @@ pub struct Field<Type> {
 pub struct OptionalType<Type> {
     pub optionality: Optionality,
     pub type_: Type
+}
+
+/// Base type of [ThinType] and [FatType] which contains associated types that are different
+/// between the 2.
+pub trait TypeTrait {
+    type RestArgType;
+
+    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType;
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType;
+}
+
+/// Maps the associated types of [TypeTrait] from the `OldType` into ours.
+pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
+    fn map_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: OldType::RestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(OldType) -> Self
+    ) -> FnType<Self>;
+    fn map_ref_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: &OldType::RestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(&OldType) -> Self
+    ) -> FnType<Self>;
+}
+
+impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
+    fn map_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: T::RestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(T) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            rest_arg_type: Self::map_rest_arg_type(rest_arg_type, f),
+            return_type,
+        }
+    }
+
+    fn map_ref_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: &T::RestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(&T) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            rest_arg_type: Self::map_ref_rest_arg_type(rest_arg_type, f),
+            return_type,
+        }
+    }
 }
 
 /// Whether or not a type permits `null`.
@@ -314,6 +380,18 @@ impl ThinType {
     }
 }
 
+impl TypeTrait for ThinType {
+    type RestArgType = ThinType;
+
+    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
+        f(rest_arg_type)
+    }
+
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
+        f(rest_arg_type)
+    }
+}
+
 impl<Type> TypeIdent<Type> {
     pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeIdent<NewType> {
         TypeIdent {
@@ -348,7 +426,10 @@ impl<Type> TypeParam<Type> {
     }
 }
 
-impl<Type> TypeStructure<Type> {
+impl<Type: TypeTrait> TypeStructure<Type> {
+    /// Get the structure-kind AKA enum variant.
+    ///
+    /// This is different than the formal definition of "kind" as in "higher-kinded types".
     pub fn kind(&self) -> StructureKind {
         match self {
             TypeStructure::Fn { .. } => StructureKind::Fn,
@@ -358,7 +439,31 @@ impl<Type> TypeStructure<Type> {
         }
     }
 
-    pub fn map<NewType>(self, mut f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
+    /// If this is an array, returns the element type. Otherwise `None`
+    pub fn into_array_element_type(self) -> Option<Type> {
+        match self {
+            TypeStructure::Array { element_type } => Some(*element_type),
+            _ => None,
+        }
+    }
+
+    /// If this is a tuple, returns the element types. Otherwise `None`
+    pub fn into_tuple_element_types(self) -> Option<Vec<OptionalType<Type>>> {
+        match self {
+            TypeStructure::Tuple { element_types } => Some(element_types),
+            _ => None,
+        }
+    }
+
+    /// If this is an object, returns the field types. Otherwise `None`
+    pub fn into_object_field_types(self) -> Option<Vec<Field<OptionalType<Type>>>> {
+        match self {
+            TypeStructure::Object { field_types } => Some(field_types),
+            _ => None,
+        }
+    }
+
+    pub fn map<NewType: TypeTraitMapsFrom<Type>>(self, mut f: impl FnMut(Type) -> NewType) -> TypeStructure<NewType> {
         match self {
             TypeStructure::Fn { fn_type } => TypeStructure::Fn {
                 fn_type: Box::new(fn_type.map(f)),
@@ -375,7 +480,7 @@ impl<Type> TypeStructure<Type> {
         }
     }
 
-    pub fn map_ref<NewType>(&self, mut f: impl FnMut(&Type) -> NewType) -> TypeStructure<NewType> {
+    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, mut f: impl FnMut(&Type) -> NewType) -> TypeStructure<NewType> {
         match self {
             TypeStructure::Fn { fn_type } => TypeStructure::Fn {
                 fn_type: Box::new(fn_type.map_ref(f)),
@@ -393,7 +498,7 @@ impl<Type> TypeStructure<Type> {
     }
 }
 
-impl<Type> FnType<Type> {
+impl<Type: TypeTrait> FnType<Type> {
     pub fn new(
         type_params: impl Iterator<Item=TypeParam<Type>>,
         this_type: Type,
@@ -410,24 +515,34 @@ impl<Type> FnType<Type> {
         }
     }
 
-    pub fn map<NewType>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
-        FnType {
-            type_params: self.type_params.into_iter().map(|param| param.map(&mut f)).collect(),
-            this_type: f(self.this_type),
-            arg_types: self.arg_types.into_iter().map(|arg| arg.map(&mut f)).collect(),
-            rest_arg_type: f(self.rest_arg_type),
-            return_type: self.return_type.map(f),
-        }
+    pub fn map<NewType: TypeTraitMapsFrom<Type>>(self, mut f: impl FnMut(Type) -> NewType) -> FnType<NewType> {
+        let type_params = self.type_params.into_iter().map(|param| param.map(&mut f)).collect();
+        let this_type = f(self.this_type);
+        let arg_types = self.arg_types.into_iter().map(|arg| arg.map(&mut f)).collect();
+        let return_type = self.return_type.map(&mut f);
+        NewType::map_rest_arg_type_in_fn(
+            type_params,
+            this_type,
+            arg_types,
+            self.rest_arg_type,
+            return_type,
+            f
+        )
     }
 
-    pub fn map_ref<NewType>(&self, mut f: impl FnMut(&Type) -> NewType) -> FnType<NewType> {
-        FnType {
-            type_params: self.type_params.iter().map(|param| param.map_ref(&mut f)).collect(),
-            this_type: f(&self.this_type),
-            arg_types: self.arg_types.iter().map(|arg| arg.map_ref(&mut f)).collect(),
-            rest_arg_type: f(&self.rest_arg_type),
-            return_type: self.return_type.map_ref(f),
-        }
+    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, mut f: impl FnMut(&Type) -> NewType) -> FnType<NewType> {
+        let type_params = self.type_params.iter().map(|param| param.map_ref(&mut f)).collect();
+        let this_type = f(&self.this_type);
+        let arg_types = self.arg_types.iter().map(|arg| arg.map_ref(&mut f)).collect();
+        let return_type = self.return_type.map_ref(&mut f);
+        NewType::map_ref_rest_arg_type_in_fn(
+            type_params,
+            this_type,
+            arg_types,
+            &self.rest_arg_type,
+            return_type,
+            f
+        )
     }
 }
 
@@ -591,6 +706,41 @@ impl From<bool> for Optionality {
     }
 }
 
+
+impl BitAnd for Optionality {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Optionality::Optional, Optionality::Optional) => Optionality::Optional,
+            _ => Optionality::Required,
+        }
+    }
+}
+
+impl BitAndAssign for Optionality {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
+    }
+}
+
+impl BitOr for Optionality {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Optionality::Required, Optionality::Required) => Optionality::Required,
+            _ => Optionality::Optional,
+        }
+    }
+}
+
+impl BitOrAssign for Optionality {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
+
 impl From<bool> for Nullability {
     fn from(is_nullable: bool) -> Self {
         if is_nullable {
@@ -598,5 +748,39 @@ impl From<bool> for Nullability {
         } else {
             Self::NonNullable
         }
+    }
+}
+
+impl BitAnd for Nullability {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Nullability::Nullable, Nullability::Nullable) => Nullability::Nullable,
+            _ => Nullability::NonNullable,
+        }
+    }
+}
+
+impl BitAndAssign for Nullability {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
+    }
+}
+
+impl BitOr for Nullability {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Nullability::NonNullable, Nullability::NonNullable) => Nullability::NonNullable,
+            _ => Nullability::Nullable,
+        }
+    }
+}
+
+impl BitOrAssign for Nullability {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
     }
 }
