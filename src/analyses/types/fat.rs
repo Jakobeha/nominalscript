@@ -1,11 +1,13 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
-use std::iter::once;
+use std::io::Read;
+use std::iter::{once, repeat, zip};
 use std::rc::Rc;
 
 use replace_with::replace_with;
 
 use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
+use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
 use crate::ast::tree_sitter::SubTree;
 use crate::diagnostics::TypeLogger;
 use crate::{error, note};
@@ -342,6 +344,7 @@ impl FatType {
             }
             (TypeStructure::Tuple { element_types }, TypeStructure::Tuple { element_types: other_element_types }) => {
                 Self::unify_optionals(
+                    "tuple element",
                     element_types,
                     other_element_types,
                     bias,
@@ -418,18 +421,19 @@ impl FatType {
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     pub fn unify_optionals<'a, 'b: 'a, 'tree: 'a>(
+        elem_desc: &'static str,
         this: &mut Vec<OptionalType<Self>>,
         other: Vec<OptionalType<Self>>,
         bias: Variance,
         e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
     ) {
-        todo!();
-        /* let len = this.len().max(other.len());
-        this.resize(len, Self::NEVER);
-        other.resize(len, Self::NEVER);
-        for (index, (this, other)) in this.iter_mut().zip(other).enumerate() {
-            Self::unify(this, other, bias, e(index));
-        } */
+        Self::unify_optionals2(
+            elem_desc,
+            (this, None),
+            other.into_iter(),
+            bias,
+            e
+        );
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -448,13 +452,81 @@ impl FatType {
     ) {
         let (this_regular, this_rest) = this;
         let (other_regular, other_rest) = other;
-        todo!();
-        /* let len = this.len().max(other.len());
-        this.resize(len, Self::NEVER);
-        other.resize(len, Self::NEVER);
-        for (index, (this, other)) in this.iter_mut().zip(other).enumerate() {
-            Self::unify(this, other, bias, e(index));
-        } */
+        let other_iter = other_regular.into_iter().chain(other_rest.into_iter());
+        Self::unify_optionals2(
+            "parameter",
+            (this_regular, Some(this_rest.iter())),
+            other_iter,
+            bias,
+            e
+        );
+    }
+
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    pub fn unify_optionals2<'a, 'b: 'a, 'tree: 'a>(
+        elem_desc: &'static str,
+        this: (&mut Vec<OptionalType<Self>>, Option<impl Iterator<Item = &Self>>),
+        other_iter: impl Iterator<Item = OptionalType<Self>>,
+        bias: Variance,
+        e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
+    ) {
+        let (this_vec, this_rest_iter) = this;
+        let mut this_rest_iter = this_rest_iter.into_iter().flatten().cloned().fuse();
+        let mut other_iter = other_iter.fuse();
+        for i in 0.. {
+            let other = other_iter.next();
+            if this.len() < i && other.is_some() {
+                if let Some(this_rest) = this_rest_iter.next() {
+                    this.push(OptionalType::optional(this_rest));
+                }
+            }
+            let this = this_vec.get_mut(i);
+
+            let push_to_this = match (this, other) {
+                (None, None) => break,
+                (Some(this), Some(other)) => {
+                    Self::unify_optional(this, other, bias, e(index));
+                    None
+                }
+                // None = ?Never, but better error message by checking directly
+                (Some(this), None) => {
+                    // Remember: bias is already reversed from fn, so bias = contravariant <=> fn bias = covariant
+                    if !bias.is_contravariant() {
+                        error!(e(index), "assigned has more {}s than required", elem_desc);
+                    }
+                    this.optionality = Optionality::Optional;
+                    None
+                }
+                (None, Some(mut other)) => {
+                    // Remember: bias is already reversed from fn, so bias = covariant <=> fn bias = contravariant
+                    if !bias.is_covariant() {
+                        error!(e(index), "assigned has less {}s than required", elem_desc);
+                    }
+                    other.optionality = Optionality::Optional;
+                    Some(other)
+                }
+            };
+
+            if let Some(other) = push_to_this {
+                this_vec.push(other);
+            }
+        }
+    }
+
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    pub fn unify_optional<'a, 'b: 'a, 'tree: 'a>(
+        this: &mut OptionalType<Self>,
+        other: OptionalType<Self>,
+        bias: Variance,
+        e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
+    ) {
+        if this.optionality > other.optionality && !bias.is_covariant() {
+            error!(e, "assigned is not optional but required is");
+        } else if other.optionality < this.optionality && !bias.is_contravariant() {
+            error!(e, "assigned is optional but required is not");
+        }
+        this.optionality |= other.optionality;
+        Self::unify(&mut this.type_, other.type_, bias, e);
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -464,13 +536,32 @@ impl FatType {
         bias: Variance,
         e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
     ) {
-        todo!();
-        /* let len = this.len().max(other.len());
-        this.resize(len, Self::NEVER);
-        other.resize(len, Self::NEVER);
-        for (index, (this, other)) in this.iter_mut().zip(other).enumerate() {
-            Self::unify(this, other, bias, e(index));
-        } */
+        let mut other_iter = other.into_iter().fuse();
+        for i in 0.. {
+            let this = this.get_mut(i);
+            let other = other_iter.next();
+
+            // TODO: Replace some of this, how does type unification even work?
+            let push_to_this = match (this, other) {
+                (None, None) => break,
+                (Some(this), Some(other)) => {
+                    Self::unify_type_parameter(this, other, bias, e(i));
+                    None
+                }
+                (Some(this), None) => {
+                    if !bias.is_contravariant() {
+                        error!(e(i), "assigned has more type parameters than required");
+                    }
+                    this.type_ = Self::NEVER;
+                }
+                (None, Some(other)) => {
+                    if !bias.is_covariant() {
+                        error!(e(i), "assigned has less type parameters than required");
+                    }
+                    this.push(other.clone());
+                }
+            }
+        }
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -600,6 +691,47 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     }
 }
 
+impl TypeTraitMapsFrom<FatType> for ThinType {
+    fn map_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: FatRestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(FatType) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            rest_arg_type: f(rest_arg_type.into()),
+            return_type
+        }
+    }
+
+    fn map_ref_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: &FatRestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(&FatType) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            // Not ideal, maybe remove MapFrom and just do the thin/fat conversions directly or have Fn take Cow or...?
+            rest_arg_type: match rest_arg_type {
+                FatRestArgType::None => f(&FatType::Any),
+                FatRestArgType::Array { element } => f(&FatType::array(element.clone())),
+                FatRestArgType::Illegal { intended_type } => f(intended_type)
+            },
+            return_type
+        }
+    }
+}
+
 impl FatRestArgType {
     /// Creates from the given [FatType].
     ///
@@ -633,7 +765,7 @@ impl FatRestArgType {
 
     //Can't really abstract (I mean we could proc-macro this whole map/map_ref thing...)
     //noinspection DuplicatedCode
-    fn map(self, f: impl FnMut(FatType) -> FatType) -> Self {
+    pub fn map(self, f: impl FnMut(FatType) -> FatType) -> Self {
         match self {
             Self::None => Self::None,
             Self::Array { element } => Self::Array { element: f(element) },
@@ -642,11 +774,41 @@ impl FatRestArgType {
     }
 
     //noinspection DuplicatedCode
-    fn map_ref(&self, f: impl FnMut(&FatType) -> FatType) -> Self {
+    pub fn map_ref(&self, f: impl FnMut(&FatType) -> FatType) -> Self {
         match self {
             Self::None => Self::None,
             Self::Array { element } => Self::Array { element: f(element) },
             Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
+        }
+    }
+
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
+    pub fn iter(&self) -> impl Iterator<Item = &FatType> {
+        // Use option/flatten to avoid auto_enum
+        match self {
+            Self::None => None,
+            Self::Array { element } => Some(repeat(element)),
+            Self::Illegal { intended_type: _ } => None
+        }.into_iter().flatten()
+    }
+
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
+    pub fn into_iter(self) -> impl Iterator<Item = FatType> {
+        // Use option/flatten to avoid auto_enum
+        match self {
+            Self::None => None,
+            Self::Array { element } => Some(repeat(element)),
+            Self::Illegal { intended_type: _ } => None
+        }.into_iter().flatten()
+    }
+}
+
+impl Into<FatType> for FatRestArgType {
+    fn into(self) -> FatType {
+        match self {
+            Self::None => FatType::Any,
+            Self::Array { element } => FatType::array(element),
+            Self::Illegal { intended_type } => intended_type
         }
     }
 }
