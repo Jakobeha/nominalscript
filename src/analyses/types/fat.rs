@@ -574,51 +574,100 @@ impl FatType {
         Self::unify(&mut this.type_, other.type_, bias, e);
     }
 
+    //noinspection DuplicatedCode
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
-    /// Type parameter unification involves substituting the old parameter names in `other` with
-    /// replaced ones if they are also in `this`. Thus we also take `other`'s regular parameter
-    /// types and return type.
-    ///
-    /// TODO:
-    /// The type parameters are appended together. Then we look for value parameters where both
-    /// `this` and `other` are type parameters, and merge. Then we remove type parameters which
-    /// are unused, and inline type parameters which are only used by one other type parameter as
-    /// a supertype.
+    /// Type parameter unification involves substituting `other` parameters with the same occurrences
+    /// as `this` parameters with the `this` parameter's name, and substituting the `other` parameters
+    /// with the same names (but different occurrences) as `this` parameters with fresh ones. Thus we
+    /// also take `other`'s regular parameter types and return type. At the end of type parameter
+    /// unification, both type parameters are appended together. At the end of function unification,
+    /// we remove type parameters with no occurrences, and inline type parameters whose only
+    /// occurrences are supertypes of other parameters.
     pub fn unify_type_parameters<'a, 'b: 'a, 'tree: 'a>(
         this: &mut Vec<TypeParam<Self>>,
         mut other: Vec<TypeParam<Self>>,
         (this_this_param, this_params, this_rest_param, this_return): (
-            &mut Self,
-            &mut Vec<OptionalType<Self>>,
-            &mut FatRestArgType,
-            &mut ReturnType<Self>
-        )
+            &Self,
+            &Vec<OptionalType<Self>>,
+            &FatRestArgType,
+            &ReturnType<Self>
+        ),
         (other_this_param, other_params, other_rest_param, other_return): (
             &mut Self,
             &mut Vec<OptionalType<Self>>,
             &mut FatRestArgType,
             &mut ReturnType<Self>
-        )
+        ),
+        bias: Variance,
     ) {
-        for other_param in other.iter_mut() {
-            if this.iter().any(|this_param| this_param.name == other_param.name) {
-                // Need to switch name
-                let new_name = TypeName::fresh(&other_param.name, |new_name| {
-                    this.iter().any(|this_param| this_param.name == new_name)
-                        || other.iter().any(|other_param| other_param.name == new_name)
-                });
-                // Subst name
-                other_this_param.subst_name(&other_param.name, &new_name);
-                for other_param in other_params.iter_mut() {
-                    other_param.subst_name(&other_param.name, &new_name);
+        let subst_name = move |other: &mut TypeParam<Self>, new_name: TypeName| {
+            // Subst name
+            other_this_param.subst_name(&other.name, &new_name);
+            for other_param in other_params.iter_mut() {
+                other_param.subst_name(&other.name, &new_name);
+            }
+            other_rest_param.subst_name(&other.name, &new_name);
+            other_return.subst_name(&other.name, &new_name);
+            // Change name
+            other.name = new_name;
+        };
+
+        // Remove and subst other params with the same occurrences as this params, and merge
+        // the bounds
+        let this_occurrences = this.iter().map(|this| {
+            this_this_param.occurrences_of(this)
+                .chain(this_params.iter().flat_map(|param| param.occurrences_of(this)))
+                .chain(this_rest_param.occurrences_of(this))
+                .chain(this_return.occurrences_of(this))
+                .collect::<Vec<_>>()
+        }).collect::<Vec<_>>();
+        let mut i = 0;
+        while i < other.len() {
+            let remove = {
+                let other = &mut other[i];
+                let other_occurrences = other_this_param.occurrences_of(other)
+                    .chain(other_params.iter().flat_map(|param| param.occurrences_of(other)))
+                    .chain(other_rest_param.occurrences_of(other))
+                    .chain(other_return.occurrences_of(other));
+                if let Some(j) = this_occurrences.iter().position(|this_occurrences| this_occurrences == other_occurrences) {
+                    // Subst other with this
+                    let this = &mut this[j];
+                    if bias.do_union() {
+                        this.variance_bound |= other.variance_bound
+                    } else {
+                        this.variance_bound &= other.variance_bound
+                    }
+                    // We are about to delete other anyways
+                    let other_supers = std::mem::take(&mut other.supers);
+                    // TODO: Subst all with Never type if applicable
+                    Self::unify_inherited(&mut this.supers, other_supers, bias, TypeLogger::ignore());
+                    subst_name(other, this.name.clone());
+                    true
+                } else {
+                    false
                 }
-                other_rest_param.subst_name(&other_param.name, &new_name);
-                other_return.subst_name(&other_param.name, &new_name);
-                // Change name
-                other_param.name = new_name;
+            };
+            if remove {
+                other.remove(i)
+            } else {
+                i += 1
             }
         }
+
+        // Change other params with same name (and not same occurrences) as this params
+        for other in other.iter_mut() {
+            if this.iter().any(|this_param| this_param.name == other.name) {
+                // Need to switch name
+                let new_name = TypeName::fresh(&other.name, |new_name| {
+                    this.iter().any(|this_param| this_param.name == new_name)
+                        || other.iter().any(|other| other.name == new_name)
+                });
+                subst_name(other, new_name);
+            }
+        }
+
+        // Add other params (without same occurrences, and some with changed names)
         this.extend(other);
     }
 
