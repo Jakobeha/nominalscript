@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use smallvec::SmallVec;
 
-use crate::analyses::types::{TypeLoc, TypeLocPtr};
+use crate::analyses::types::TypeLoc;
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
 use crate::import_export::ModulePath;
@@ -42,8 +42,12 @@ enum _TypeLogger<'a, 'b, 'tree> {
 struct TypeLoggerBase<'b, 'tree> {
     diagnostics: &'b FileDiagnostics,
     inferred_loc: TSNode<'tree>,
-    // RULE A: these are always active references (though may have different lifetimes)
-    context: RefCell<SmallVec<[TypeLocPtr; 2]>>
+    // RULE A: This contains the context of the current TypeLogger:
+    // - pushes when a new TypeLogger is created via with_context
+    // - pops when that TypeLogger is destroyed.
+    // If these are pointers, they are always active references though may have different lifetimes
+    // (but they're not so currently we don't have to do anything unsafe)
+    context: RefCell<SmallVec<[TypeLoc; 2]>>
 }
 
 impl<'a> ProjectLogger<'a> {
@@ -85,13 +89,13 @@ impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
 
     pub fn with_context<'a2>(
         &'a2 self,
-        context: TypeLoc<'_>
+        context: TypeLoc
     ) -> TypeLogger<'a2, 'b, 'tree> {
         // ^ RULE A -> will pop context on derived drop
         match self.base() {
             None => TypeLogger::ignore(),
             Some(base) => {
-                base.context.borrow_mut().push(context.as_ptr());
+                base.context.borrow_mut().push(context);
                 TypeLogger(_TypeLogger::Derived { base })
             }
         }
@@ -115,8 +119,6 @@ impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
         );
         let context_borrow = base.context.borrow();
         for context in &*context_borrow {
-            // v RULE A
-            let context = unsafe { context.as_ref() };
             diagnostic.add_info(note!("in {}", context));
         }
         base.diagnostics.insert(diagnostic)

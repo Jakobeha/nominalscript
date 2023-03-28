@@ -1,17 +1,18 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::{HashSet, VecDeque};
 use std::io::Read;
 use std::iter::{once, repeat};
 use std::rc::Rc;
 
-use replace_with::replace_with;
+use replace_with::{replace_with, replace_with_or_default};
 
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
+use crate::analyses::bindings::{FieldName, TypeName};
+use crate::analyses::types::{Field, FnType, HasNullability, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
 use crate::ast::tree_sitter::SubTree;
 use crate::diagnostics::TypeLogger;
 use crate::{error, note};
-use crate::misc::VecFilter;
+use crate::misc::{once_if, VecFilter};
 
 /// Type declaration after we've resolved the supertypes
 #[derive(Debug, Clone)]
@@ -67,7 +68,7 @@ pub enum FatType {
 /// - guards
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FatTypeInherited {
-    pub super_ids: Vec<TypeIdent<FatType>>,
+    pub super_ids: VecDeque<TypeIdent<FatType>>,
     pub structure: Option<TypeStructure<FatType>>,
     pub typescript_types: Vec<SubTree>,
     pub guards: Vec<NominalGuard>,
@@ -132,39 +133,30 @@ impl FatType {
         }
     }
 
-    /// Make nullable
-    pub fn make_nullable(&mut self) {
+    /// Make nullable. Makes type holes' upper bound nullable, but not outer nullable.
+    pub fn make_nullable_intrinsically(&mut self) {
         match self {
             Self::Any => {},
             Self::Never { nullability } => *nullability = Nullability::Nullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
-            Self::Hole { nullability, .. } => *nullability = Nullability::Nullable,
+            Self::Hole { nullability: _, hole } => {
+                hole.upper_bound.borrow_mut().make_internally_nullable();
+            },
         }
     }
 
-    /// Make nullable if `nullable` is true.
-    ///
-    /// If `nullable` is false but this is already nullable it will still be nullable.
-    pub fn make_nullable_if(&mut self, nullable: bool) {
-        if nullable {
-            self.make_nullable();
-        }
-    }
-
-    /// Returns a nullable clone
-    pub fn nullable(&self) -> Self {
-        let mut clone = self.clone();
-        clone.make_nullable();
-        clone
-    }
-
-    /// Returns a nullable clone if `nullable` is true, otherwise a normal clone
-    pub fn nullable_if(&self, nullable: bool) -> Self {
-        if nullable {
-            self.nullable()
-        } else {
-            self.clone()
+    /// Make non-nullable. Make type holes' upper bound non-nullable *and* outer non-nullable
+    pub fn make_non_nullable_intrinsically(&mut self) {
+        match self {
+            Self::Any => {},
+            Self::Never { nullability } => *nullability = Nullability::NonNullable,
+            Self::Structural { nullability, .. } => *nullability = Nullability::NonNullable,
+            Self::Nominal { nullability, .. } => *nullability = Nullability::NonNullable,
+            Self::Hole { nullability, hole } => {
+                *nullability = Nullability::NonNullable;
+                hole.upper_bound.borrow_mut().make_internally_non_nullable();
+            },
         }
     }
 
@@ -207,9 +199,9 @@ impl FatType {
             Self::Any => (Nullability::Nullable, Vec::new(), None),
             Self::Never { nullability } => (nullability, Vec::new(), None),
             Self::Structural { nullability, structure } => (nullability, Vec::new(), Some(structure)),
-            Self::Nominal { nullability, id, mut inherited } => {
+            Self::Nominal { nullability, id, inherited } => {
                 let mut ids = vec![id];
-                ids.append(&mut inherited.super_ids);
+                ids.extend(inherited.super_ids.into_iter());
                 (nullability, ids, inherited.structure)
             },
             Self::Hole { nullability, hole } => {
@@ -231,61 +223,10 @@ impl FatType {
         structure
     }
 
-    /// Create a [FatTypeInherited] which is the union of `supers`.
-    ///
-    /// This is [FatTypeInherited] because it will be the inherited of a type declaration or
-    /// parameter, which is a nominal type with its own id. Also, the returned value may not have
-    /// any structure or identifiers if `supers` is empty.
-    pub fn collapse_supers(
-        supers: impl IntoIterator<Item=Self>,
-        mut e: TypeLogger<'_, '_, '_>
-    ) -> FatTypeInherited {
-        let mut inherited = FatTypeInherited::empty();
-        for super_ in supers {
-            match super_ {
-                // Do nothing
-                FatType::Any => {}
-                FatType::Never { nullability } => {
-                    error!(e, "Can't extend `{}`", match nullability {
-                        Nullability::NonNullable => "Never",
-                        Nullability::Nullable => "Null"
-                    });
-                }
-                FatType::Structural { nullability, structure } => {
-                    if nullability == Nullability::Nullable {
-                        error!(e, "Can't extend nullable type";
-                            note!("instead you must extend the non-nullable type and annotate null at all of your uses"));
-                    }
-                    FatType::unify_structure(
-                        &mut inherited.structure,
-                        Some(structure),
-                        Variance::Bivariant,
-                        e.with_context(TypeLoc::Supertypes)
-                    );
-                }
-                FatType::Nominal { nullability, id: super_id, inherited: super_inherited } => {
-                    if nullability == Nullability::Nullable {
-                        error!(e, "Can't extend nullable type";
-                            note!("instead you must extend the non-nullable type and annotate null at all of your uses"));
-                    }
-                    inherited.super_ids.push(super_id);
-                    inherited.merge(
-                        *super_inherited,
-                        e.with_context(TypeLoc::Supertypes)
-                    );
-                }
-                FatType::Hole { .. } => {
-                    log::error!("Tried to extend hole! This should never happen!");
-                    error!(e, "Can't extend hole (though you shouldn't be able to cause this...)");
-                }
-            }
-        }
-        return inherited
-    }
-
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
-    /// Returns if the structures are disjoint, so the union is `Never`.
+    /// Returns if the structures are disjoint *and* there's an intersection, a case which must be
+    /// explicitly handled (if disjoint and union, will handle by making `this` `None`)
     #[must_use("check if the unified structure is `Never`")]
     pub fn unify_structure(
         this: &mut Option<TypeStructure<Self>>,
@@ -293,26 +234,34 @@ impl FatType {
         bias: Variance,
         mut e: TypeLogger<'_, '_, '_>
     ) -> bool {
-        let Some(other) = other else {
+        let Some(other2) = other else {
             if !bias.is_contravariant() {
                 error!(e, "assigned type input must be a structure but required type does not");
             }
             return false
         };
-        let Some(this) = this else {
+        let Some(this2) = this else {
             if !bias.is_covariant() {
                 error!(e, "assigned type has no structure but required type does");
             }
-            *this = Some(other);
+            *this = Some(other2);
             return false
         };
-        Self::unify_structure2(this, other, bias, e)
+
+        let is_disjoint = Self::unify_structure2(this2, other2, bias, e);
+
+        if is_disjoint && bias.do_union() {
+            *this = None;
+            false
+        } else {
+            is_disjoint
+        }
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
-    /// Returns if the structures are disjoint, so the union is `Never`.
-    #[must_use("check if the unified structure is `Never`")]
+    /// Returns if the structures are disjoint, so the union is `Any` and intersection is `Never`.
+    #[must_use("check if disjoint")]
     pub fn unify_structure2(
         this: &mut TypeStructure<Self>,
         mut other: TypeStructure<Self>,
@@ -329,8 +278,9 @@ impl FatType {
                 if bias.do_union() {
                     replace_with(this, || TypeStructure::Array { element_type: Box::default() }, |this| {
                         let TypeStructure::Tuple { element_types } = this else { unreachable!() };
+                        let element_types = element_types.into_iter().map(|x| x.collapse_optionality_into_nullability());
                         TypeStructure::Array {
-                            element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+                            element_type: Box::new(FatType::unify_all(element_types, Variance::Bivariant, TypeLogger::ignore()))
                         }
                     });
                 } else {
@@ -350,8 +300,9 @@ impl FatType {
                 }
                 if bias.do_union() {
                     let TypeStructure::Tuple { element_types } = other else { unreachable!() };
+                    let element_types = element_types.into_iter().map(|x| x.collapse_optionality_into_nullability());
                     other = TypeStructure::Array {
-                        element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+                        element_type: Box::new(FatType::unify_all(element_types, Variance::Bivariant, TypeLogger::ignore()))
                     }
                 } else {
                     let len = match &other {
@@ -441,6 +392,7 @@ impl FatType {
             bias,
             e.with_context(TypeLoc::FunctionReturn)
         );
+        this.remove_and_inline_type_params_where_possible();
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -455,11 +407,17 @@ impl FatType {
             (ReturnType::Type(this), ReturnType::Type(other)) => {
                 Self::unify(this, other, bias, e);
             }
-            (ReturnType::Void, ReturnType::Type(_)) => {
+            (this @ ReturnType::Void, other @ ReturnType::Type(_)) => {
                 error!(e, "assigned returns void but required returns a type");
+                if !bias.do_union() {
+                    *this = other;
+                }
             },
-            (ReturnType::Type(_), ReturnType::Void) => {
+            (this @ ReturnType::Type(_), other @ ReturnType::Void) => {
                 error!(e, "assigned returns a type but required returns void");
+                if bias.do_union() {
+                    *this = other;
+                }
             }
         }
     }
@@ -711,19 +669,54 @@ impl FatType {
     /// user-facing support.
     pub fn unify_fields<'a, 'b: 'a, 'tree: 'a>(
         this: &mut Vec<Field<OptionalType<Self>>>,
-        other: Vec<Field<OptionalType<Self>>>,
+        mut other: Vec<Field<OptionalType<Self>>>,
         bias: Variance,
-        e: impl Fn(&ValueName) -> TypeLogger<'a, 'b, 'tree>
+        e: impl Fn(FieldName) -> TypeLogger<'a, 'b, 'tree>
     ) {
-        todo!();
-        /* for (name, this) in this.iter_mut() {
-            let other = other.remove(name).unwrap_or(Self::NEVER);
-            Self::unify(this, other, bias, e(name));
+        // Check for subtype/supertype issues from names. Subtype = more fields
+        let iter_this_field_names = || this.iter().map(|field| &field.name);
+        let iter_other_field_names = || other.iter().map(|field| &field.name);
+        if !bias.is_covariant() {
+            let this_field_names = iter_this_field_names().collect::<HashSet<_>>();
+            for other_field_name in iter_other_field_names().filter(|other_field_name| !this_field_names.contains(other_field_name)) {
+                error!(e, "missing field `{}`", other_field_name)
+            }
         }
-        for (name, other) in other {
-            let this = Self::NEVER;
-            Self::unify(this, other, bias, e(name));
-        } */
+        if !bias.is_contravariant() {
+            let other_field_names = iter_other_field_names().collect::<HashSet<_>>();
+            for this_field_name in iter_this_field_names().filter(|this_field_name| !other_field_names.contains(this_field_name)) {
+                error!(e, "extra field `{}`", this_field_name)
+            }
+        }
+
+        // Unify and check for same-field subtype/supertype issues
+        if bias.do_union() {
+            this.retain_mut(|this_field| {
+                match other.find_remove(|other_field| this_field.name == other_field.name) {
+                    None => false,
+                    Some(other_field) => {
+                        let name = other_field.name;
+                        Self::unify_optional(&mut this_field.type_, other_field.type_, bias, e(name));
+                        true
+                    }
+                }
+            });
+        } else {
+            this.reserve(other.len());
+            for other_field in other {
+                let push_other_field = match this.iter_mut().find(|this_field| this_field.name == other_field.name) {
+                    None => Some(other_field),
+                    Some(this_field) => {
+                        let name = other_field.name;
+                        Self::unify_optional(&mut this_field.type_, other_field.type_, bias, e(name));
+                        None
+                    }
+                };
+                if let Some(push_other_field) = push_other_field {
+                    this.push(push_other_field)
+                }
+            }
+        }
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -731,13 +724,37 @@ impl FatType {
     /// Note that the unify "intersection" contains *all* super-ids, which is actually a union
     /// (inherit intersection = inherit all - remember that the more types are inherited, the less
     /// instances exist, and a type union has more instances).
-    pub fn unify_super_ids(this: &mut Vec<TypeIdent<FatType>>, mut other: Vec<TypeIdent<FatType>>, bias: Variance, e: impl Fn(&TypeName) -> TypeLogger<'_, '_, '_>) {
+    // This function is essentially exact same as unify_fields...is there a good way to abstract?
+    pub fn unify_super_ids(
+        this: &mut VecDeque<TypeIdent<FatType>>,
+        mut other: VecDeque<TypeIdent<FatType>>,
+        bias: Variance,
+        e: impl Fn(TypeName) -> TypeLogger<'_, '_, '_>
+    ) {
+        // Check for subtype/supertype issues from names. Subtype = more identifiers
+        let iter_this_super_ids = || this.iter().map(|id| &id.name);
+        let iter_other_super_ids = || other.iter().map(|id| &id.name);
+        if !bias.is_covariant() {
+            let this_super_ids = iter_this_super_ids().collect::<HashSet<_>>();
+            for other_super_id in iter_other_super_ids().filter(|other_super_id| !this_super_ids.contains(other_super_id)) {
+                error!(e, "missing supertype `{}`", other_super_id)
+            }
+        }
+        if !bias.is_contravariant() {
+            let other_super_ids = iter_other_super_ids().collect::<HashSet<_>>();
+            for this_super_id in iter_this_super_ids().filter(|this_super_id| !other_super_ids.contains(this_super_id)) {
+                error!(e, "extra supertype `{}`", this_super_id)
+            }
+        }
+
+        // Unify and check for same-field subtype/supertype issues
         if bias.do_union() {
             this.retain_mut(|this| {
                 match other.find_remove(|other| this.name == other.name) {
                     None => false,
                     Some(other) => {
-                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(&this.name));
+                        let name = other.name;
+                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(name));
                         true
                     }
                 }
@@ -748,12 +765,13 @@ impl FatType {
                 let push_other = match this.iter_mut().find(|this| this.name == other.name) {
                     None => Some(other),
                     Some(this) => {
-                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(&this.name));
+                        let name = other.name;
+                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(name));
                         None
                     },
                 };
                 if let Some(other) = push_other {
-                    this.push(other);
+                    this.push_back(other);
                 }
             }
         }
@@ -765,14 +783,14 @@ impl FatType {
     /// intersection = inherit `this` and `other`), while a "union" of inherited types contains
     /// *only common* inherited supertypes (inherit union = inherit `this` or `other`).
     pub fn unify_inherited(this: &mut FatTypeInherited, other: FatTypeInherited, bias: Variance, e: TypeLogger<'_, '_, '_>) {
-        Self::unify_super_ids(&mut this.super_ids, other.super_ids, bias, |ident| e.with_context(TypeLoc::SuperIdGeneric { ident }));
+        Self::unify_super_ids(&mut this.super_ids, other.super_ids, bias, |name| e.with_context(TypeLoc::SuperIdGeneric { name }));
         let is_never = FatType::unify_structure(&mut this.structure, other.structure, bias, e.with_context(TypeLoc::SuperStructure));
         if bias.do_union() {
-            this.is_never &= is_never;
+            this.is_never &= other.is_never & is_never;
             this.typescript_types.retain(|t| other.typescript_types.contains(t));
             this.guards.retain(|g| other.guards.contains(g));
         } else {
-            this.is_never |= is_never;
+            this.is_never |= other.is_never | is_never;
             this.typescript_types.extend(other.typescript_types.into_iter().filter(|g| !this.typescript_types.contains(g)));
             this.guards.extend(other.guards.into_iter().filter(|g| !this.guards.contains(g)));
         }
@@ -810,50 +828,366 @@ impl FatType {
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
+        // Check nullability
+        let original_nullability = self.nullability();
+        let original_other_nullability = other.nullability();
+        match (self.nullability(), other.nullability()) {
+            (Nullability::Nullable, Nullability::Nullable) |
+            (Nullability::NonNullable, Nullability::NonNullable) => (),
+            (Nullability::Nullable, Nullability::NonNullable) => {
+                if !bias.is_covariant() {
+                    error!(e, "assigned a nullable type but required a non-nullable type");
+                }
+                if !bias.do_union() {
+                    self.make_non_nullable_intrinsically()
+                }
+            }
+            (Nullability::NonNullable, Nullability::Nullable) => {
+                if !bias.is_contravariant() {
+                    error!(e, "assigned a non-nullable type but required a nullable type");
+                }
+                if bias.do_union() {
+                    self.make_nullable_intrinsically()
+                }
+            }
+        }
+
         // Easy case
         if self == other {
             return
         }
-        match (self, other) {
-            (FatType::Any, other) => {
+
+        // Type holes, Any and Never cases (nullability already handled)
+        let (this, other) = match (self, other) {
+            (FatType::Hole { nullability: _, hole: this_hole }, other) => {
+                this_hole.upper_bound.get_mut().unify(other, bias, e);
+                return
+            }
+            (this, FatType::Hole { nullability: _, hole: other_hole }) => {
+                replace_with(this, FatType::hole, |this| FatType::Hole {
+                    nullability: Nullability::NonNullable,
+                    hole: FatTypeHole::from(this),
+                });
+                // Could call this.unify(other_hole.upper_bound.into_inner(), bias, e),
+                //     but it just does this but slower and with redundancies
+                let FatType::Hole { nullability: _, hole: this_hole } = this else {
+                    unreachable!("replace_with should have replaced this with a hole")
+                };
+                this_hole.upper_bound.get_mut().unify(other_hole.upper_bound.into_inner(), bias, e);
+                return
+            }
+            (this @ FatType::Any, other) => {
                 if !bias.is_contravariant() {
                     error!(e, "assigned Any but required a specific type");
                 }
                 if !bias.do_union() {
-                    *self = other;
+                    *this = other;
                 }
-            }
-            (FatType::Never { nullability }, other) => {
+                return
+            },
+            (this, other @ FatType::Any) => {
                 if !bias.is_covariant() {
-                    error!(e, "assigned Never but required a specific type");
+                    error!(e, "assigned a specific type but required Any");
                 }
-                *self = other;
-                self.set_nullability(nullability);
+                if bias.do_union() {
+                    *this = other;
+                }
+                return
+            }
+            (this @ FatType::Never { nullability: _ }, other) => {
+                if !bias.is_covariant() {
+                    error!(e, "{}", match original_nullability {
+                        Nullability::NonNullable => "assigned Never but required an inhabited type",
+                        Nullability::Nullable => "assigned Null but required a tyoe inhabited by more than just null"
+                    });
+                }
+                if bias.do_union() {
+                    *this = other;
+                }
+                return
+            }
+            (this, other @ FatType::Never { nullability: _ }) => {
+                if !bias.is_contravariant() {
+                    error!(e, "{}", match original_other_nullability {
+                        Nullability::NonNullable => "assigned an inhabited type but required Never",
+                        Nullability::Nullable => "assigned a type inhabited by more than just null but required Null"
+                    });
+                }
+                if !bias.do_union() {
+                    *this = other;
+                }
+                return
+            }
+            (this, other) => (this, other)
+        };
+
+        // Non-trivial cases
+        replace_with_or_default(this, |this| {
+            match (this, other) {
+                (FatType::Structural {
+                    nullability,
+                    structure: mut this_structure
+                }, FatType::Structural {
+                    nullability: _,
+                    structure: other_structure
+                }) => {
+                    let is_disjoint = Self::unify_structure2(&mut this_structure, other_structure, bias, e);
+                    if is_disjoint {
+                        if bias.do_union() {
+                            FatType::Any
+                        } else {
+                            FatType::Never { nullability }
+                        }
+                    } else {
+                        FatType::Structural {
+                            nullability,
+                            structure: this_structure
+                        }
+                    }
+                },
+                (FatType::Nominal {
+                    nullability,
+                    id: mut this_id,
+                    inherited: mut this_inherited
+                }, FatType::Structural {
+                    nullability: _,
+                    structure: other_structure
+                }) => {
+                    if !bias.is_covariant() {
+                        error!(e, "assigned a nominal type but required a structural type");
+                    }
+                    if bias.do_union() {
+                        let false = Self::unify_structure(
+                            &mut this_inherited.structure,
+                            Some(other_structure),
+                            bias,
+                            e
+                        ) else {
+                            unreachable!("unify_structure always returns false when bias.do_union() is true")
+                        };
+                        if let Some(structure) = this_inherited.structure {
+                            FatType::Structural {
+                                nullability,
+                                structure
+                            }
+                        } else {
+                            FatType::Any
+                        }
+                    } else {
+                        let is_never = Self::unify_structure(
+                            &mut this_inherited.structure,
+                            Some(other_structure),
+                            bias,
+                            e
+                        );
+                        if is_never {
+                            FatType::Never { nullability }
+                        } else {
+                            FatType::Nominal {
+                                nullability,
+                                id: this_id,
+                                inherited: this_inherited
+                            }
+                        }
+                    }
+                }
+                (FatType::Structural {
+                    nullability,
+                    structure: this_structure
+                }, FatType::Nominal {
+                    nullability: _,
+                    id: other_id,
+                    inherited: other_inherited
+                }) => {
+                    if !bias.is_contravariant() {
+                        error!(e, "assigned a structural type but required a nominal type");
+                    }
+                    let mut this_structure = Some(this_structure);
+                    if bias.do_union() {
+                        let false = Self::unify_structure(
+                            &mut this_structure,
+                            other_inherited.structure,
+                            bias,
+                            e
+                        ) else {
+                            unreachable!("unify_structure always returns false when bias.do_union() is true")
+                        };
+                        if let Some(structure) = this_structure {
+                            FatType::Structural {
+                                nullability,
+                                structure
+                            }
+                        } else {
+                            FatType::Any
+                        }
+                    } else {
+                        let is_never = Self::unify_structure(
+                            &mut this_structure,
+                            other_inherited.structure,
+                            bias,
+                            e
+                        );
+                        if is_never {
+                            FatType::Never { nullability }
+                        } else {
+                            FatType::Nominal {
+                                nullability,
+                                id: other_id,
+                                inherited: Box::new(FatTypeInherited {
+                                    super_ids: other_inherited.super_ids,
+                                    structure: this_structure,
+                                    typescript_types: other_inherited.typescript_types,
+                                    guards: other_inherited.guards,
+                                    is_never: other_inherited.is_never,
+                                })
+                            }
+                        }
+                    }
+                }
+                (FatType::Nominal {
+                    nullability,
+                    id: this_id,
+                    inherited: mut this_inherited
+                }, FatType::Nominal {
+                    nullability: _,
+                    id: other_id,
+                    inherited: mut other_inherited
+                }) => {
+                    this_inherited.super_ids.push_front(this_id);
+                    other_inherited.super_ids.push_front(other_id);
+                    Self::unify_inherited(&mut this_inherited, *other_inherited, bias, e);
+                    if this_inherited.is_never {
+                        FatType::Never { nullability }
+                    } else if let Some(id) = this_inherited.super_ids.pop_front() {
+                        FatType::Nominal {
+                            nullability,
+                            id,
+                            inherited: this_inherited
+                        }
+                    } else if let Some(structure) = this_inherited.structure {
+                        if !this_inherited.guards.is_empty() || !this_inherited.typescript_types.is_empty() {
+                            log::error!("type has no nominal id but guards and typescript types? This shouldn't be possible! (structural type)");
+                        }
+                        FatType::Structural {
+                            nullability,
+                            structure
+                        }
+                    } else {
+                        if !this_inherited.guards.is_empty() || !this_inherited.typescript_types.is_empty() {
+                            log::error!("type has no nominal id but guards and typescript types? This shouldn't be possible! (Any type)");
+                        }
+                        FatType::Any
+                    }
+                },
+                (_, _) => unreachable!("unhandled FatType variant combination, should've been handled in above blocks")
+            }
+        });
+    }
+
+    /// Create a [FatTypeInherited] which is the inherits all `supers`.
+    ///
+    /// This is [FatTypeInherited] because it will be the inherited of a type declaration or
+    /// parameter, which is a nominal type with its own id. Also, the returned value may not have
+    /// any structure or identifiers if `supers` is empty.
+    ///
+    /// "bias" is always `Invariant`. This is the *intersection* of `supers`. Remember, intersection
+    /// = less instances inhabit, and the more inherited types, the less instances inhabit, because
+    /// an inhabited instance must be an instance of all inherited types.
+    pub fn unify_all_supers(
+        supers: impl IntoIterator<Item=Self>,
+        mut e: TypeLogger<'_, '_, '_>
+    ) -> FatTypeInherited {
+        let mut inherited = FatTypeInherited::empty();
+        for (index, super_) in supers.enumerate() {
+            let e = e.with_context(TypeLoc::Supertype { index });
+            match super_ {
+                // Do nothing
+                FatType::Any => {}
+                FatType::Never { nullability } => {
+                    error!(e, "Can't extend `{}`", match nullability {
+                        Nullability::NonNullable => "Never",
+                        Nullability::Nullable => "Null"
+                    });
+                }
+                FatType::Structural { nullability, structure } => {
+                    if nullability == Nullability::Nullable {
+                        error!(e, "Can't extend nullable type";
+                            note!("instead you must extend the non-nullable type and annotate null at all of your uses"));
+                    }
+                    let is_never = FatType::unify_structure(
+                        &mut inherited.structure,
+                        Some(structure),
+                        Variance::Invariant,
+                        e
+                    );
+                    if is_never {
+                        inherited.is_never = true;
+                    }
+                }
+                FatType::Nominal { nullability, id: super_id, inherited: super_inherited } => {
+                    if nullability == Nullability::Nullable {
+                        error!(e, "Can't extend nullable type";
+                            note!("instead you must extend the non-nullable type and annotate null at all of your uses"));
+                    }
+                    inherited.super_ids.push(super_id);
+                    Self::unify_inherited(
+                        &mut inherited,
+                        *super_inherited,
+                        Variance::Invariant,
+                        e
+                    );
+                }
+                FatType::Hole { .. } => {
+                    log::error!("Tried to extend hole! This should never happen!");
+                    error!(e, "Can't extend hole (though you shouldn't be able to cause this...)");
+                }
             }
         }
+        return inherited
     }
-
-
-    /// [Unifies](FatType::unify_all) types and logs subtype/disjoint errors based on `bias`.
-    pub fn unify_all_optionals(types: impl IntoIterator<Item=OptionalType<Self>>, bias: Variance, e: TypeLogger<'_, '_, '_>) -> Self {
-        todo!();
-    }
-
 
     /// [Unifies](FatType::unify) all types and logs subtype/disjoint errors based on `bias`.
     ///
     /// `bias` is transitive, so e.g. covariant bias would mean every types must be a subtype of
     /// types which come afterward.
+    ///
+    /// If there are no types, returns `FatType::Never` for union, and `FatType::Any` for intersection
+    /// (remember forall ∅ = True and exists ∅ = False)
     pub fn unify_all(types: impl IntoIterator<Item=Self>, bias: Variance, e: TypeLogger<'_, '_, '_>) -> Self {
-        todo!();
-        /* let mut types = types.into_iter();
+        let mut types = types.into_iter();
         let Some(mut result) = types.next() else {
-            return Self::NEVER
+            return if bias.do_union() {
+                FatType::NEVER
+            } else {
+                FatType::Any
+            }
         };
-        for other in types {
-            result = result.unify(other, Variance::Bivariant, todo!());
+        for (index, other) in types.enumerate() {
+            result = result.unify(other, bias, e.with_context(TypeLoc::Position { index }));
         }
-        result */
+        result
+    }
+}
+
+impl HasNullability for FatType {
+    fn nullability(&self) -> Nullability {
+        match self {
+            Self::Any => Nullability::Nullable,
+            Self::Never { nullability } => *nullability,
+            Self::Structural { nullability, .. } => *nullability,
+            Self::Nominal { nullability, .. } => *nullability,
+            Self::Hole { nullability, hole } => *nullability | || hole.upper_bound.borrow().nullability()
+        }
+    }
+
+    fn make_nullable(&mut self) {
+        match self {
+            Self::Any => {},
+            Self::Never { nullability } => *nullability = Nullability::Nullable,
+            Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
+            Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
+            Self::Hole { nullability, hole: _ } => *nullability = Nullability::Nullable,
+        }
     }
 }
 
@@ -881,7 +1215,7 @@ impl TypeTrait for FatType {
 impl TypeTraitMapsFrom<ThinType> for FatType {
     fn map_inherited(inherited: ThinType::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
         let inherited = inherited.into_iter().map(f).collect();
-        Self::unify_all_structures(inherited, Bias::Invariant, TypeLogger::ignore())
+        Self::unify_all_supers(inherited, TypeLogger::ignore())
     }
 
     fn map_ref_inherited(inherited: &ThinType::Inherited, f: impl FnMut(&ThinType) -> Self) -> Self::Inherited {
@@ -930,11 +1264,11 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
 
 impl TypeTraitMapsFrom<FatType> for ThinType {
     fn map_inherited(inherited: FatType::Inherited, f: impl FnMut(FatType) -> Self) -> Self::Inherited {
-        inherited.into_fat_types().map(f)
+        inherited.into_bare_fat_types().map(f).collect()
     }
 
     fn map_ref_inherited(inherited: &FatType::Inherited, f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
-        inherited.clone().into_fat_types().map(|x| f(Cow::Owned(f)))
+        inherited.clone().into_bare_fat_types().map(|x| f(Cow::Owned(f))).collect()
     }
 
     fn map_rest_arg_type_in_fn(
@@ -1081,7 +1415,7 @@ impl FatTypeInherited {
     /// Also = `default()`
     pub const fn empty() -> Self {
         Self {
-            super_ids: Vec::new(),
+            super_ids: VecDeque::new(),
             structure: None,
             typescript_types: Vec::new(),
             guards: Vec::new(),
@@ -1089,7 +1423,42 @@ impl FatTypeInherited {
         }
     }
 
-    pub fn into_fat_types()
+    pub fn map(self, f: impl FnMut(FatType) -> FatType) -> Self {
+        Self {
+            super_ids: self.super_ids,
+            structure: self.structure.map(|x| x.map(f)),
+            typescript_types: self.typescript_types,
+            guards: self.guards,
+            is_never: self.is_never
+        }
+    }
+
+    pub fn map_ref(&self, f: impl FnMut(&FatType) -> FatType) -> Self {
+        Self {
+            super_ids: self.super_ids.clone(),
+            structure: self.structure.as_ref().map(|x| x.map_ref(f)),
+            typescript_types: self.typescript_types.clone(),
+            guards: self.guards.clone(),
+            is_never: self.is_never
+        }
+    }
+
+    /// Converts into bare fat types, i.e. without the inherited parts.
+    /// Just a type for never, each identifier, and each structure.
+    /// These types convert into thin types but should not be used anything else,
+    /// as they have ids with incorrect supertypes.
+    fn into_bare_fat_types(self) -> impl Iterator<Item=FatType> {
+        once_if(self.is_never, FatType::NEVER)
+            .chain(self.super_ids.into_iter().map(|id| FatType::Nominal {
+                nullability: Nullability::NonNullable,
+                id,
+                inherited: Box::default()
+            }))
+            .chain(self.structure.map(|structure| FatType::Structural {
+                nullability: Nullability::NonNullable,
+                structure
+            }).into_iter())
+    }
 }
 
 
@@ -1115,6 +1484,14 @@ impl Default for FatTypeHole {
     }
 }
 
+impl From<FatType> for FatTypeHole {
+    fn from(t: FatType) -> Self {
+        Self {
+            upper_bound: Rc::new(RefCell::new(t))
+        }
+    }
+}
+
 impl TypeParamSubsts {
     pub fn new() -> Self {
         Self {
@@ -1134,7 +1511,7 @@ impl TypeParamSubsts {
 
 impl TypeParam<FatType> {
     pub fn into_type(self, e: TypeLogger<'_, '_, '_>) -> FatType {
-        let inherited = FatType::collapse_supers(self.supers, e);
+        let inherited = FatType::unify_all_supers(self.supers, e);
         FatType::Nominal {
             nullability: Nullability::NonNullable,
             id: TypeIdent {
@@ -1148,7 +1525,7 @@ impl TypeParam<FatType> {
 
 impl TypeParam<FatType> {
     pub fn into_decl(self, e: TypeLogger<'_, '_, '_>) -> FatTypeDecl {
-        let inherited = FatType::collapse_supers(self.supers, e);
+        let inherited = FatType::unify_all_supers(self.supers, e);
         FatTypeDecl {
             name: self.name,
             // No higher-kinded types

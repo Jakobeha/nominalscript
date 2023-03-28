@@ -7,6 +7,46 @@ use crate::analyses::scopes::ExprTypeMap;
 use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, RlType, RlTypeDecl};
 use crate::ast::typed_nodes::AstNode;
 
+macro_rules! define_names {
+    ($($(#[$attr:meta])* $Name:ident),+) => { $(
+$(#[$attr])*
+#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct $Name(SmolStr);
+
+impl $Name {
+    //noinspection DuplicatedCode
+    pub fn new(name: impl Into<SmolStr>) -> Self {
+        let name = name.into();
+        assert!(!Self::RESERVED.contains(&name.as_str()));
+        Self(name.into())
+    }
+
+    pub const fn new_inline(name: &'static str) -> Self {
+        // const_assert!(!Self::RESERVED.contains(&name));
+        Self(SmolStr::new_inline(name))
+    }
+
+    // This cannot be deduplicated
+    //noinspection DuplicatedCode
+    pub fn fresh(base_name: &Self, is_valid: impl FnMut(&Self) -> bool) -> Self {
+        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
+    }
+
+    fn from_ref(str: &SmolStr) -> &Self {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(str as *const SmolStr as *const Self) }
+    }
+}
+
+impl AsRef<str> for $Name {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+    )+ };
+}
+
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {
     #[display(fmt = "global")]
@@ -88,15 +128,14 @@ pub struct GlobalTypeBinding {
 //     node: TSNode<'tree>
 // }
 
+define_names!(
 /// The string type used for all value names
-#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ValueName(SmolStr);
-
+ValueName,
 /// The string type used for all type names
-#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct TypeName(SmolStr);
+TypeName,
+/// The string type used for all field names
+FieldName
+);
 
 impl GlobalValueBinding {
     pub fn new(name: ValueName, type_: FatType) -> Self {
@@ -234,68 +273,14 @@ impl TypeName {
         "Null",
         "Void",
     ];
-
-    //noinspection DuplicatedCode
-    pub fn new(name: impl Into<SmolStr>) -> Self {
-        let name = name.into();
-        assert!(!Self::RESERVED.contains(&name.as_str()));
-        Self(name.into())
-    }
-
-    pub const fn new_inline(name: &'static str) -> Self {
-        // const_assert!(!Self::RESERVED.contains(&name));
-        Self(SmolStr::new_inline(name))
-    }
-
-    // This cannot be deduplicated
-    //noinspection DuplicatedCode
-    pub fn fresh(base_name: &TypeName, is_valid: impl FnMut(&Self) -> bool) -> Self {
-        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
-    }
-
-    fn from_ref(str: &SmolStr) -> &Self {
-        // SAFETY: Same repr + transparent
-        unsafe { &*(str as *const SmolStr as *const Self) }
-    }
-}
-
-impl AsRef<str> for TypeName {
-    fn as_ref(&self) -> &str {
-        self.0.as_str()
-    }
 }
 
 impl ValueName {
     pub const RESERVED: [&'static str; 0] = [];
-
-    //noinspection DuplicatedCode
-    pub fn new(name: impl Into<SmolStr>) -> Self {
-        let name = name.into();
-        assert!(!Self::RESERVED.contains(&name.as_str()));
-        Self(name.into())
-    }
-
-    pub const fn new_inline(name: &'static str) -> Self {
-        // assert!(!Self::RESERVED.contains(&name));
-        Self(SmolStr::new_inline(name))
-    }
-
-    // This cannot be deduplicated
-    //noinspection DuplicatedCode
-    pub fn fresh(base_name: &ValueName, is_valid: impl FnMut(&Self) -> bool) -> Self {
-        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
-    }
-
-    fn from_ref(str: &SmolStr) -> &Self {
-        // SAFETY: Same repr + transparent
-        unsafe { &*(str as *const SmolStr as *const Self) }
-    }
 }
 
-impl AsRef<str> for ValueName {
-    fn as_ref(&self) -> &str {
-        self.0.as_str()
-    }
+impl FieldName {
+    pub const RESERVED: [&'static str; 0] = [];
 }
 
 fn fresh_smol_str(base_name: impl AsRef<str>, is_valid: impl FnMut(&SmolStr) -> bool) -> SmolStr {

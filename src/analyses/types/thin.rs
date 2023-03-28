@@ -2,8 +2,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 use replace_with::replace_with_or_default;
-use smol_str::SmolStr;
-use crate::analyses::bindings::{TypeName, ValueName};
+use crate::analyses::bindings::{FieldName, TypeName, ValueName};
 use crate::ast::tree_sitter::SubTree;
 
 /// Type declaration before we've resolved the supertypes
@@ -137,7 +136,7 @@ pub enum ReturnType<Type> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Field<Type> {
-    pub name: SmolStr,
+    pub name: FieldName,
     pub type_: Type,
 }
 
@@ -148,9 +147,55 @@ pub struct OptionalType<Type> {
     pub type_: Type
 }
 
+/// A type which can be nullable or non-nullable.
+///
+/// `make_non_nullable` is not part of this trait, so a type which once made nullable can't
+/// necessarily by made it non-nullable again can inherit.
+pub trait HasNullability {
+    /// Returns whether this instance is nullable or non-nullable.
+    fn nullability(&self) -> Nullability;
+
+    /// Make this instance nullable
+    ///
+    /// `make_non_nullable` is not part of this trait: once you make an instance nullable, you can't
+    /// necessarily make it non-nullable again.
+    fn make_nullable(&mut self);
+
+    /// Make nullable if `nullable` is true.
+    ///
+    /// If `nullable` is false but this is already nullable it will still be nullable.
+    fn make_nullable_if(&mut self, nullable: bool) {
+        if nullable {
+            self.make_nullable();
+        }
+    }
+
+    /// Returns a nullable clone
+    ///
+    /// There's no `non_nullable(&self)` or `non_nullable_if(&self)` because type holes make that
+    /// operation ambiguous
+    fn nullable(&self) -> Self where Self: Clone {
+        let mut clone = self.clone();
+        clone.make_nullable();
+        clone
+    }
+
+    /// Returns a nullable clone if `nullable` is true, otherwise a normal clone
+    ///
+    /// There's no `non_nullable(&self)` or `non_nullable_if(&self)` because type holes make that
+    /// operation ambiguous
+    fn nullable_if(&self, nullable: bool) -> Self where Self: Clone {
+        if nullable {
+            self.nullable()
+        } else {
+            self.clone()
+        }
+    }
+}
+
 /// Base type of [ThinType] and [FatType] which contains associated types that are different
 /// between the 2.
-pub trait TypeTrait {
+pub trait TypeTrait: HasNullability {
     type Inherited;
     type RestArgType;
 
@@ -369,33 +414,24 @@ impl ThinType {
     }
 
     impl_structural_type_constructors!();
+}
 
-    pub fn make_nullable(&mut self) {
+impl HasNullability for ThinType {
+    fn nullability(&self) -> Nullability {
+        match self {
+            Self::Any => Nullability::Nullable,
+            Self::Never { nullability } => *nullability,
+            Self::Structural { nullability, .. } => *nullability,
+            Self::Nominal { nullability, .. } => *nullability,
+        }
+    }
+
+    fn make_nullable(&mut self) {
         match self {
             Self::Any => {},
             Self::Never { nullability } => *nullability = Nullability::Nullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
-        }
-    }
-
-    pub fn make_nullable_if(&mut self, nullable: bool) {
-        if nullable {
-            self.make_nullable();
-        }
-    }
-
-    pub fn nullable(self) -> Self {
-        let mut clone = self.clone();
-        clone.make_nullable();
-        clone
-    }
-
-    pub fn nullable_if(self, nullable: bool) -> Self {
-        if nullable {
-            self.nullable()
-        } else {
-            self
         }
     }
 }
@@ -615,6 +651,19 @@ impl<Type> OptionalType<Type> {
     }
 }
 
+impl<Type: HasNullability> OptionalType<Type> {
+    /// If optional, returns the inner type nullable. Otherwise just the inner type.
+    /// Optionality is very similar to nullability, the difference is that you can completely omit
+    /// providing optional-typed values at the end of an argument list or tuple
+    pub fn collapse_optionality_into_nullability(mut self) -> Type {
+        match self.optionality {
+            Optionality::Required => {},
+            Optionality::Optional => { self.type_.make_nullable(); },
+        }
+        self.type_
+    }
+}
+
 impl<Type> ReturnType<Type> {
     pub fn map<NewType>(self, f: impl FnOnce(Type) -> NewType) -> ReturnType<NewType> {
         match self {
@@ -818,5 +867,16 @@ impl BitOr for Nullability {
 impl BitOrAssign for Nullability {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = *self | rhs;
+    }
+}
+
+impl<F: FnOnce() -> Nullability> BitOr<F> for Nullability {
+    type Output = Self;
+
+    fn bitor(self, rhs: F) -> Self::Output {
+        match self {
+            Nullability::NonNullable => Nullability::NonNullable,
+            Nullability::Nullable => rhs(),
+        }
     }
 }
