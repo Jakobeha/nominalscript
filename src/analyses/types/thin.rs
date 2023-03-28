@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
+use replace_with::replace_with_or_default;
 use smol_str::SmolStr;
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::ast::tree_sitter::SubTree;
@@ -53,14 +55,14 @@ pub struct TypeIdent<Type> {
 
 /// A generic parameter (generic def)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeParam<Type> {
+pub struct TypeParam<Type: TypeTrait> {
     /// Note that the actual variance is the intersection of this and the inferred variance.
     /// Furthermore, if this is outside of the actual variance the compiler will log an error
     pub variance_bound: Variance,
     pub name: TypeName,
     // Remember: these don't need to be boxed because they are in a vec
     /// Any instantiation of this parameter must inherit these
-    pub supers: Vec<Type>
+    pub supers: TypeTrait::Inherited,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -71,7 +73,9 @@ pub enum Variance {
     Covariant,
     /// `lhs` must be a supertype of `rhs`
     Contravariant,
-    /// `lhs` and `rhs` must not be incompatible, i.e. if `lhs` and `rhs` are inhabited `lhs & rhs` must be inhabited
+    /// `lhs` and `rhs` must not be disjoint, i.e. if `lhs` and `rhs` are inhabited (there exists
+    /// at least one instance of each) `lhs & rhs` must be inhabited (there exists at least one
+    /// value which is both an instance of `lhs` and a `rhs`).
     #[default]
     Bivariant,
 }
@@ -147,14 +151,19 @@ pub struct OptionalType<Type> {
 /// Base type of [ThinType] and [FatType] which contains associated types that are different
 /// between the 2.
 pub trait TypeTrait {
+    type Inherited;
     type RestArgType;
 
+    fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited;
+    fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited;
     fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType;
     fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType;
 }
 
 /// Maps the associated types of [TypeTrait] from the `OldType` into ours.
 pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
+    fn map_inherited(inherited: OldType::Inherited, f: impl FnMut(OldType) -> Self) -> Self::Inherited;
+    fn map_ref_inherited(inherited: &OldType::Inherited, f: impl FnMut(Cow<'_, OldType>) -> Self) -> Self::Inherited;
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
@@ -169,11 +178,19 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
         arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &OldType::RestArgType,
         return_type: ReturnType<Self>,
-        f: impl FnMut(&OldType) -> Self
+        f: impl FnMut(Cow<'_, OldType>) -> Self
     ) -> FnType<Self>;
 }
 
 impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
+    fn map_inherited(inherited: T::Inherited, f: impl FnMut(T) -> Self) -> Self::Inherited {
+        f(inherited)
+    }
+
+    fn map_ref_inherited(inherited: &T::Inherited, f: impl FnMut(Cow<'_, T>) -> Self) -> Self::Inherited {
+        f(Cow::Borrowed(inherited))
+    }
+
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
@@ -197,13 +214,13 @@ impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
         arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &T::RestArgType,
         return_type: ReturnType<Self>,
-        f: impl FnMut(&T) -> Self
+        f: impl FnMut(Cow<'_, T>) -> Self
     ) -> FnType<Self> {
         FnType {
             type_params,
             this_type,
             arg_types,
-            rest_arg_type: Self::map_ref_rest_arg_type(rest_arg_type, f),
+            rest_arg_type: Self::map_ref_rest_arg_type(rest_arg_type, |x| f(Cow::Borrowed(x))),
             return_type,
         }
     }
@@ -241,6 +258,13 @@ pub enum Optionality {
 
 macro_rules! impl_structural_type_constructors {
     () => {
+    pub const EMPTY_REST_ARG: Self = Self::Structural {
+        nullability: $crate::analyses::types::Nullability::NonNullable,
+        structure: $crate::analyses::types::TypeStructure::Tuple {
+            element_types: Vec::new(),
+        }
+    };
+
     pub fn func(
         type_params: impl Iterator<Item=$crate::analyses::types::TypeParam<Self>>,
         this_type: Self,
@@ -287,10 +311,6 @@ macro_rules! impl_structural_type_constructors {
                 field_types: property_types.collect(),
             }
         }
-    }
-
-    pub fn empty_rest_arg() -> Self {
-        Self::tuple(std::iter::empty())
     }
     }
 }
@@ -381,7 +401,19 @@ impl ThinType {
 }
 
 impl TypeTrait for ThinType {
+    type Inherited = Vec<ThinType>;
     type RestArgType = ThinType;
+
+    fn map_inherited(mut inherited: Self::Inherited, mut f: impl FnMut(Self) -> Self) -> Self::Inherited {
+        for inherited in inherited.iter_mut() {
+            replace_with_or_default(inherited, &mut f);
+        }
+        inherited
+    }
+
+    fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited {
+        inherited.iter().map(f).collect()
+    }
 
     fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
         f(rest_arg_type)

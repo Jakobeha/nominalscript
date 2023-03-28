@@ -5,6 +5,8 @@ use crate::analyses::bindings::ValueName;
 /// Step to get from one type to one of its subtypes, or decl to supertypes
 pub enum TypeLoc<'a> {
     Supertypes,
+    SuperIdGeneric,
+    SuperStructure,
     ArrayElem,
     TupleElem { index: usize },
     ObjectField { name: &'a ValueName },
@@ -18,6 +20,8 @@ pub enum TypeLoc<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum TypeLocPtr {
     Supertypes,
+    SuperIds,
+    SuperStructure,
     ArrayElem,
     TupleElem { index: usize },
     ObjectField { name: NonNull<ValueName> },
@@ -31,6 +35,8 @@ impl<'a> Display for TypeLoc<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TypeLoc::Supertypes => write!(f, "supertypes"),
+            TypeLoc::SuperIdGeneric => write!(f, "super id"),
+            TypeLoc::SuperStructure => write!(f, "super structure"),
             TypeLoc::ArrayElem => write!(f, "array element"),
             TypeLoc::TupleElem { index } => write!(f, "element {}", index),
             TypeLoc::ObjectField { name } => write!(f, "field {}", name),
@@ -46,6 +52,8 @@ impl<'a> TypeLoc<'a> {
     pub fn as_ptr(&self) -> TypeLocPtr {
         match *self {
             TypeLoc::Supertypes => TypeLocPtr::Supertypes,
+            TypeLoc::SuperIdGeneric => TypeLocPtr::SuperIds,
+            TypeLoc::SuperStructure => TypeLocPtr::SuperStructure,
             TypeLoc::ArrayElem => TypeLocPtr::ArrayElem,
             TypeLoc::TupleElem { index } => TypeLocPtr::TupleElem { index },
             TypeLoc::ObjectField { name } => TypeLocPtr::ObjectField { name: NonNull::from(name) },
@@ -62,6 +70,8 @@ impl TypeLocPtr {
     pub unsafe fn as_ref<'a>(&self) -> TypeLoc<'a> {
         match *self {
             TypeLocPtr::Supertypes => TypeLoc::Supertypes,
+            TypeLocPtr::SuperIds => TypeLoc::SuperIdGeneric,
+            TypeLocPtr::SuperStructure => TypeLoc::SuperStructure,
             TypeLocPtr::ArrayElem => TypeLoc::ArrayElem,
             TypeLocPtr::TupleElem { index } => TypeLoc::TupleElem { index },
             TypeLocPtr::ObjectField { name } => TypeLoc::ObjectField { name: unsafe { name.as_ref() } },

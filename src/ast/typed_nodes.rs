@@ -360,7 +360,7 @@ impl<'tree> AstType<'tree> {
                         .named_children(&mut node.walk())
                         .filter(|x| Some(x) != this_param.as_ref() && Some(x) != rest_param.as_ref())
                         .map(Self::parse_optional),
-                    rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
+                    rest_param.map_or(ThinType::EMPTY_REST_ARG, Self::parse),
                     Self::parse_return(node.field_child("return_type").unwrap()),
                 )
             }
@@ -407,7 +407,7 @@ impl<'tree> AstType<'tree> {
                         .named_children(&mut node.walk())
                         .filter(|x| Some(x) != this_param.as_ref() && Some(x) != rest_param.as_ref())
                         .map(Self::parse_optional),
-                    rest_param.map_or(ThinType::empty_rest_arg(), Self::parse),
+                    rest_param.map_or(ThinType::EMPTY_REST_ARG, Self::parse),
                     Self::parse_return(node.named_child(3).unwrap()),
                 );
                 Field {
@@ -615,7 +615,7 @@ impl<'tree> AstFunctionDecl<'tree> {
                 .map(AstParameter::optional_thin),
             formal_params.iter().find(|param| param.is_rest_param)
                 .map(AstParameter::thin)
-                .unwrap_or(ThinType::empty_rest_arg()),
+                .unwrap_or(ThinType::EMPTY_REST_ARG),
             return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
                 .unwrap_or_default()
         ));

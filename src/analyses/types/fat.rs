@@ -1,17 +1,17 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::io::Read;
-use std::iter::{once, repeat, zip};
+use std::iter::{once, repeat};
 use std::rc::Rc;
 
 use replace_with::replace_with;
-use tree_sitter::LogType::Parse;
 
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
 use crate::ast::tree_sitter::SubTree;
 use crate::diagnostics::TypeLogger;
 use crate::{error, note};
+use crate::misc::VecFilter;
 
 /// Type declaration after we've resolved the supertypes
 #[derive(Debug, Clone)]
@@ -71,6 +71,7 @@ pub struct FatTypeInherited {
     pub structure: Option<TypeStructure<FatType>>,
     pub typescript_types: Vec<SubTree>,
     pub guards: Vec<NominalGuard>,
+    pub is_never: bool,
 }
 
 /// Possible rest argument in a fat function type
@@ -283,35 +284,41 @@ impl FatType {
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// Returns if the structures are disjoint, so the union is `Never`.
+    #[must_use("check if the unified structure is `Never`")]
     pub fn unify_structure(
         this: &mut Option<TypeStructure<Self>>,
         other: Option<TypeStructure<Self>>,
         bias: Variance,
         mut e: TypeLogger<'_, '_, '_>
-    ) {
+    ) -> bool {
         let Some(other) = other else {
             if !bias.is_contravariant() {
                 error!(e, "assigned type input must be a structure but required type does not");
             }
-            return
+            return false
         };
         let Some(this) = this else {
             if !bias.is_covariant() {
                 error!(e, "assigned type has no structure but required type does");
             }
             *this = Some(other);
-            return
+            return false
         };
-        Self::unify_structure2(this, other, bias, e);
+        Self::unify_structure2(this, other, bias, e)
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// Returns if the structures are disjoint, so the union is `Never`.
+    #[must_use("check if the unified structure is `Never`")]
     pub fn unify_structure2(
         this: &mut TypeStructure<Self>,
         mut other: TypeStructure<Self>,
         bias: Variance,
         mut e: TypeLogger<'_, '_, '_>
-    ) {
+    ) -> bool {
         // Do whole structure conversions to get equivalent kinds of possible
         match (this.kind(), other.kind()) {
             (StructureKind::Tuple, StructureKind::Array) => {
@@ -365,6 +372,7 @@ impl FatType {
         match (this, other) {
             (TypeStructure::Fn { fn_type }, TypeStructure::Fn { fn_type: other_fn_type }) => {
                 Self::unify_fn(fn_type, *other_fn_type, bias, e);
+                false
             }
             (TypeStructure::Array { element_type }, TypeStructure::Array { element_type: other_element_type }) => {
                 Self::unify(
@@ -373,6 +381,7 @@ impl FatType {
                     bias,
                     e.with_context(TypeLoc::ArrayElem)
                 );
+                false
             }
             (TypeStructure::Tuple { element_types }, TypeStructure::Tuple { element_types: other_element_types }) => {
                 Self::unify_optionals(
@@ -382,6 +391,7 @@ impl FatType {
                     bias,
                     |index | e.with_context(TypeLoc::TupleElem { index })
                 );
+                false
             }
             (TypeStructure::Object { field_types }, TypeStructure::Object { field_types: other_field_types }) => {
                 Self::unify_fields(
@@ -390,9 +400,11 @@ impl FatType {
                     bias,
                     |name| e.with_context(TypeLoc::ObjectField { name })
                 );
+                false
             }
             (this, other) => {
                 error!(e, "different structure-kinds: {} and {}", this.kind().a_display(), other.kind().a_display());
+                true
             }
         }
     }
@@ -400,15 +412,16 @@ impl FatType {
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     pub fn unify_fn(
         this: &mut FnType<Self>,
-        other: FnType<Self>,
+        mut other: FnType<Self>,
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
         Self::unify_type_parameters(
             &mut this.type_params,
             other.type_params,
-            (&mut this.this_type, &mut this.arg_types, &mut this.return_type),
-            (&mut other.this_type, &mut other.arg_types, &mut other.return_type),
+            (&mut this.this_type, &mut this.arg_types, &mut this.rest_arg_type, &mut this.return_type),
+            (&mut other.this_type, &mut other.arg_types, &mut other.rest_arg_type, &mut other.return_type),
+            bias,
         );
         Self::unify(
             &mut this.this_type,
@@ -588,10 +601,10 @@ impl FatType {
         this: &mut Vec<TypeParam<Self>>,
         mut other: Vec<TypeParam<Self>>,
         (this_this_param, this_params, this_rest_param, this_return): (
-            &Self,
-            &Vec<OptionalType<Self>>,
-            &FatRestArgType,
-            &ReturnType<Self>
+            &mut Self,
+            &mut Vec<OptionalType<Self>>,
+            &mut FatRestArgType,
+            &mut ReturnType<Self>
         ),
         (other_this_param, other_params, other_rest_param, other_return): (
             &mut Self,
@@ -601,7 +614,19 @@ impl FatType {
         ),
         bias: Variance,
     ) {
-        let subst_name = move |other: &mut TypeParam<Self>, new_name: TypeName| {
+        let this_type_params = this;
+        let mut other_type_params = other;
+
+        let subst_this_with_never = move |this: &TypeParam<Self>| {
+            // Subst name
+            this_this_param.subst_name_with_never(&this.name);
+            for this_param in this_params.iter_mut() {
+                this_param.subst_name_with_never(&this.name);
+            }
+            this_rest_param.subst_name_with_never(&this.name);
+            this_return.subst_name_with_never(&this.name);
+        };
+        let subst_other = move |other: &mut TypeParam<Self>, new_name: TypeName| {
             // Subst name
             other_this_param.subst_name(&other.name, &new_name);
             for other_param in other_params.iter_mut() {
@@ -615,7 +640,7 @@ impl FatType {
 
         // Remove and subst other params with the same occurrences as this params, and merge
         // the bounds
-        let this_occurrences = this.iter().map(|this| {
+        let this_occurrences = this_type_params.iter().map(|this| {
             this_this_param.occurrences_of(this)
                 .chain(this_params.iter().flat_map(|param| param.occurrences_of(this)))
                 .chain(this_rest_param.occurrences_of(this))
@@ -623,16 +648,16 @@ impl FatType {
                 .collect::<Vec<_>>()
         }).collect::<Vec<_>>();
         let mut i = 0;
-        while i < other.len() {
+        while i < other_type_params.len() {
             let remove = {
-                let other = &mut other[i];
+                let other = &mut other_type_params[i];
                 let other_occurrences = other_this_param.occurrences_of(other)
                     .chain(other_params.iter().flat_map(|param| param.occurrences_of(other)))
                     .chain(other_rest_param.occurrences_of(other))
                     .chain(other_return.occurrences_of(other));
                 if let Some(j) = this_occurrences.iter().position(|this_occurrences| this_occurrences == other_occurrences) {
                     // Subst other with this
-                    let this = &mut this[j];
+                    let this = &mut this_type_params[j];
                     if bias.do_union() {
                         this.variance_bound |= other.variance_bound
                     } else {
@@ -642,36 +667,44 @@ impl FatType {
                     let other_supers = std::mem::take(&mut other.supers);
                     // TODO: Subst all with Never type if applicable
                     Self::unify_inherited(&mut this.supers, other_supers, bias, TypeLogger::ignore());
-                    subst_name(other, this.name.clone());
+                    let is_never = this.supers.is_never;
+                    if is_never {
+                        subst_this_with_never(this);
+                    } else {
+                        subst_other(other, this.name.clone());
+                    }
+                    if is_never {
+                        this_type_params.remove(j);
+                    }
                     true
                 } else {
                     false
                 }
             };
             if remove {
-                other.remove(i)
+                other_type_params.remove(i)
             } else {
                 i += 1
             }
         }
 
         // Change other params with same name (and not same occurrences) as this params
-        for other in other.iter_mut() {
-            if this.iter().any(|this_param| this_param.name == other.name) {
+        for other in other_type_params.iter_mut() {
+            if this_type_params.iter().any(|this_param| this_param.name == other.name) {
                 // Need to switch name
                 let new_name = TypeName::fresh(&other.name, |new_name| {
-                    this.iter().any(|this_param| this_param.name == new_name)
+                    this_type_params.iter().any(|this_param| this_param.name == new_name)
                         || other.iter().any(|other| other.name == new_name)
                 });
-                subst_name(other, new_name);
+                subst_other(other, new_name);
             }
         }
 
         // Add other params (without same occurrences, and some with changed names)
-        this.extend(other);
+        this_type_params.extend(other_type_params);
     }
 
-        /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
     /// In the subtype-checking field order isn't important and field keys are unified like sets.
     /// However, this still tries to preserve field order in `this` as much as possible for better
@@ -691,6 +724,58 @@ impl FatType {
             let this = Self::NEVER;
             Self::unify(this, other, bias, e(name));
         } */
+    }
+
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// Note that the unify "intersection" contains *all* super-ids, which is actually a union
+    /// (inherit intersection = inherit all - remember that the more types are inherited, the less
+    /// instances exist, and a type union has more instances).
+    pub fn unify_super_ids(this: &mut Vec<TypeIdent<FatType>>, mut other: Vec<TypeIdent<FatType>>, bias: Variance, e: impl Fn(&TypeName) -> TypeLogger<'_, '_, '_>) {
+        if bias.do_union() {
+            this.retain_mut(|this| {
+                match other.find_remove(|other| this.name == other.name) {
+                    None => false,
+                    Some(other) => {
+                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(&this.name));
+                        true
+                    }
+                }
+            });
+        } else {
+            this.reserve(other.len());
+            for other in other {
+                let push_other = match this.iter_mut().find(|this| this.name == other.name) {
+                    None => Some(other),
+                    Some(this) => {
+                        Self::unify_generic_args(&mut this.generic_args, other.generic_args, bias, e(&this.name));
+                        None
+                    },
+                };
+                if let Some(other) = push_other {
+                    this.push(other);
+                }
+            }
+        }
+    }
+
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// Note that an "intersection" of inherited types contains *all* inherited supertypes (inherit
+    /// intersection = inherit `this` and `other`), while a "union" of inherited types contains
+    /// *only common* inherited supertypes (inherit union = inherit `this` or `other`).
+    pub fn unify_inherited(this: &mut FatTypeInherited, other: FatTypeInherited, bias: Variance, e: TypeLogger<'_, '_, '_>) {
+        Self::unify_super_ids(&mut this.super_ids, other.super_ids, bias, |ident| e.with_context(TypeLoc::SuperIdGeneric { ident }));
+        let is_never = FatType::unify_structure(&mut this.structure, other.structure, bias, e.with_context(TypeLoc::SuperStructure));
+        if bias.do_union() {
+            this.is_never &= is_never;
+            this.typescript_types.retain(|t| other.typescript_types.contains(t));
+            this.guards.retain(|g| other.guards.contains(g));
+        } else {
+            this.is_never |= is_never;
+            this.typescript_types.extend(other.typescript_types.into_iter().filter(|g| !this.typescript_types.contains(g)));
+            this.guards.extend(other.guards.into_iter().filter(|g| !this.guards.contains(g)));
+        }
     }
 
     /// **Unifies** `self` with `other` and logs subtype/disjoint errors based on `bias`.
@@ -725,7 +810,27 @@ impl FatType {
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
-        todo!()
+        // Easy case
+        if self == other {
+            return
+        }
+        match (self, other) {
+            (FatType::Any, other) => {
+                if !bias.is_contravariant() {
+                    error!(e, "assigned Any but required a specific type");
+                }
+                if !bias.do_union() {
+                    *self = other;
+                }
+            }
+            (FatType::Never { nullability }, other) => {
+                if !bias.is_covariant() {
+                    error!(e, "assigned Never but required a specific type");
+                }
+                *self = other;
+                self.set_nullability(nullability);
+            }
+        }
     }
 
 
@@ -733,6 +838,7 @@ impl FatType {
     pub fn unify_all_optionals(types: impl IntoIterator<Item=OptionalType<Self>>, bias: Variance, e: TypeLogger<'_, '_, '_>) -> Self {
         todo!();
     }
+
 
     /// [Unifies](FatType::unify) all types and logs subtype/disjoint errors based on `bias`.
     ///
@@ -752,7 +858,16 @@ impl FatType {
 }
 
 impl TypeTrait for FatType {
+    type Inherited = FatTypeInherited;
     type RestArgType = FatRestArgType;
+
+    fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited {
+        inherited.map(f)
+    }
+
+    fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited {
+        inherited.map_ref(f)
+    }
 
     fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
         rest_arg_type.map(f)
@@ -764,6 +879,16 @@ impl TypeTrait for FatType {
 }
 
 impl TypeTraitMapsFrom<ThinType> for FatType {
+    fn map_inherited(inherited: ThinType::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
+        let inherited = inherited.into_iter().map(f).collect();
+        Self::unify_all_structures(inherited, Bias::Invariant, TypeLogger::ignore())
+    }
+
+    fn map_ref_inherited(inherited: &ThinType::Inherited, f: impl FnMut(&ThinType) -> Self) -> Self::Inherited {
+        let inherited = inherited.iter().map(f).collect();
+        Self::unify_all_structures(inherited, Bias::Invariant, TypeLogger::ignore())
+    }
+
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
@@ -804,6 +929,14 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
 }
 
 impl TypeTraitMapsFrom<FatType> for ThinType {
+    fn map_inherited(inherited: FatType::Inherited, f: impl FnMut(FatType) -> Self) -> Self::Inherited {
+        inherited.into_fat_types().map(f)
+    }
+
+    fn map_ref_inherited(inherited: &FatType::Inherited, f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
+        inherited.clone().into_fat_types().map(|x| f(Cow::Owned(f)))
+    }
+
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
@@ -827,18 +960,13 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
         arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &FatRestArgType,
         return_type: ReturnType<Self>,
-        f: impl FnMut(&FatType) -> Self
+        f: impl FnMut(Cow<'_, FatType>) -> Self
     ) -> FnType<Self> {
         FnType {
             type_params,
             this_type,
             arg_types,
-            // Not ideal, maybe remove MapFrom and just do the thin/fat conversions directly or have Fn take Cow or...?
-            rest_arg_type: match rest_arg_type {
-                FatRestArgType::None => f(&FatType::Any),
-                FatRestArgType::Array { element } => f(&FatType::array(element.clone())),
-                FatRestArgType::Illegal { intended_type } => f(intended_type)
-            },
+            rest_arg_type: f(rest_arg_type.as_cow()),
             return_type
         }
     }
@@ -913,12 +1041,21 @@ impl FatRestArgType {
             Self::Illegal { intended_type: _ } => None
         }.into_iter().flatten()
     }
+
+    /// Converts into a [FatType]. If possible thie will use a static or internal reference.
+    pub fn as_cow(&self) -> Cow<'_, FatType> {
+        match self {
+            Self::None => Cow::Borrowed(&FatType::EMPTY_REST_ARG),
+            Self::Array { element } => Cow::Owned(FatType::array(element.clone())),
+            Self::Illegal { intended_type } => Cow::Borrowed(intended_type)
+        }
+    }
 }
 
 impl Into<FatType> for FatRestArgType {
     fn into(self) -> FatType {
         match self {
-            Self::None => FatType::Any,
+            Self::None => FatType::EMPTY_REST_ARG,
             Self::Array { element } => FatType::array(element),
             Self::Illegal { intended_type } => intended_type
         }
@@ -939,22 +1076,20 @@ impl FatRestArgKind {
 }
 
 impl FatTypeInherited {
+    pub const EMPTY: Self = Self::empty();
+
     /// Also = `default()`
     pub const fn empty() -> Self {
         Self {
             super_ids: Vec::new(),
             structure: None,
             typescript_types: Vec::new(),
-            guards: Vec::new()
+            guards: Vec::new(),
+            is_never: false
         }
     }
 
-    pub fn merge(&mut self, other: Self<>, e: TypeLogger<'_, '_, '_>) {
-        FatType::unify_structure(&mut self.structure, other.structure, Variance::Bivariant, e);
-        self.super_ids.extend(other.super_ids);
-        self.typescript_types.extend(other.typescript_types);
-        self.guards.extend(other.guards);
-    }
+    pub fn into_fat_types()
 }
 
 

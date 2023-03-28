@@ -9,6 +9,8 @@ mod mk_path;
 mod impl_by_map;
 /// `OnceCell::with_option`
 mod once_cell_with_option;
+/// `Vec::find_remove`
+mod vec_find_remove;
 
 pub use nice_mutex::NiceMutex;
 pub(crate) use chain::chain;
@@ -16,3 +18,4 @@ pub(crate) use frozen_map_iter::FrozenMapIter;
 pub(crate) use mk_path::mk_path;
 pub(crate) use impl_by_map::impl_by_map;
 pub(crate) use once_cell_with_option::*;
+pub(crate) use vec_find_remove::VecFilter;
