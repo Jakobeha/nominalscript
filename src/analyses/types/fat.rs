@@ -5,6 +5,7 @@ use std::iter::{once, repeat, zip};
 use std::rc::Rc;
 
 use replace_with::replace_with;
+use tree_sitter::LogType::Parse;
 
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::types::{Field, FnType, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
@@ -92,6 +93,12 @@ enum FatRestArgKind {
 #[derive(Debug, Clone)]
 pub struct FatTypeHole {
     upper_bound: Rc<RefCell<FatType>>
+}
+
+struct TypeParamSubsts {
+    /// Type parameters (nominal types) with the name at index `i` (if `Some`)
+    /// must be replaced with the actual type parameter name at index `i`.
+    old_names_to_replace: Vec<Option<TypeName>>
 }
 
 impl FatTypeDecl {
@@ -311,20 +318,45 @@ impl FatType {
                 if !bias.is_covariant() {
                     error!(e, "an array is not a subtype of a tuple");
                 }
-                replace_with(this, || TypeStructure::Array { element_type: Box::default() }, |this| {
-                    let TypeStructure::Tuple { element_types } = this else { unreachable!() };
-                    TypeStructure::Array {
-                        element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+
+                if bias.do_union() {
+                    replace_with(this, || TypeStructure::Array { element_type: Box::default() }, |this| {
+                        let TypeStructure::Tuple { element_types } = this else { unreachable!() };
+                        TypeStructure::Array {
+                            element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+                        }
+                    });
+                } else {
+                    let len = match &this {
+                        TypeStructure::Tuple { element_types } => element_types.len(),
+                        _ => unreachable!()
+                    };
+                    let TypeStructure::Array { element_type } = other else { unreachable!() };
+                    other = TypeStructure::Tuple {
+                        element_types: vec![OptionalType::optional(*element_type); len]
                     }
-                });
+                }
             }
             (StructureKind::Array, StructureKind::Tuple) => {
                 if !bias.is_contravariant() {
                     error!(e, "a tuple is not a supertype of an array");
                 }
-                let TypeStructure::Tuple { element_types } = other else { unreachable!() };
-                other = TypeStructure::Array {
-                    element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+                if bias.do_union() {
+                    let TypeStructure::Tuple { element_types } = other else { unreachable!() };
+                    other = TypeStructure::Array {
+                        element_type: Box::new(FatType::unify_all_optionals(element_types, Variance::Bivariant, TypeLogger::ignore()))
+                    }
+                } else {
+                    let len = match &other {
+                        TypeStructure::Tuple { element_types } => element_types.len(),
+                        _ => unreachable!()
+                    };
+                    replace_with(this, || TypeStructure::Tuple { element_types: Vec::default() }, |this| {
+                        let TypeStructure::Array { element_type } = this else { unreachable!() };
+                        TypeStructure::Tuple {
+                            element_types: vec![OptionalType::optional(*element_type); len]
+                        }
+                    });
                 }
             }
             _ => {}
@@ -372,11 +404,11 @@ impl FatType {
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
-        Self::unify_type_params(
+        Self::unify_type_parameters(
             &mut this.type_params,
             other.type_params,
-            bias.reversed(),
-            |index| e.with_context(TypeLoc::FunctionTypeParam { index })
+            (&mut this.this_type, &mut this.arg_types, &mut this.return_type),
+            (&mut other.this_type, &mut other.arg_types, &mut other.return_type),
         );
         Self::unify(
             &mut this.this_type,
@@ -443,7 +475,7 @@ impl FatType {
     /// its corresponding parameter type list doesnt't have as much elements as the other parameter
     /// type list. Also be aware that the function's `this` parameter types and type parameters must
     /// be unified, but in separate functions, since they are not affected by regular or rest
-    /// parameter types (or each other).
+    /// parameter types (well, type parameters are, but [Self::unify_type_parameters] handles this).
     pub fn unify_regular_and_rest_parameters<'a, 'b: 'a, 'tree: 'a>(
         this: (&mut Vec<OptionalType<Self>>, &mut FatRestArgType),
         other: (Vec<OptionalType<Self>>, FatRestArgType),
@@ -465,17 +497,17 @@ impl FatType {
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     pub fn unify_optionals2<'a, 'b: 'a, 'tree: 'a>(
         elem_desc: &'static str,
-        this: (&mut Vec<OptionalType<Self>>, Option<impl Iterator<Item = &Self>>),
+        this: (&mut Vec<OptionalType<Self>>, Option<&mut FatRestArgType>),
         other_iter: impl Iterator<Item = OptionalType<Self>>,
         bias: Variance,
         e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
     ) {
-        let (this_vec, this_rest_iter) = this;
-        let mut this_rest_iter = this_rest_iter.into_iter().flatten().cloned().fuse();
+        let (this_vec, this_rest) = this;
+        let mut this_rest_iter = this_rest.into_iter().flat_map(|x| x.iter()).cloned().fuse();
         let mut other_iter = other_iter.fuse();
         for i in 0.. {
             let other = other_iter.next();
-            if this.len() < i && other.is_some() {
+            if i >= this.len() && other.is_some() {
                 if let Some(this_rest) = this_rest_iter.next() {
                     this.push(OptionalType::optional(this_rest));
                 }
@@ -494,7 +526,7 @@ impl FatType {
                     if !bias.is_contravariant() {
                         error!(e(index), "assigned has more {}s than required", elem_desc);
                     }
-                    this.optionality = Optionality::Optional;
+                    this.optionality = Optionality::from(bias.do_union());
                     None
                 }
                 (None, Some(mut other)) => {
@@ -502,12 +534,21 @@ impl FatType {
                     if !bias.is_covariant() {
                         error!(e(index), "assigned has less {}s than required", elem_desc);
                     }
-                    other.optionality = Optionality::Optional;
+                    other.optionality = Optionality::from(bias.do_union());
                     Some(other)
                 }
             };
 
+            // Remove trailing "Never" args which can't actually be filled
+            if let Some(this_rest) = this_rest {
+                if matches!(this_rest, FatRestArgType::Array { element: FatType::NEVER }) {
+                    *this_rest = FatRestArgType::None
+                }
+            }
             if let Some(other) = push_to_this {
+                if let Some(this_rest) = this_rest {
+                    *this_rest = FatRestArgType::None;
+                }
                 this_vec.push(other);
             }
         }
@@ -525,46 +566,63 @@ impl FatType {
         } else if other.optionality < this.optionality && !bias.is_contravariant() {
             error!(e, "assigned is optional but required is not");
         }
-        this.optionality |= other.optionality;
+        if bias.do_union() {
+            this.optionality |= other.optionality;
+        } else {
+            this.optionality &= other.optionality;
+        }
         Self::unify(&mut this.type_, other.type_, bias, e);
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// Type parameter unification involves substituting the old parameter names in `other` with
+    /// replaced ones if they are also in `this`. Thus we also take `other`'s regular parameter
+    /// types and return type.
+    ///
+    /// TODO:
+    /// The type parameters are appended together. Then we look for value parameters where both
+    /// `this` and `other` are type parameters, and merge. Then we remove type parameters which
+    /// are unused, and inline type parameters which are only used by one other type parameter as
+    /// a supertype.
     pub fn unify_type_parameters<'a, 'b: 'a, 'tree: 'a>(
         this: &mut Vec<TypeParam<Self>>,
-        other: Vec<TypeParam<Self>>,
-        bias: Variance,
-        e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
+        mut other: Vec<TypeParam<Self>>,
+        (this_this_param, this_params, this_rest_param, this_return): (
+            &mut Self,
+            &mut Vec<OptionalType<Self>>,
+            &mut FatRestArgType,
+            &mut ReturnType<Self>
+        )
+        (other_this_param, other_params, other_rest_param, other_return): (
+            &mut Self,
+            &mut Vec<OptionalType<Self>>,
+            &mut FatRestArgType,
+            &mut ReturnType<Self>
+        )
     ) {
-        let mut other_iter = other.into_iter().fuse();
-        for i in 0.. {
-            let this = this.get_mut(i);
-            let other = other_iter.next();
-
-            // TODO: Replace some of this, how does type unification even work?
-            let push_to_this = match (this, other) {
-                (None, None) => break,
-                (Some(this), Some(other)) => {
-                    Self::unify_type_parameter(this, other, bias, e(i));
-                    None
+        for other_param in other.iter_mut() {
+            if this.iter().any(|this_param| this_param.name == other_param.name) {
+                // Need to switch name
+                let new_name = TypeName::fresh(&other_param.name, |new_name| {
+                    this.iter().any(|this_param| this_param.name == new_name)
+                        || other.iter().any(|other_param| other_param.name == new_name)
+                });
+                // Subst name
+                other_this_param.subst_name(&other_param.name, &new_name);
+                for other_param in other_params.iter_mut() {
+                    other_param.subst_name(&other_param.name, &new_name);
                 }
-                (Some(this), None) => {
-                    if !bias.is_contravariant() {
-                        error!(e(i), "assigned has more type parameters than required");
-                    }
-                    this.type_ = Self::NEVER;
-                }
-                (None, Some(other)) => {
-                    if !bias.is_covariant() {
-                        error!(e(i), "assigned has less type parameters than required");
-                    }
-                    this.push(other.clone());
-                }
+                other_rest_param.subst_name(&other_param.name, &new_name);
+                other_return.subst_name(&other_param.name, &new_name);
+                // Change name
+                other_param.name = new_name;
             }
         }
+        this.extend(other);
     }
 
-    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+        /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
     /// In the subtype-checking field order isn't important and field keys are unified like sets.
     /// However, this still tries to preserve field order in `this` as much as possible for better
@@ -588,10 +646,16 @@ impl FatType {
 
     /// **Unifies** `self` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
-    /// `self` will be mutated into the union type `self U other`: a value is an instance of this
-    /// type if it's an instance of the original `self` *or* `other`.
+    /// The unification is either union or intersection depending on `bias`:
+    /// - If `bias` is bivariant or covariant, `self` will be mutated into the union type
+    ///   `self ⋃ other`: a value is an instance of this type if it's an instance of the original
+    ///   `self` *or* `other`.
+    /// - If `bias` is contravariant or invariant, `self` will be mutated into the intersection type
+    ///  `self ⋂ other`: a value is an instance of this type if it's an instance of the original
+    ///   `self` *and* `other`.
     ///
-    /// Besides creating the union type, this also logs "type mismatch" errors depending on `bias:
+    /// Besides creating the union orintersection type, this also logs "type mismatch" errors
+    /// depending on `bias:
     ///
     /// - If `bias` is covariant, then `self` must be a subtype of `other` (i.e. all instances of
     ///   `self` must also be instances of `other`).
@@ -605,8 +669,7 @@ impl FatType {
     ///   exists at least one possible value which is an instance of `other`).
     ///
     /// If you are only creating a union and don't care about type mismatches, even if `self` and
-    /// `other` are disjoint, you can provide `TypeLogger::ignore` for `e`, which skips logging
-    /// and makes `bias` irrelevant.
+    /// `other` are disjoint, you can provide `TypeLogger::ignore` for `e`, which skips logging.
     fn unify(
         &mut self,
         other: Self,
@@ -865,6 +928,23 @@ impl Eq for FatTypeHole {}
 impl Default for FatTypeHole {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl TypeParamSubsts {
+    pub fn new() -> Self {
+        Self {
+            old_names_to_replace: Vec::new()
+        }
+    }
+
+    pub fn push(&mut self, index: usize, subst: Option<TypeName>) {
+        if let Some(subst) = subst {
+            while self.old_names_to_replace.len() < index {
+                self.old_names_to_replace.push(None);
+            }
+            self.old_names_to_replace.push(Some(subst));
+        }
     }
 }
 

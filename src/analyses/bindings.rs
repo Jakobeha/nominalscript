@@ -90,10 +90,12 @@ pub struct GlobalTypeBinding {
 
 /// The string type used for all value names
 #[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct ValueName(SmolStr);
 
 /// The string type used for all type names
 #[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct TypeName(SmolStr);
 
 impl GlobalValueBinding {
@@ -244,6 +246,23 @@ impl TypeName {
         // const_assert!(!Self::RESERVED.contains(&name));
         Self(SmolStr::new_inline(name))
     }
+
+    // This cannot be deduplicated
+    //noinspection DuplicatedCode
+    pub fn fresh(base_name: &TypeName, is_valid: impl FnMut(&Self) -> bool) -> Self {
+        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
+    }
+
+    fn from_ref(str: &SmolStr) -> &Self {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(str as *const SmolStr as *const Self) }
+    }
+}
+
+impl AsRef<str> for TypeName {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
 }
 
 impl ValueName {
@@ -260,4 +279,32 @@ impl ValueName {
         // assert!(!Self::RESERVED.contains(&name));
         Self(SmolStr::new_inline(name))
     }
+
+    // This cannot be deduplicated
+    //noinspection DuplicatedCode
+    pub fn fresh(base_name: &ValueName, is_valid: impl FnMut(&Self) -> bool) -> Self {
+        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
+    }
+
+    fn from_ref(str: &SmolStr) -> &Self {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(str as *const SmolStr as *const Self) }
+    }
+}
+
+impl AsRef<str> for ValueName {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+fn fresh_smol_str(base_name: impl AsRef<str>, is_valid: impl FnMut(&SmolStr) -> bool) -> SmolStr {
+    let base_name = base_name.as_ref();
+    for i in 0.. {
+        let new_name = SmolStr::new(format!("{}{}", base_name, i));
+        if is_valid(&new_name) {
+            return new_name
+        }
+    }
+    unreachable!("i goes to infinity")
 }

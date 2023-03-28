@@ -657,6 +657,10 @@ impl Variance {
             Variance::Invariant => false,
         }
     }
+
+    pub fn do_union(self) -> bool {
+        self.is_covariant()
+    }
 }
 
 impl PartialOrd for Variance {
