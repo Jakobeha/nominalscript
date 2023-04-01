@@ -61,7 +61,7 @@ pub struct TypeParam<Type: TypeTrait> {
     pub name: TypeName,
     // Remember: these don't need to be boxed because they are in a vec
     /// Any instantiation of this parameter must inherit these
-    pub supers: TypeTrait::Inherited,
+    pub supers: Type::Inherited,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -199,9 +199,9 @@ pub trait TypeTrait: HasNullability {
     type Inherited;
     type RestArgType;
 
-    fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited;
+    fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited where Self: Sized;
     fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited;
-    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType;
+    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType where Self: Sized;
     fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType;
 }
 
@@ -216,7 +216,7 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
         rest_arg_type: OldType::RestArgType,
         return_type: ReturnType<Self>,
         f: impl FnMut(OldType) -> Self
-    ) -> FnType<Self>;
+    ) -> FnType<Self> where Self: Sized;
     fn map_ref_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
@@ -224,7 +224,7 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
         rest_arg_type: &OldType::RestArgType,
         return_type: ReturnType<Self>,
         f: impl FnMut(Cow<'_, OldType>) -> Self
-    ) -> FnType<Self>;
+    ) -> FnType<Self> where Self: Sized;
 }
 
 impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
@@ -476,20 +476,20 @@ impl<Type> TypeIdent<Type> {
     }
 }
 
-impl<Type> TypeParam<Type> {
-    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeParam<NewType> {
+impl<Type: TypeTrait> TypeParam<Type> {
+    pub fn map<NewType: TypeTraitMapsFrom<Type>>(self, f: impl FnMut(Type) -> NewType) -> TypeParam<NewType> {
         TypeParam {
             variance_bound: self.variance_bound,
             name: self.name,
-            supers: self.supers.into_iter().map(f).collect(),
+            supers: NewType::map_inherited(self.supers, f),
         }
     }
 
-    pub fn map_ref<NewType>(&self, f: impl FnMut(&Type) -> NewType) -> TypeParam<NewType> {
+    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, f: impl FnMut(&Type) -> NewType) -> TypeParam<NewType> {
         TypeParam {
             variance_bound: self.variance_bound,
             name: self.name.clone(),
-            supers: self.supers.iter().map(f).collect(),
+            supers: NewType::map_ref_inherited(&self.supers, f),
         }
     }
 }

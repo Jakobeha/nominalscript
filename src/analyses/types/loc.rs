@@ -2,7 +2,7 @@ use std::fmt::Display;
 use crate::analyses::bindings::{FieldName, TypeName};
 
 /// Step to get from one type to one of its subtypes, or decl to supertypes
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TypeLoc {
     Supertype { index: usize },
     SuperIdGeneric { name: TypeName },

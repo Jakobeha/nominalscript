@@ -2,106 +2,22 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
-use std::iter::{once, repeat};
+use std::iter::repeat;
 use std::rc::Rc;
 
 use replace_with::{replace_with, replace_with_or_default};
 
 use crate::analyses::bindings::{FieldName, TypeName};
 use crate::analyses::types::{Field, FnType, HasNullability, impl_structural_type_constructors, NominalGuard, Nullability, Optionality, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeLoc, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
-use crate::ast::tree_sitter::SubTree;
 use crate::diagnostics::TypeLogger;
 use crate::{error, note};
 use crate::misc::{once_if, VecFilter};
 
-/// Type declaration after we've resolved the supertypes
-#[derive(Debug, Clone)]
-pub struct FatTypeDecl {
-    pub name: TypeName,
-    pub type_params: Vec<TypeParam<FatType>>,
-    /// Boxed because it's large
-    pub inherited: Box<FatTypeInherited>
-}
+mod data;
+mod occurrences;
 
-/// Fat type = type after we've resolved the supertypes so that they are also in this structure,
-/// and fat types can be compared / unified directly
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum FatType {
-    /// Top = type of untyped values
-    #[default]
-    Any,
-    /// *non-nullable* `Never` = bottom = type of values which cannot be produced (e.g. loops)
-    /// *nullable* `Never` = `Null` = only null
-    Never {
-        nullability: Nullability,
-    },
-    /// Type with no nominal id, so a non-nominally wrapped structure can be an instance.
-    /// This also means there is no typescript type or guard
-    Structural {
-        nullability: Nullability,
-        structure: TypeStructure<FatType>,
-    },
-    /// Type with at least one nominal id, so all instances are nominally wrapped.
-    /// There may be an additional typescript type and guards as well
-    Nominal {
-        nullability: Nullability,
-        id: TypeIdent<FatType>,
-        /// Boxed because it's large
-        inherited: Box<FatTypeInherited>
-    },
-    /// Uninstantiated generic: equivalent to `Never` if never unified,
-    /// but when unified, it becomes the type it was unified with and stays that way.
-    ///
-    /// Note that it is not `==` to the equivalent fat type even after unification.
-    /// It will be a subtype / supertype though
-    Hole {
-        nullability: Nullability,
-        hole: FatTypeHole
-    }
-}
-
-/// Everything a fat type can inherit:
-///
-/// - super nominal types
-/// - super structural type (only one)
-/// - super typescript types
-/// - guards
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FatTypeInherited {
-    pub super_ids: VecDeque<TypeIdent<FatType>>,
-    pub structure: Option<TypeStructure<FatType>>,
-    pub typescript_types: Vec<SubTree>,
-    pub guards: Vec<NominalGuard>,
-    pub is_never: bool,
-}
-
-/// Possible rest argument in a fat function type
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum FatRestArgType {
-    #[default]
-    None,
-    Array { element: FatType },
-    Illegal { intended_type: FatType },
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-enum FatRestArgKind {
-    Any,
-    Tuple,
-    Array,
-    Illegal
-}
-
-#[derive(Debug, Clone)]
-pub struct FatTypeHole {
-    upper_bound: Rc<RefCell<FatType>>
-}
-
-struct TypeParamSubsts {
-    /// Type parameters (nominal types) with the name at index `i` (if `Some`)
-    /// must be replaced with the actual type parameter name at index `i`.
-    old_names_to_replace: Vec<Option<TypeName>>
-}
+pub use data::*;
+pub use occurrences::*;
 
 impl FatTypeDecl {
     pub fn missing() -> Self {
@@ -141,7 +57,7 @@ impl FatType {
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Hole { nullability: _, hole } => {
-                hole.upper_bound.borrow_mut().make_internally_nullable();
+                hole.upper_bound.borrow_mut().make_nullable_intrinsically();
             },
         }
     }
@@ -155,7 +71,7 @@ impl FatType {
             Self::Nominal { nullability, .. } => *nullability = Nullability::NonNullable,
             Self::Hole { nullability, hole } => {
                 *nullability = Nullability::NonNullable;
-                hole.upper_bound.borrow_mut().make_internally_non_nullable();
+                hole.upper_bound.borrow_mut().make_non_nullable_intrinsically();
             },
         }
     }
@@ -169,28 +85,6 @@ impl FatType {
             Self::Nominal { nullability: _, id: _, inherited } => inherited.structure.map(|s| s.kind()),
             Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().structure_kind()
         }
-    }
-
-    /// Mutable references to ids and structure
-    ///
-    /// No nullability because you can only `make_nullable`, otherwise problems arise from type
-    /// holes.
-    pub fn mut_ids_and_structure(&mut self) -> (impl Iterator<Item=&mut TypeIdent<FatType>>, Option<&mut TypeStructure<FatType>>) {
-        // Handle type holes first because...
-        if let Self::Hole { nullability: _, hole } = self {
-            return hole.upper_bound.get_mut().mut_ids_and_structure()
-        }
-        // ...use Some(iterable) and flatten so that we don't have to use auto_enum or something else
-        let (ids, structure) = match self {
-            Self::Any => (None, None),
-            Self::Never { nullability: _ } => (None, None),
-            Self::Structural { nullability: _, structure } => (None, Some(structure)),
-            Self::Nominal { nullability: _, id, inherited } => {
-                (Some(once(id).chain(inherited.super_ids.iter_mut())), inherited.structure.as_mut())
-            },
-            Self::Hole { nullability: _, hole: _ } => unreachable!("Should've been handled in prior if")
-        };
-        (ids.into_iter().flatten(), structure)
     }
 
     /// Destructs this and returns its nullability, ids and structure
@@ -227,7 +121,7 @@ impl FatType {
     ///
     /// Returns if the structures are disjoint *and* there's an intersection, a case which must be
     /// explicitly handled (if disjoint and union, will handle by making `this` `None`)
-    #[must_use("check if the unified structure is `Never`")]
+    #[must_use = "check if the unified structure is `Never`"]
     pub fn unify_structure(
         this: &mut Option<TypeStructure<Self>>,
         other: Option<TypeStructure<Self>>,
@@ -261,7 +155,7 @@ impl FatType {
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
     /// Returns if the structures are disjoint, so the union is `Any` and intersection is `Never`.
-    #[must_use("check if disjoint")]
+    #[must_use = "check if disjoint"]
     pub fn unify_structure2(
         this: &mut TypeStructure<Self>,
         mut other: TypeStructure<Self>,
@@ -458,7 +352,7 @@ impl FatType {
         let other_iter = other_regular.into_iter().chain(other_rest.into_iter());
         Self::unify_optionals2(
             "parameter",
-            (this_regular, Some(this_rest.iter())),
+            (this_regular, Some(this_rest)),
             other_iter,
             bias,
             e
@@ -476,14 +370,14 @@ impl FatType {
         let (this_vec, this_rest) = this;
         let mut this_rest_iter = this_rest.into_iter().flat_map(|x| x.iter()).cloned().fuse();
         let mut other_iter = other_iter.fuse();
-        for i in 0.. {
+        for index in 0.. {
             let other = other_iter.next();
-            if i >= this.len() && other.is_some() {
+            if index >= this_vec.len() && other.is_some() {
                 if let Some(this_rest) = this_rest_iter.next() {
-                    this.push(OptionalType::optional(this_rest));
+                    this_vec.push(OptionalType::optional(this_rest));
                 }
             }
-            let this = this_vec.get_mut(i);
+            let this = this_vec.get_mut(index);
 
             let push_to_this = match (this, other) {
                 (None, None) => break,
@@ -526,11 +420,11 @@ impl FatType {
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
-    pub fn unify_optional<'a, 'b: 'a, 'tree: 'a>(
+    pub fn unify_optional(
         this: &mut OptionalType<Self>,
         other: OptionalType<Self>,
         bias: Variance,
-        e: impl Fn(usize) -> TypeLogger<'a, 'b, 'tree>
+        e: TypeLogger<'_, '_, '_>
     ) {
         if this.optionality > other.optionality && !bias.is_covariant() {
             error!(e, "assigned is not optional but required is");
@@ -599,20 +493,20 @@ impl FatType {
         // Remove and subst other params with the same occurrences as this params, and merge
         // the bounds
         let this_occurrences = this_type_params.iter().map(|this| {
-            this_this_param.occurrences_of(this)
-                .chain(this_params.iter().flat_map(|param| param.occurrences_of(this)))
-                .chain(this_rest_param.occurrences_of(this))
-                .chain(this_return.occurrences_of(this))
+            this_this_param.occurrences_of(&this.name)
+                .chain(this_params.iter().flat_map(|param| param.occurrences_of(&this.name)))
+                .chain(this_rest_param.occurrences_of(&this.name))
+                .chain(this_return.occurrences_of(&this.name))
                 .collect::<Vec<_>>()
         }).collect::<Vec<_>>();
         let mut i = 0;
         while i < other_type_params.len() {
             let remove = {
                 let other = &mut other_type_params[i];
-                let other_occurrences = other_this_param.occurrences_of(other)
-                    .chain(other_params.iter().flat_map(|param| param.occurrences_of(other)))
-                    .chain(other_rest_param.occurrences_of(other))
-                    .chain(other_return.occurrences_of(other));
+                let other_occurrences = other_this_param.occurrences_of(&other.name)
+                    .chain(other_params.iter().flat_map(|param| param.occurrences_of(&other.name)))
+                    .chain(other_rest_param.occurrences_of(&other.name))
+                    .chain(other_return.occurrences_of(&other.name));
                 if let Some(j) = this_occurrences.iter().position(|this_occurrences| this_occurrences == other_occurrences) {
                     // Subst other with this
                     let this = &mut this_type_params[j];
@@ -725,11 +619,11 @@ impl FatType {
     /// (inherit intersection = inherit all - remember that the more types are inherited, the less
     /// instances exist, and a type union has more instances).
     // This function is essentially exact same as unify_fields...is there a good way to abstract?
-    pub fn unify_super_ids(
+    pub fn unify_super_ids<'a, 'b: 'a, 'tree: 'a>(
         this: &mut VecDeque<TypeIdent<FatType>>,
         mut other: VecDeque<TypeIdent<FatType>>,
         bias: Variance,
-        e: impl Fn(TypeName) -> TypeLogger<'_, '_, '_>
+        e: impl Fn(TypeName) -> TypeLogger<'a, 'b, 'tree>
     ) {
         // Check for subtype/supertype issues from names. Subtype = more identifiers
         let iter_this_super_ids = || this.iter().map(|id| &id.name);
@@ -1213,14 +1107,14 @@ impl TypeTrait for FatType {
 }
 
 impl TypeTraitMapsFrom<ThinType> for FatType {
-    fn map_inherited(inherited: ThinType::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
+    fn map_inherited(inherited: <ThinType as TypeTrait>::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
         let inherited = inherited.into_iter().map(f).collect();
         Self::unify_all_supers(inherited, TypeLogger::ignore())
     }
 
-    fn map_ref_inherited(inherited: &ThinType::Inherited, f: impl FnMut(&ThinType) -> Self) -> Self::Inherited {
-        let inherited = inherited.iter().map(f).collect();
-        Self::unify_all_structures(inherited, Bias::Invariant, TypeLogger::ignore())
+    fn map_ref_inherited(inherited: &<ThinType as TypeTrait>::Inherited, f: impl FnMut(Cow<'_, ThinType>) -> Self) -> Self::Inherited {
+        let inherited = inherited.iter().map(|x| f(Cow::Borrowed(x))).collect();
+        Self::unify_all_supers(inherited, TypeLogger::ignore())
     }
 
     fn map_rest_arg_type_in_fn(
@@ -1248,9 +1142,9 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
         mut arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &ThinType,
         return_type: ReturnType<Self>,
-        f: impl FnMut(&ThinType) -> Self
+        f: impl FnMut(Cow<'_, ThinType>) -> Self
     ) -> FnType<Self> {
-        let intended_rest_arg_type = f(rest_arg_type);
+        let intended_rest_arg_type = f(Cow::Borrowed(rest_arg_type));
         let rest_arg_type = FatRestArgType::from(intended_rest_arg_type, &mut arg_types);
         FnType {
             type_params,
@@ -1263,11 +1157,11 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
 }
 
 impl TypeTraitMapsFrom<FatType> for ThinType {
-    fn map_inherited(inherited: FatType::Inherited, f: impl FnMut(FatType) -> Self) -> Self::Inherited {
+    fn map_inherited(inherited: <FatType as TypeTrait>::Inherited, f: impl FnMut(FatType) -> Self) -> Self::Inherited {
         inherited.into_bare_fat_types().map(f).collect()
     }
 
-    fn map_ref_inherited(inherited: &FatType::Inherited, f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
+    fn map_ref_inherited(inherited: &<FatType as TypeTrait>::Inherited, f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
         inherited.clone().into_bare_fat_types().map(|x| f(Cow::Owned(f))).collect()
     }
 
@@ -1367,16 +1261,16 @@ impl FatRestArgType {
     }
 
     /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
-    pub fn into_iter(self) -> impl Iterator<Item = FatType> {
+    pub fn into_iter(self) -> impl Iterator<Item = OptionalType<FatType>> {
         // Use option/flatten to avoid auto_enum
         match self {
             Self::None => None,
-            Self::Array { element } => Some(repeat(element)),
+            Self::Array { element } => Some(repeat(OptionalType::optional(element))),
             Self::Illegal { intended_type: _ } => None
         }.into_iter().flatten()
     }
 
-    /// Converts into a [FatType]. If possible thie will use a static or internal reference.
+    /// Converts into a [FatType]. If possible this will use a static or internal reference.
     pub fn as_cow(&self) -> Cow<'_, FatType> {
         match self {
             Self::None => Cow::Borrowed(&FatType::EMPTY_REST_ARG),
@@ -1448,7 +1342,7 @@ impl FatTypeInherited {
     /// These types convert into thin types but should not be used anything else,
     /// as they have ids with incorrect supertypes.
     fn into_bare_fat_types(self) -> impl Iterator<Item=FatType> {
-        once_if(self.is_never, FatType::NEVER)
+        once_if(self.is_never, || FatType::NEVER)
             .chain(self.super_ids.into_iter().map(|id| FatType::Nominal {
                 nullability: Nullability::NonNullable,
                 id,
@@ -1492,23 +1386,6 @@ impl From<FatType> for FatTypeHole {
     }
 }
 
-impl TypeParamSubsts {
-    pub fn new() -> Self {
-        Self {
-            old_names_to_replace: Vec::new()
-        }
-    }
-
-    pub fn push(&mut self, index: usize, subst: Option<TypeName>) {
-        if let Some(subst) = subst {
-            while self.old_names_to_replace.len() < index {
-                self.old_names_to_replace.push(None);
-            }
-            self.old_names_to_replace.push(Some(subst));
-        }
-    }
-}
-
 impl TypeParam<FatType> {
     pub fn into_type(self, e: TypeLogger<'_, '_, '_>) -> FatType {
         let inherited = FatType::unify_all_supers(self.supers, e);
@@ -1532,5 +1409,11 @@ impl TypeParam<FatType> {
             type_params: Vec::new(),
             inherited: Box::new(inherited)
         }
+    }
+}
+
+impl FnType<FatType> {
+    fn remove_and_inline_type_params_where_possible(&mut self) {
+        // TODO
     }
 }

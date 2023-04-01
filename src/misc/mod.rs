@@ -9,8 +9,8 @@ mod mk_path;
 mod impl_by_map;
 /// `OnceCell::with_option`
 mod once_cell_with_option;
-/// Returns the element if the condition is met, otherwise empty
-mod once_if;
+/// Helpers for iterators which are empty if a boolean is `false`
+mod iter_if;
 /// `Vec::find_remove`
 mod vec_find_remove;
 
@@ -23,6 +23,5 @@ pub(crate) use mk_path::mk_path;
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use impl_by_map::impl_by_map;
 pub(crate) use once_cell_with_option::*;
-//noinspection RsUnusedImport (IntelliJ bug)
-pub(crate) use once_if::once_if;
+pub(crate) use iter_if::*;
 pub(crate) use vec_find_remove::VecFilter;
