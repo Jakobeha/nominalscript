@@ -29,7 +29,7 @@ impl $Name {
 
     // This cannot be deduplicated
     //noinspection DuplicatedCode
-    pub fn fresh(base_name: &Self, is_valid: impl FnMut(&Self) -> bool) -> Self {
+    pub fn fresh(base_name: &Self, mut is_valid: impl FnMut(&Self) -> bool) -> Self {
         Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
     }
 
@@ -147,12 +147,12 @@ impl GlobalValueBinding {
 
     pub fn has(name: &ValueName) -> bool {
         // TODO: something with lazy_static
-        false
+        name; false
     }
 
     pub fn get(name: &ValueName) -> Option<&'static GlobalValueBinding> {
         // TODO: something with lazy_static
-        None
+        name; None
     }
 }
 
@@ -196,12 +196,12 @@ impl GlobalTypeBinding {
 
     pub fn has(name: &TypeName) -> bool {
         // TODO: something with lazy_static
-        false
+        name; false
     }
 
     pub fn get(name: &TypeName) -> Option<&'static GlobalTypeBinding> {
         // TODO: something with lazy_static
-        None
+        name; None
     }
 }
 
@@ -287,7 +287,7 @@ impl FieldName {
     pub const RESERVED: [&'static str; 0] = [];
 }
 
-fn fresh_smol_str(base_name: impl AsRef<str>, is_valid: impl FnMut(&SmolStr) -> bool) -> SmolStr {
+fn fresh_smol_str(base_name: impl AsRef<str>, mut is_valid: impl FnMut(&SmolStr) -> bool) -> SmolStr {
     let base_name = base_name.as_ref();
     for i in 0.. {
         let new_name = SmolStr::new(format!("{}{}", base_name, i));

@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 use replace_with::replace_with_or_default;
 use crate::analyses::bindings::{FieldName, TypeName, ValueName};
@@ -83,7 +85,7 @@ pub enum Variance {
 /// (primitive types have identifiers).
 ///
 /// All inner types are boxed to reduce size and allow recursive definitions
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeStructure<Type: TypeTrait> {
     Fn {
         /// Function type. Boxed because it's large
@@ -112,7 +114,7 @@ pub enum StructureKind {
 }
 
 /// Function type structure
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnType<Type: TypeTrait> {
     /// Type parameters if polymorphic
     pub type_params: Vec<TypeParam<Type>>,
@@ -151,7 +153,7 @@ pub struct OptionalType<Type> {
 ///
 /// `make_non_nullable` is not part of this trait, so a type which once made nullable can't
 /// necessarily by made it non-nullable again can inherit.
-pub trait HasNullability {
+pub trait HasNullability: Debug {
     /// Returns whether this instance is nullable or non-nullable.
     fn nullability(&self) -> Nullability;
 
@@ -195,9 +197,9 @@ pub trait HasNullability {
 
 /// Base type of [ThinType] and [FatType] which contains associated types that are different
 /// between the 2.
-pub trait TypeTrait: HasNullability {
-    type Inherited;
-    type RestArgType;
+pub trait TypeTrait: HasNullability + Clone + PartialEq + Eq {
+    type Inherited: Debug + Clone + PartialEq + Eq;
+    type RestArgType: Debug + Clone + PartialEq + Eq;
 
     fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited where Self: Sized;
     fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited;
@@ -229,11 +231,11 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
 
 impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
     fn map_inherited(inherited: T::Inherited, f: impl FnMut(T) -> Self) -> Self::Inherited {
-        f(inherited)
+        Self::map_inherited(inherited, f)
     }
 
-    fn map_ref_inherited(inherited: &T::Inherited, f: impl FnMut(Cow<'_, T>) -> Self) -> Self::Inherited {
-        f(Cow::Borrowed(inherited))
+    fn map_ref_inherited(inherited: &T::Inherited, mut f: impl FnMut(Cow<'_, T>) -> Self) -> Self::Inherited {
+        Self::map_ref_inherited(inherited, |x| f(Cow::Borrowed(x)))
     }
 
     fn map_rest_arg_type_in_fn(
@@ -259,7 +261,7 @@ impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
         arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &T::RestArgType,
         return_type: ReturnType<Self>,
-        f: impl FnMut(Cow<'_, T>) -> Self
+        mut f: impl FnMut(Cow<'_, T>) -> Self
     ) -> FnType<Self> {
         FnType {
             type_params,
@@ -314,7 +316,7 @@ macro_rules! impl_structural_type_constructors {
         type_params: impl Iterator<Item=$crate::analyses::types::TypeParam<Self>>,
         this_type: Self,
         arg_types: impl Iterator<Item=$crate::analyses::types::OptionalType<Self>>,
-        rest_arg_type: Self,
+        rest_arg_type: <Self as $crate::analyses::types::TypeTrait>::RestArgType,
         return_type: $crate::analyses::types::ReturnType<Self>
     ) -> Self {
         Self::Structural {
@@ -451,11 +453,11 @@ impl TypeTrait for ThinType {
         inherited.iter().map(f).collect()
     }
 
-    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
+    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, mut f: impl FnMut(Self) -> Self) -> Self::RestArgType {
         f(rest_arg_type)
     }
 
-    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, mut f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
         f(rest_arg_type)
     }
 }
@@ -481,15 +483,15 @@ impl<Type: TypeTrait> TypeParam<Type> {
         TypeParam {
             variance_bound: self.variance_bound,
             name: self.name,
-            supers: NewType::map_inherited(self.supers, f),
+            supers: <NewType as TypeTraitMapsFrom<Type>>::map_inherited(self.supers, f),
         }
     }
 
-    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, f: impl FnMut(&Type) -> NewType) -> TypeParam<NewType> {
+    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, mut f: impl FnMut(&Type) -> NewType) -> TypeParam<NewType> {
         TypeParam {
             variance_bound: self.variance_bound,
             name: self.name.clone(),
-            supers: NewType::map_ref_inherited(&self.supers, f),
+            supers: <NewType as TypeTraitMapsFrom<Type>>::map_ref_inherited(&self.supers, |x| f(&x)),
         }
     }
 }
@@ -566,12 +568,35 @@ impl<Type: TypeTrait> TypeStructure<Type> {
     }
 }
 
+impl<Type: TypeTrait + Hash> Hash for TypeStructure<Type> where Type::RestArgType: Hash {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            TypeStructure::Fn { fn_type } => {
+                state.write_u8(0);
+                fn_type.hash(state);
+            }
+            TypeStructure::Array { element_type } => {
+                state.write_u8(1);
+                element_type.hash(state);
+            }
+            TypeStructure::Tuple { element_types } => {
+                state.write_u8(2);
+                element_types.hash(state);
+            }
+            TypeStructure::Object { field_types } => {
+                state.write_u8(3);
+                field_types.hash(state);
+            }
+        }
+    }
+}
+
 impl<Type: TypeTrait> FnType<Type> {
     pub fn new(
         type_params: impl Iterator<Item=TypeParam<Type>>,
         this_type: Type,
         arg_types: impl Iterator<Item=OptionalType<Type>>,
-        rest_arg_type: Type,
+        rest_arg_type: Type::RestArgType,
         return_type: ReturnType<Type>
     ) -> Self {
         FnType {
@@ -609,8 +634,21 @@ impl<Type: TypeTrait> FnType<Type> {
             arg_types,
             &self.rest_arg_type,
             return_type,
-            f
+            |x| f(&x)
         )
+    }
+}
+
+impl<Type: TypeTrait + Hash> Hash for FnType<Type> where Type::RestArgType: Hash {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Don't need to hash everything, and 2 functions will rarely differ in only type-params
+        // (also requires more boilerplate...).
+        // We should look for other cases to try and hash less without running into conflucts
+        // self.type_params.hash(state);
+        self.this_type.hash(state);
+        self.arg_types.hash(state);
+        self.rest_arg_type.hash(state);
+        self.return_type.hash(state);
     }
 }
 
@@ -761,6 +799,52 @@ impl PartialOrd for Variance {
     }
 }
 
+impl BitOr for Variance {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        match (self, other) {
+            (Variance::Invariant, other) => other,
+            (this, Variance::Invariant) => this,
+            (Variance::Bivariant, _) => Variance::Bivariant,
+            (_, Variance::Bivariant) => Variance::Bivariant,
+            (Variance::Covariant, Variance::Covariant) => Variance::Covariant,
+            (Variance::Contravariant, Variance::Contravariant) => Variance::Contravariant,
+            (Variance::Covariant, Variance::Contravariant) => Variance::Bivariant,
+            (Variance::Contravariant, Variance::Covariant) => Variance::Bivariant,
+        }
+    }
+}
+
+impl BitOrAssign for Variance {
+    fn bitor_assign(&mut self, other: Self) {
+        *self = *self | other;
+    }
+}
+
+impl BitAnd for Variance {
+    type Output = Self;
+
+    fn bitand(self, other: Self) -> Self {
+        match (self, other) {
+            (Variance::Invariant, _) => Variance::Invariant,
+            (_, Variance::Invariant) => Variance::Invariant,
+            (Variance::Bivariant, other) => other,
+            (this, Variance::Bivariant) => this,
+            (Variance::Covariant, Variance::Covariant) => Variance::Covariant,
+            (Variance::Contravariant, Variance::Contravariant) => Variance::Contravariant,
+            (Variance::Covariant, Variance::Contravariant) => Variance::Invariant,
+            (Variance::Contravariant, Variance::Covariant) => Variance::Invariant,
+        }
+    }
+}
+
+impl BitAndAssign for Variance {
+    fn bitand_assign(&mut self, other: Self) {
+        *self = *self & other;
+    }
+}
+
 impl StructureKind {
     pub fn display(self) -> &'static str {
         match self {
@@ -791,6 +875,22 @@ impl From<bool> for Optionality {
     }
 }
 
+impl BitOr for Optionality {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Optionality::Required, Optionality::Required) => Optionality::Required,
+            _ => Optionality::Optional,
+        }
+    }
+}
+
+impl BitOrAssign for Optionality {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = *self | rhs;
+    }
+}
 
 impl BitAnd for Optionality {
     type Output = Self;
@@ -809,23 +909,6 @@ impl BitAndAssign for Optionality {
     }
 }
 
-impl BitOr for Optionality {
-    type Output = Self;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Optionality::Required, Optionality::Required) => Optionality::Required,
-            _ => Optionality::Optional,
-        }
-    }
-}
-
-impl BitOrAssign for Optionality {
-    fn bitor_assign(&mut self, rhs: Self) {
-        *self = *self | rhs;
-    }
-}
-
 impl From<bool> for Nullability {
     fn from(is_nullable: bool) -> Self {
         if is_nullable {
@@ -833,23 +916,6 @@ impl From<bool> for Nullability {
         } else {
             Self::NonNullable
         }
-    }
-}
-
-impl BitAnd for Nullability {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Nullability::Nullable, Nullability::Nullable) => Nullability::Nullable,
-            _ => Nullability::NonNullable,
-        }
-    }
-}
-
-impl BitAndAssign for Nullability {
-    fn bitand_assign(&mut self, rhs: Self) {
-        *self = *self & rhs;
     }
 }
 
@@ -867,6 +933,23 @@ impl BitOr for Nullability {
 impl BitOrAssign for Nullability {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = *self | rhs;
+    }
+}
+
+impl BitAnd for Nullability {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (Nullability::Nullable, Nullability::Nullable) => Nullability::Nullable,
+            _ => Nullability::NonNullable,
+        }
+    }
+}
+
+impl BitAndAssign for Nullability {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = *self & rhs;
     }
 }
 

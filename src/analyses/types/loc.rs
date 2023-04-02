@@ -7,13 +7,16 @@ pub enum TypeLoc {
     Supertype { index: usize },
     SuperIdGeneric { name: TypeName },
     SuperStructure,
-    ArrayElem,
-    TupleElem { index: usize },
-    ObjectField { name: FieldName },
+    TypeArgument { index: usize },
     FunctionThisParam,
     FunctionParam { index: usize },
     FunctionRestParam,
     FunctionReturn,
+    ArrayElem,
+    TupleElem { index: usize },
+    ObjectField { name: FieldName },
+    /// For misc position
+    Position { index: usize },
 }
 
 impl Display for TypeLoc {
@@ -22,6 +25,7 @@ impl Display for TypeLoc {
             TypeLoc::Supertype { index } => write!(f, "supertype {}", index),
             TypeLoc::SuperIdGeneric { name } => write!(f, "super id type argument {}", name),
             TypeLoc::SuperStructure => write!(f, "super structure"),
+            TypeLoc::TypeArgument { index } => write!(f, "type argument {}", index),
             TypeLoc::ArrayElem => write!(f, "array element"),
             TypeLoc::TupleElem { index } => write!(f, "element {}", index),
             TypeLoc::ObjectField { name } => write!(f, "field {}", name),
@@ -29,6 +33,7 @@ impl Display for TypeLoc {
             TypeLoc::FunctionParam { index } => write!(f, "parameter {}", index),
             TypeLoc::FunctionRestParam => write!(f, "rest parameter"),
             TypeLoc::FunctionReturn => write!(f, "return type"),
+            TypeLoc::Position { index } => write!(f, "position {}", index),
         }
     }
 }

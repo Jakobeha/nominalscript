@@ -161,7 +161,9 @@ pub(crate) fn finish_transpile<'tree>(
     ast: &'tree TSTree,
     m: &mut ModuleCtx<'tree>,
     ctx: &ProjectCtx<'_>
-) {}
+) {
+    ast; m; ctx; // TODO
+}
 
 /*
   // Rest of the code is in a thunk: we don't have to run any of this if we're only

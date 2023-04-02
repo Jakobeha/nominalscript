@@ -9,7 +9,7 @@ use crate::misc::{iter_if, once_if, RefIterator};
 /// Index path to an identifier inside a fat type (e.g. to get from `({ foo: Foo<Bar<Baz>>[] }) -> Void` to `Bar<Baz>`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FatIdentIndexPath {
-    pub(in crate::analyses::types::fat) rev_steps: SmallVec<[FatIdentIndexStep; 8]>,
+    rev_steps: SmallVec<[FatIdentIndexStep; 8]>,
 }
 
 /// Part of a [FatIdentIndexPath] to go one step into a fat type.
@@ -26,9 +26,9 @@ pub enum FatIdentIndexStep {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FatIdentIndexStepInFn {
     TypeParamSuper { index: usize },
-    ThisArg,
-    Arg { index: usize },
-    RestArg(FatIdentIndexStepInRestArg),
+    ThisParam,
+    Param { index: usize },
+    RestParam(FatIdentIndexStepInRestArg),
     ReturnValue,
 }
 
@@ -366,12 +366,12 @@ impl FnType<FatType> {
                 type_param.supers.occurrence_paths_of(name).map(move |x|
                     (FatIdentIndexStepInFn::TypeParamSuper { index }, x)))
                 .chain(self.this_type.occurrence_paths_of(name).map(|x|
-                    (FatIdentIndexStepInFn::ThisArg, x)))
+                    (FatIdentIndexStepInFn::ThisParam, x)))
                 .chain(self.arg_types.iter().enumerate().flat_map(|(index, arg_type)|
                     arg_type.occurrence_paths_of(name).map(move |x|
-                        (FatIdentIndexStepInFn::Arg { index }, x))))
+                        (FatIdentIndexStepInFn::Param { index }, x))))
                 .chain(self.rest_arg_type.occurrence_paths_of(name).map(|(step, x)|
-                    (FatIdentIndexStepInFn::RestArg(step), x)))
+                    (FatIdentIndexStepInFn::RestParam(step), x)))
                 .chain(self.return_type.occurrence_paths_of(name).map(|x|
                     (FatIdentIndexStepInFn::ReturnValue, x)))
         })

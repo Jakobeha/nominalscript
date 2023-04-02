@@ -42,7 +42,7 @@ impl<'tree> DeterminedType<'tree> {
     /// Checks that `assigned` is a subtype of `required`. If not, emits an error at `loc_node`
     /// (the location where we want a type of `required` e.g. function argument)
     pub(crate) fn check_subtype(assigned: Option<&DeterminedType>, required: Option<&DeterminedType>, loc_node: &TSNode, e: &mut FileLogger<'_>) {
-        todo!()
+        assigned; required; loc_node; e; todo!()
     }
 
     /// Checks that `assigned` and `required` are not disjoint, i.e. `assigned` is a subtype *or*
@@ -56,6 +56,6 @@ impl<'tree> DeterminedType<'tree> {
     ///
     /// `loc_node` is where we emit the error, e.g. the location of the wrap expression.
     pub(crate) fn check_not_disjoint(assigned: Option<&DeterminedType>, required: Option<&DeterminedType>, loc_node: &TSNode, e: &mut FileLogger<'_>) {
-        todo!()
+        assigned; required; loc_node; e; todo!()
     }
 }

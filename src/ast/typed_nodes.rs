@@ -1,10 +1,9 @@
 use enquote::unquote;
 use once_cell::unsync::Lazy;
-use smol_str::SmolStr;
 
-use crate::analyses::bindings::{DynValueBinding, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, NominalGuard, Optionality, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::import_export::export::ImportPath;
 
@@ -374,9 +373,11 @@ impl<'tree> AstType<'tree> {
             "object_nominal_type" => ThinType::object(
                 node.named_children(&mut node.walk()).map(Self::parse_field)
             ),
-            "nullable_nominal_type" => ThinType::nullable(
-                Self::parse(node.named_child(0).unwrap()),
-            ),
+            "nullable_nominal_type" => {
+                let mut type_ = Self::parse(node.named_child(0).unwrap());
+                type_.make_nullable();
+                type_
+            },
             _ => panic!("unhandled node kind: {}", node.kind()),
         }
     }
@@ -384,7 +385,7 @@ impl<'tree> AstType<'tree> {
     fn parse_field(node: TSNode<'tree>) -> Field<OptionalType<ThinType>> {
         match node.kind() {
             "nominal_property_signature" => {
-                let name = SmolStr::new(node.named_child(0).unwrap().text());
+                let name = FieldName::new(node.named_child(0).unwrap().text());
                 let is_optional = node.field_child("is_optional").is_some();
                 let type_ = Self::parse(node.named_child(1).unwrap().named_child(0).unwrap());
                 Field {
@@ -393,7 +394,7 @@ impl<'tree> AstType<'tree> {
                 }
             }
             "nominal_method_signature" => {
-                let name = SmolStr::new(node.named_child(0).unwrap().text().to_string());
+                let name = FieldName::new(node.named_child(0).unwrap().text().to_string());
                 let is_optional = node.field_child("is_optional").is_some();
                 let parameters = node.named_child(2).unwrap();
                 let this_param = parameters.field_child("this_param");

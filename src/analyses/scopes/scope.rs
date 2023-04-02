@@ -358,7 +358,7 @@ impl<'tree> TypeScope<'tree> {
     }
 
     fn ident_supertypes(&self, id: TypeIdent<ThinType>, nullability: Nullability) -> FatType {
-        todo!()
+        id; nullability; todo!()
     }
 
     pub fn exported(&self, alias: &TypeName) -> Option<&ExportedId<TypeName>> {

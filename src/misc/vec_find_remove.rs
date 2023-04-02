@@ -16,6 +16,6 @@ impl<T> VecFilter<T> for Vec<T> {
 impl<T> VecFilter<T> for VecDeque<T> {
     //noinspection DuplicatedCode
     fn find_remove(&mut self, predicate: impl FnMut(&T) -> bool) -> Option<T> {
-        self.iter().position(predicate).map(|i| self.remove(i))
+        self.iter().position(predicate).map(|i| self.remove(i).unwrap())
     }
 }

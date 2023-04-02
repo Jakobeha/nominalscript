@@ -286,24 +286,27 @@ impl ToThin<ThinTypeDecl> for FatTypeDecl {
     }
 }
 
-impl_by_map!(<crate::analyses::types::TypeTrait> ToThin (fn thin(&self) by map_ref) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
+impl_by_map!(
+    <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ToThin (
+        fn thin(&self) by map_ref
+    ) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
 
 impl ResolveInto<FatType> for ThinType {
     fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
-        ctx; todo!()
+        ctx; scope; todo!()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
     fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
-        fat_param.into_decl(ctx.type_logger())
+        fat_param.into_decl()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
     fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
-        ctx; todo!()
+        ctx; scope; todo!()
     }
 }
 
@@ -335,7 +338,11 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
     }
 }
 
-impl_by_map!(<crate::analyses::types::TypeTrait> ResolveInto (fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref) for TypeParam, OptionalType, ReturnType);
+impl_by_map!(
+    <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ResolveInto (
+        fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref
+    ) for TypeParam, OptionalType, ReturnType
+);
 
 impl RlType {
     pub const ANY: Self = Self {

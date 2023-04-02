@@ -90,7 +90,9 @@ impl<'tree> ModuleScopes<'tree> {
         for child in descendants {
             // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
             let child_scope = ScopePtr::new(scope.map(|x| unsafe { &*x }));
-            scope = None;
+            // The assignment isn't necessary but symbolic: it shows we don't want a mut ptr when we
+            // have a mut reference.
+            // scope = None;
             // Other borrow here, notice we had to set scope to None to not double-borrow
             let std::collections::hash_map::Entry::Vacant(child_entry) = self.scopes.entry(child) else {
                 unreachable!("we just checked that it's not in the map")
