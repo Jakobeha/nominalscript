@@ -10,7 +10,7 @@ use crate::ast::typed_nodes::AstNode;
 macro_rules! define_names {
     ($($(#[$attr:meta])* $Name:ident),+) => { $(
 $(#[$attr])*
-#[derive(Debug, Clone, Display, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct $Name(SmolStr);
 
@@ -146,11 +146,13 @@ impl GlobalValueBinding {
     }
 
     pub fn has(name: &ValueName) -> bool {
-        todo!("something with lazy_static")
+        // TODO: something with lazy_static
+        false
     }
 
     pub fn get(name: &ValueName) -> Option<&'static GlobalValueBinding> {
-        todo!("something with lazy_static")
+        // TODO: something with lazy_static
+        None
     }
 }
 
@@ -193,11 +195,13 @@ impl GlobalTypeBinding {
     }
 
     pub fn has(name: &TypeName) -> bool {
-        todo!("something with lazy_static")
+        // TODO: something with lazy_static
+        false
     }
 
     pub fn get(name: &TypeName) -> Option<&'static GlobalTypeBinding> {
-        todo!("something with lazy_static")
+        // TODO: something with lazy_static
+        None
     }
 }
 

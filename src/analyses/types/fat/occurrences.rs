@@ -1,12 +1,9 @@
-use std::cell::Ref;
 use std::cmp::Ordering;
-use std::io::Read;
 use std::iter::{empty, zip};
-use auto_enums::auto_enum;
 use smallvec::SmallVec;
 
 use crate::analyses::bindings::{FieldName, TypeName};
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, TypeIdent, TypeStructure};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeStructure};
 use crate::misc::{iter_if, once_if, RefIterator};
 
 /// Index path to an identifier inside a fat type (e.g. to get from `({ foo: Foo<Bar<Baz>>[] }) -> Void` to `Bar<Baz>`)
@@ -49,8 +46,9 @@ impl FatIdentIndexPath {
     }
 
     /// Index path which follows `step` and then the remaining steps in `Self`
-    pub fn prepend_step(&mut self, step: FatIdentIndexStep) {
-        self.rev_steps.push(step)
+    pub fn in_step(mut self, step: FatIdentIndexStep) -> Self {
+        self.rev_steps.push(step);
+        self
     }
 
     /// Iterates steps, from outermost to innermost
@@ -82,16 +80,23 @@ impl FatType {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    #[auto_enum(Iterator)]
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item = FatIdentIndexPath> {
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
         match self {
-            Self::Any => empty(),
-            Self::Never { nullability: _ } => empty(),
-            Self::Structural { nullability: _, structure } => structure.occurrence_paths_of(name),
+            Self::Any => {
+                Box::new(empty()) as Box<dyn Iterator<Item = _>>
+            },
+            Self::Never { nullability: _ } => {
+                Box::new(empty()) as Box<dyn Iterator<Item = _>>
+            },
+            Self::Structural { nullability: _, structure } => {
+                Box::new(structure.occurrence_paths_of(name).map(|(step, x)| x.in_step(step))) as Box<dyn Iterator<Item = _>>
+            },
             Self::Nominal { nullability: _, id, inherited } => {
-                id.occurrence_paths_of(name).chain(inherited.occurrence_paths_of(name))
+                Box::new(id.occurrence_paths_of(name).chain(inherited.occurrence_paths_of(name))) as Box<dyn Iterator<Item = _>>
             }
-            Self::Hole { nullability: _, hole } => hole.occurrence_paths_of(name)
+            Self::Hole { nullability: _, hole } => {
+                Box::new(hole.occurrence_paths_of(name)) as Box<dyn Iterator<Item = _>>
+            }
         }
     }
 
@@ -148,10 +153,11 @@ impl FatTypeInherited {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=FatIdentIndexPath> {
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
         // Remember: we only prepend the step in ident type-params, there is no step for supers
         self.super_ids.iter().flat_map(|super_id| super_id.occurrence_paths_of(name))
-            .chain(self.structure.iter().flat_map(|structure| structure.occurrence_paths_of(name)))
+            .chain(self.structure.iter().flat_map(|structure| structure.occurrence_paths_of(name))
+                .map(|(step, x)| x.in_step(step)))
     }
 
     /// Replace all occurrences of `name` in this type (identifiers) with the new name.
@@ -197,8 +203,8 @@ impl FatTypeHole {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=FatIdentIndexPath> {
-        RefIterator::new(Ref::map(hole.upper_bound.borrow(), |x| x.occurrence_paths_of(name)))
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
+        RefIterator::new(&self.upper_bound, |x| x.occurrence_paths_of(name))
     }
 
     /// Replace all occurrences of `name` in this type (identifiers) with the new name.
@@ -226,10 +232,10 @@ impl TypeIdent<FatType> {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=FatIdentIndexPath> {
-        once_if(self.name == name, || FatOccurrence::new(&self.name))
-            .chain(self.generic_args.iter().enumerate().flat_map(|(index, targ)|
-                targ.occurrence_paths_of(name).map(|x|
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
+        once_if(&self.name == name, FatIdentIndexPath::empty)
+            .chain(self.generic_args.iter().enumerate().flat_map(move |(index, targ)|
+                targ.occurrence_paths_of(name).map(move |x|
                     x.in_step(FatIdentIndexStep::InIdentTypeArg { index }))))
     }
 
@@ -273,26 +279,25 @@ impl TypeStructure<FatType> {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    #[auto_enum(Iterator)]
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=(FatIdentIndexStep, FatIdentIndexPath)> {
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = (FatIdentIndexStep, FatIdentIndexPath)> + 'a {
         match self {
             Self::Fn { fn_type } => {
-                fn_type.occurrence_paths_of(name).map(|(step, x)|
-                    (FatIdentIndexStep::InFn(step), x))
+                Box::new(fn_type.occurrence_paths_of(name).map(|(step, x)|
+                    (FatIdentIndexStep::InFn(step), x))) as Box<dyn Iterator<Item = _>>
             },
             Self::Array { element_type } => {
-                element_type.occurrence_paths_of(name).map(|x|
-                    (FatIdentIndexStep::InArray, x))
+                Box::new(element_type.occurrence_paths_of(name).map(|x|
+                    (FatIdentIndexStep::InArray, x))) as Box<dyn Iterator<Item = _>>
             },
             Self::Tuple { element_types } => {
-                element_types.iter().enumerate().flat_map(|(index, element_type)|
-                    element_type.occurrence_paths_of(name).map(|x|
-                        (FatIdentIndexStep::InTuple { index }, x)))
+                Box::new(element_types.iter().enumerate().flat_map(|(index, element_type)|
+                    element_type.occurrence_paths_of(name).map(move |x|
+                        (FatIdentIndexStep::InTuple { index }, x)))) as Box<dyn Iterator<Item = _>>
             },
             Self::Object { field_types } => {
-                field_types.iter().flat_map(|Field { name: field_name, type_ }|
+                Box::new(field_types.iter().flat_map(|Field { name: field_name, type_ }|
                     type_.occurrence_paths_of(name).map(|x|
-                        (FatIdentIndexStep::InObject { field_name: field_name.clone() }, x)))
+                        (FatIdentIndexStep::InObject { field_name: field_name.clone() }, x)))) as Box<dyn Iterator<Item = _>>
             }
         }
     }
@@ -355,18 +360,18 @@ impl FnType<FatType> {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=(FatIdentIndexStepInFn, FatIdentIndexPath)> {
-        iter_if(!self.shadows(name), || {
-            self.type_params.iter().enumerate().map(|(index, type_param)|
-                type_param.supers.occurrence_paths_of(name).map(|x|
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = (FatIdentIndexStepInFn, FatIdentIndexPath)> + 'a {
+        iter_if(!self.shadows(name), move || {
+            self.type_params.iter().enumerate().flat_map(|(index, type_param)|
+                type_param.supers.occurrence_paths_of(name).map(move |x|
                     (FatIdentIndexStepInFn::TypeParamSuper { index }, x)))
                 .chain(self.this_type.occurrence_paths_of(name).map(|x|
                     (FatIdentIndexStepInFn::ThisArg, x)))
                 .chain(self.arg_types.iter().enumerate().flat_map(|(index, arg_type)|
-                    arg_type.occurrence_paths_of(name).map(|x|
+                    arg_type.occurrence_paths_of(name).map(move |x|
                         (FatIdentIndexStepInFn::Arg { index }, x))))
                 .chain(self.rest_arg_type.occurrence_paths_of(name).map(|(step, x)|
-                    (FatIdentIndexStepInFn::RestArg(step)), x))
+                    (FatIdentIndexStepInFn::RestArg(step), x)))
                 .chain(self.return_type.occurrence_paths_of(name).map(|x|
                     (FatIdentIndexStepInFn::ReturnValue, x)))
         })
@@ -411,6 +416,73 @@ impl FnType<FatType> {
     }
 }
 
+impl OptionalType<FatType> {
+    /// Paths to occurrences of the name
+    ///
+    /// Function types which declare a parameter shadowing the old name don't have occurrences.
+    ///
+    /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
+    /// instance (edge case which is very unlikely but still maybe possible to trigger in
+    /// well-crafted source...)
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
+        self.type_.occurrence_paths_of(name)
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the new name.
+    ///
+    /// Type params of those identifiers are preserved (subst occurs in them as well).
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name(&mut self, old_name: &TypeName, new_name: &TypeName) {
+        self.type_.subst_name(old_name, new_name);
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the never type.
+    ///
+    /// Type params of those identifiers are deleted.
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name_with_never(&mut self, name: &TypeName) {
+        self.type_.subst_name_with_never(name);
+    }
+}
+
+impl ReturnType<FatType> {
+    /// Paths to occurrences of the name
+    ///
+    /// Function types which declare a parameter shadowing the old name don't have occurrences.
+    ///
+    /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
+    /// instance (edge case which is very unlikely but still maybe possible to trigger in
+    /// well-crafted source...)
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = FatIdentIndexPath> + 'a {
+        match self {
+            ReturnType::Void => None,
+            ReturnType::Type(type_) => Some(type_)
+        }.into_iter().flat_map(|type_| type_.occurrence_paths_of(name))
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the new name.
+    ///
+    /// Type params of those identifiers are preserved (subst occurs in them as well).
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name(&mut self, old_name: &TypeName, new_name: &TypeName) {
+        match self {
+            ReturnType::Void => {}
+            ReturnType::Type(type_) => type_.subst_name(old_name, new_name),
+        }
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the never type.
+    ///
+    /// Type params of those identifiers are deleted.
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name_with_never(&mut self, name: &TypeName) {
+        match self {
+            ReturnType::Void => {}
+            ReturnType::Type(type_) => type_.subst_name_with_never(name),
+        }
+    }
+}
+
 impl FatRestArgType {
     /// Paths to occurrences of the name
     ///
@@ -420,12 +492,12 @@ impl FatRestArgType {
     /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
     /// instance (edge case which is very unlikely but still maybe possible to trigger in
     /// well-crafted source...)
-    pub fn occurrence_paths_of(&self, name: &TypeName) -> impl Iterator<Item=(FatIdentIndexStepInRestArg, FatIdentIndexPath)> {
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item = (FatIdentIndexStepInRestArg, FatIdentIndexPath)> + 'a {
         match self {
             FatRestArgType::None => None,
             FatRestArgType::Array { element } => Some((FatIdentIndexStepInRestArg::ArrayElement, element)),
             FatRestArgType::Illegal { intended_type } => Some((FatIdentIndexStepInRestArg::IllegalIntendedType, intended_type))
-        }.into_iter().flat_map(|(step, type_)| type_.occurrence_paths_of(name).map(|x| (step, x)))
+        }.into_iter().flat_map(|(step, type_)| type_.occurrence_paths_of(name).map(move |x| (step.clone(), x)))
     }
 
     /// Replace all occurrences of `name` in this type (identifiers) with the new name.

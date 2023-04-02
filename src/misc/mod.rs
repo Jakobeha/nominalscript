@@ -12,7 +12,8 @@ mod mk_path;
 mod nice_mutex;
 /// `OnceCell::with_option`
 mod once_cell_with_option;
-/// Adapts a [std::cell::Ref] of an [Iterator] into an [Iterator] itself, keeping the ref alive
+/// Lets you safely create an [Iterator] using a [std::cell::RefCell] reference, and the while the
+/// iterator is alive the reference will be borrowed.
 mod ref_iterator;
 /// `Vec::find_remove`
 mod vec_find_remove;
