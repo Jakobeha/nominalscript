@@ -2,17 +2,19 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use smallvec::SmallVec;
-
-use crate::analyses::bindings::{FieldName, TypeName};
+use crate::analyses::bindings::TypeName;
 use crate::analyses::types::{NominalGuard, Nullability, TypeIdent, TypeParam, TypeStructure};
 use crate::ast::tree_sitter::SubTree;
 
 /// Type declaration after we've resolved the supertypes
 #[derive(Debug, Clone)]
 pub struct FatTypeDecl {
+    /// [TypeIdent]s with this name in this scope will point to this (unless shadowed)
     pub name: TypeName,
+    /// Type parameters which are bound and used in `inherited` (supertypes)
     pub type_params: Vec<TypeParam<FatType>>,
+    /// Supertypes, guards, etc.
+    ///
     /// Boxed because it's large
     pub inherited: Box<FatTypeInherited>
 }
@@ -86,58 +88,13 @@ pub(super) enum FatRestArgKind {
     Illegal
 }
 
+/// Uninstantiated generic: equivalent to `Never` if never unified,
+/// but when unified, it becomes the type it was unified with and stays that way.
+///
+/// Internally, this has a reference-counter pointer to the unified upper bound,
+/// so if you clone and then unify one instance, it affects the other.
 #[derive(Debug, Clone)]
 pub struct FatTypeHole {
+    /// What the value is currently unified as
     pub(super) upper_bound: Rc<RefCell<FatType>>
-}
-
-/// Index path to an identifier inside a fat type (e.g. to get from `({ foo: Foo<Bar<Baz>>[] }) -> Void` to `Bar<Baz>`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FatIdentIndexPath {
-    pub(super) steps: SmallVec<[FatIdentIndexStep; 8]>,
-}
-
-/// Part of a [FatIdentIndexPath] to go one step into a fat type.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FatIdentIndexStep {
-    InIdentTypeArg { index: usize },
-    InFn(FatIdentIndexStepInFn),
-    InArray,
-    InTuple { index: usize },
-    InObject { field_name: FieldName },
-}
-
-/// [FatIdentIndexStep] into a function
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FatIdentIndexStepInFn {
-    TypeParamSuper { index: usize },
-    ThisArg,
-    Arg { index: usize },
-    RestArg(FatIdentIndexStepInRestArg),
-    ReturnValue,
-}
-
-/// [FatIdentIndexStep] into a rest argument
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FatIdentIndexStepInRestArg {
-    ArrayElement,
-    IllegalIntendedType,
-}
-
-impl FatIdentIndexPath {
-    /// Index path which points to the type itself
-    pub fn empty() -> Self {
-        Self { steps: SmallVec::new() }
-    }
-
-    /// Index path which follows `step` and then the remaining steps in `Self`
-    pub fn prepend_step(mut self, step: FatIdentIndexStep) -> Self {
-        self.steps.push(step);
-        self
-    }
-
-    /// Iterates steps, from outermost to innermost
-    pub fn steps(&self) -> impl Iterator<Item = &'_ FatIdentIndexStep> + '_ {
-        self.steps.iter().rev()
-    }
 }
