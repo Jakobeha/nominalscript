@@ -208,6 +208,10 @@ pub trait TypeTrait: HasNullability + Clone + PartialEq + Eq {
 }
 
 /// Maps the associated types of [TypeTrait] from the `OldType` into ours.
+///
+/// This may be a bad abstraction, since it's only used for conversion between [ThinType] and
+/// [FatType]. The [FatType]s provided to the function in its implementation are bare, and can
+/// only be converted into [ThinType]s
 pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
     fn map_inherited(inherited: OldType::Inherited, f: impl FnMut(OldType) -> Self) -> Self::Inherited;
     fn map_ref_inherited(inherited: &OldType::Inherited, f: impl FnMut(Cow<'_, OldType>) -> Self) -> Self::Inherited;

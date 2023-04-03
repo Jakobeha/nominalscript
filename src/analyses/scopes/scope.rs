@@ -8,7 +8,7 @@ use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
 use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::analyses::scopes::scope_ptr::{ScopePtr, WeakScopePtr};
-use crate::analyses::types::{DeterminedReturnType, FatType, Nullability, ResolveCache, ReturnType, RlReturnType, RlType, ThinType, TypeIdent};
+use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
 use crate::diagnostics::FileLogger;
@@ -349,16 +349,17 @@ impl<'tree> TypeScope<'tree> {
         self.hoisted.get(name).map(|decl| decl.as_ref() as &DynAstTypeBinding<'tree>)
     }
 
-    // TODO is the return type even correct?
-    pub fn immediate_supertypes(&self, type_: ThinType) -> FatType {
-        let ThinType::Nominal { id, nullability } = type_ else {
-            return FatType::Any
-        };
-        self.ident_supertypes(id, nullability)
-    }
+    /// Lookup the identifier and substitute generic parameters to get its resolved inherited types
+    fn inherited(&self, id: TypeIdent<FatType>, ctx: &ResolveCtx<'_>) -> Option<FatTypeInherited> {
+        let decl_ast = self.get(&id.name)?;
+        // let decl_node = decl_ast.node(); (TODO: use in type logger)
+        let decl = decl_ast.type_decl().resolve(ctx);
 
-    fn ident_supertypes(&self, id: TypeIdent<ThinType>, nullability: Nullability) -> FatType {
-        id; nullability; todo!()
+        debug_assert!(decl.name == id.name);
+
+        let mut inherited = decl.inherited.as_ref().clone();
+        inherited.subst_parameters(&decl.type_params, &id.generic_args, &ctx.type_logger());
+        Some(inherited)
     }
 
     pub fn exported(&self, alias: &TypeName) -> Option<&ExportedId<TypeName>> {

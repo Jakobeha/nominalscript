@@ -1,10 +1,38 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::iter::{empty, zip};
+use replace_with::replace_with_or_default;
 use smallvec::SmallVec;
 
 use crate::analyses::bindings::{FieldName, TypeName};
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeStructure};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeLoc, TypeParam, TypeStructure};
+use crate::diagnostics::TypeLogger;
+use crate::{error, issue};
 use crate::misc::{iter_if, once_if, RefIterator};
+
+macro_rules! check_num_arguments {
+    ($self:ident, $parameters:expr, $arguments:expr, $e:expr) => {
+        if !_check_num_arguments($parameters, $arguments, &$e) {
+            let len = usize::min($parameters.len(), $arguments.len());
+            return $self.subst_parameters(&$parameters[..len], &$arguments[..len], $e);
+        }
+    };
+}
+
+macro_rules! impl_subst_parameters {
+    ($($ref_:tt)?) => {
+    /// Substitute type parameters with the arguments, and report any errors
+    pub fn subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        e: $($ref_)? TypeLogger<'_, '_, '_>
+    ) {
+        check_num_arguments!(self, parameters, arguments, e);
+        self._subst_parameters(parameters, arguments, &mut HashSet::new(), $($ref_)? e)
+    }
+    };
+}
 
 /// Index path to an identifier inside a fat type (e.g. to get from `({ foo: Foo<Bar<Baz>>[] }) -> Void` to `Bar<Baz>`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -143,6 +171,37 @@ impl FatType {
             *self = Self::NEVER;
         }
     }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        let mut new_base = None;
+        match self {
+            Self::Any => {},
+            Self::Never { nullability: _ } => {},
+            Self::Structural { nullability: _, structure } => structure._subst_parameters(parameters, arguments, shadows, e),
+            Self::Nominal { nullability: _, id, inherited } => {
+                inherited._subst_parameters(parameters, arguments, shadows, &e);
+                new_base = id._subst_parameters(parameters, arguments, shadows, &e);
+            }
+            Self::Hole { nullability: _, hole } => hole._subst_parameters(parameters, arguments, shadows, e)
+        }
+        if let Some(new_base) = new_base {
+            replace_with_or_default(self, |this| {
+                let Self::Nominal { nullability, id: _, mut inherited } = this else {
+                    unreachable!("new_base was set, but self is not Nominal")
+                };
+                // Don't log errors when extending type parameters' supertypes
+                inherited.unify_with_super(new_base, TypeLogger::ignore());
+                inherited.into_fat_type(nullability)
+            })
+        }
+    }
 }
 
 impl FatTypeInherited {
@@ -193,6 +252,33 @@ impl FatTypeInherited {
             structure.subst_name_with_never(name);
         }
     }
+
+    impl_subst_parameters!(&);
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: &TypeLogger<'_, '_, '_>
+    ) {
+        let mut super_ids_to_remove = SmallVec::<[(usize, FatType); 1]>::new();
+        for (index, super_id) in self.super_ids.iter_mut().enumerate() {
+            if let Some(new_super) = super_id._subst_parameters(parameters, arguments, shadows, &e) {
+                super_ids_to_remove.push((index, new_super));
+            }
+        }
+        // Do it a bit faster this way since we are shifting a lot of stuff in the vector
+        for (index, _) in super_ids_to_remove.iter().rev() {
+            self.super_ids.remove(*index);
+        }
+        for (_, new_super) in super_ids_to_remove {
+            // Don't log errors when extending type parameters' supertypes
+            self.unify_with_super(new_super, TypeLogger::ignore());
+        }
+        for structure in &mut self.structure {
+            structure._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::SuperStructure));
+        }
+    }
 }
 
 impl FatTypeHole {
@@ -221,6 +307,17 @@ impl FatTypeHole {
     /// Function types which declare a parameter shadowing the old name aren't affected.
     pub fn subst_name_with_never(&mut self, name: &TypeName) {
         self.upper_bound.borrow_mut().subst_name_with_never(name);
+    }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        self.upper_bound.borrow_mut()._subst_parameters(parameters, arguments, shadows, e);
     }
 }
 
@@ -268,6 +365,45 @@ impl TypeIdent<FatType> {
             }
             false
         }
+    }
+
+    /// Substitute type parameters with the arguments, report any errors;
+    /// and if this is one of the substituted parameters, return with the substituted type
+    #[must_use = "If this returns Some, you must replace the outer type with the result"]
+    pub fn subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        e: &TypeLogger<'_, '_, '_>
+    ) -> Option<FatType> {
+        check_num_arguments!(self, parameters, arguments, e);
+        self._subst_parameters(parameters, arguments, &mut HashSet::new(), e)
+    }
+
+    #[must_use = "If this returns Some, you must replace the outer type with the result"]
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: &TypeLogger<'_, '_, '_>
+    ) -> Option<FatType> {
+        for (index, targ) in self.generic_args.iter_mut().enumerate() {
+            targ._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::TypeArgument { index }));
+        }
+
+        // Do substitute if necessary
+        parameters.iter().position(|x| x.name == self.name)
+            .filter(|index| !shadows.contains(index))
+            .map(|index| {
+                if !self.generic_args.is_empty() {
+                    // This is a higher-kinded type!
+                    // (We still want to substitute targs even if we don't use them to report their
+                    // errors as well)
+                    error!(e, "Higher-kinded types are not supported")
+                }
+                arguments[index].clone()
+            })
     }
 }
 
@@ -343,6 +479,30 @@ impl TypeStructure<FatType> {
             }
         }
     }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        match self {
+            Self::Fn { fn_type } => fn_type._subst_parameters(parameters, arguments, shadows, e),
+            Self::Array { element_type } => element_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::ArrayElement)),
+            Self::Tuple { element_types } => {
+                for (index, element_type) in element_types.iter_mut().enumerate() {
+                    element_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::TupleElement { index }));
+                }
+            },
+            Self::Object { field_types } => {
+                for Field { name: field_name, type_ } in field_types {
+                    type_._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::ObjectField { name: field_name.clone() }));
+                }
+            }
+        }
+    }
 }
 
 impl FnType<FatType> {
@@ -414,6 +574,45 @@ impl FnType<FatType> {
             self.return_type.subst_name_with_never(name);
         }
     }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        // Shadow type parameters with the same name
+        for type_param in &self.type_params {
+            if let Some(shadowed) = parameters.iter().position(|parameter| type_param.name == parameter.name) {
+                shadows.insert(shadowed);
+            }
+        }
+
+        // Do the subst
+        for type_param in &mut self.type_params {
+            type_param.supers._subst_parameters(
+                parameters,
+                arguments,
+                shadows,
+                &e.with_context(TypeLoc::FunctionTypeParam { name: type_param.name.clone() })
+            );
+        }
+        self.this_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::FunctionThisParam));
+        for (index, arg_type) in self.arg_types.iter_mut().enumerate() {
+            arg_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::FunctionParam { index }));
+        }
+        self.rest_arg_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::FunctionRestParam));
+        self.return_type._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::FunctionReturn));
+
+        // Unshadow type parameters with the same name
+        for type_param in &self.type_params {
+            if let Some(shadowed) = parameters.iter().position(|parameter| type_param.name == parameter.name) {
+                shadows.remove(&shadowed);
+            }
+        }
+    }
 }
 
 impl OptionalType<FatType> {
@@ -442,6 +641,18 @@ impl OptionalType<FatType> {
     /// Function types which declare a parameter shadowing the old name aren't affected.
     pub fn subst_name_with_never(&mut self, name: &TypeName) {
         self.type_.subst_name_with_never(name);
+    }
+
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        self.type_._subst_parameters(parameters, arguments, shadows, e);
     }
 }
 
@@ -479,6 +690,21 @@ impl ReturnType<FatType> {
         match self {
             ReturnType::Void => {}
             ReturnType::Type(type_) => type_.subst_name_with_never(name),
+        }
+    }
+
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        match self {
+            ReturnType::Void => {}
+            ReturnType::Type(type_) => type_._subst_parameters(parameters, arguments, shadows, e)
         }
     }
 }
@@ -522,5 +748,34 @@ impl FatRestArgType {
             FatRestArgType::Array { element } => element.subst_name_with_never(name),
             FatRestArgType::Illegal { intended_type } => intended_type.subst_name_with_never(name)
         }
+    }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatType],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        match self {
+            FatRestArgType::None => {}
+            FatRestArgType::Array { element } => element._subst_parameters(parameters, arguments, shadows, e.with_context(TypeLoc::ArrayElement)),
+            FatRestArgType::Illegal { intended_type } => intended_type._subst_parameters(parameters, arguments, shadows, e)
+        }
+    }
+}
+
+fn _check_num_arguments(
+    parameters: &[TypeParam<FatType>],
+    arguments: &[FatType],
+    e: &TypeLogger<'_, '_, '_>
+) -> bool {
+    if parameters.len() == arguments.len() {
+        true
+    } else {
+        error!(e, "Wrong number of type arguments";
+            issue!("the type has {} type parameters, but {} were given", parameters.len(), arguments.len()));
+        false
     }
 }
