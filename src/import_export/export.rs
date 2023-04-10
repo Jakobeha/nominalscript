@@ -9,6 +9,7 @@ use crate::analyses::scopes::{ModuleCtx, ScopeImportAlias};
 use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl};
 use crate::ast::tree_sitter::TSTree;
 use crate::compile::finish_transpile;
+use crate::import_export::ModulePath;
 use crate::ProjectCtx;
 
 #[derive(Debug)]
@@ -21,6 +22,7 @@ pub struct TranspiledModule {
 /// which is not only more efficient but solves import cycles
 #[derive(Debug)]
 pub struct Module {
+    path: ModulePath,
     pub exports: Exports,
     module_data: _Module
 }
@@ -47,11 +49,16 @@ pub struct Exports {
 pub struct ImportPath(String);
 
 impl Module {
-    pub fn new(ast: TSTree) -> Module {
+    pub fn new(path: ModulePath, ast: TSTree) -> Module {
         Module {
+            path,
             exports: Exports::new(),
             module_data: _Module::new(ast, |tree| ModuleCtx::new(tree))
         }
+    }
+
+    pub fn path(&self) -> &ModulePath {
+        &self.path
     }
 
     pub fn ast(&self) -> &TSTree {
@@ -62,13 +69,13 @@ impl Module {
         self.module_data.with_dependent(|_ast, ctx| fun(ctx))
     }
 
-    pub fn with_module_data_mut<'outer, R>(&'outer mut self, fun: impl for<'q> FnOnce(&'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
-        self.module_data.with_dependent_mut(|ast, module_ctx| fun(&mut self.exports, ast, module_ctx))
+    pub fn with_module_data_mut<'outer, R>(&'outer mut self, fun: impl for<'q> FnOnce(&'outer ModulePath, &'outer mut Exports, &'q TSTree, &'outer mut ModuleCtx<'q>) -> R) -> R {
+        self.module_data.with_dependent_mut(|ast, module_ctx| fun(&self.path, &mut self.exports, ast, module_ctx))
     }
 
     pub fn finish(mut self, ctx: &ProjectCtx<'_>) -> TranspiledModule {
         let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
-            finish_transpile(ast, module_ctx, ctx);
+            finish_transpile(ast, module_ctx, ctx, &self.path);
             todo!("ast.print()")
         });
         TranspiledModule {

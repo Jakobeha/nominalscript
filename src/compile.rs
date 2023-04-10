@@ -1,18 +1,20 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::Path;
 
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
 use crate::analyses::bindings::ValueBinding;
-use crate::analyses::scopes::ModuleCtx;
+use crate::analyses::scopes::{ModuleCtx, ScopeChain};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
-use crate::ast::tree_sitter::{TreeCreateError, TSQueryCursor, TSTree};
+use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
 use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
+use crate::import_export::ModulePath;
 use crate::ProjectCtx;
 
 #[derive(Debug, Clone, Display, From, Error)]
@@ -44,18 +46,19 @@ fn begin_transpile_file_no_log_err<'a>(
     ctx: &'a ProjectCtx<'_>
 ) -> Result<&'a Module, Cow<'a, ImportError>> {
     ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |module_path| {
-        begin_transpile_file_no_cache(script_path, ctx.diagnostics.file(module_path)).map_err(ImportError::from)
+        begin_transpile_file_no_cache(script_path, module_path, ctx.diagnostics.file(module_path)).map_err(ImportError::from)
     })
 }
 
 /// [begin_transpile_file] but doesn't cache
 pub(crate) fn begin_transpile_file_no_cache(
     script_path: &Path,
+    module_path: &ModulePath,
     diagnostics: &FileDiagnostics
 ) -> Result<Module, FatalTranspileError> {
     let ast = NOMINALSCRIPT_PARSER.lock().parse_file(script_path)?;
-    let mut module = Module::new(ast);
-    module.with_module_data_mut(|exports, ast, m| {
+    let mut module = Module::new(module_path.clone(), ast);
+    module.with_module_data_mut(|_module_path, exports, ast, m| {
         begin_transpile_ast(m, ast, exports, diagnostics)
     });
     Ok(module)
@@ -78,8 +81,7 @@ fn begin_transpile_ast<'tree>(
     let mut c = ast.walk();
     let mut qc = TSQueryCursor::new();
     let root_node = ast.root_node();
-    // Can't clone because we may get a mutable reference to this
-    let root_scope = m.scopes.get(root_node, &mut c).downgrade();
+    let root_scope = m.scopes.root().downgrade();
     // Query all `nominal_type_declaraton`s and all imports.
     // Build map of nominal type names to their declarations
     // In global scope, build value map and map functions to their declarations.
@@ -88,27 +90,28 @@ fn begin_transpile_ast<'tree>(
     // laziness tracks self-recursion so we explicitly fail on cycles
     for type_decl_match in qc.matches(&NOMINAL_TYPE, root_node) {
         let node = type_decl_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(node, &mut c);
+        let scope = m.scopes.containing(node, &mut c);
         let decl = AstTypeDecl::new(scope, node);
-        scope.borrow_mut().types_mut().set(decl, &mut e);
+        scope.activate_ref().types.set(decl, &mut e);
     }
     for function_decl_match in qc.matches(&FUNCTION, root_node) {
         let node = function_decl_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(node, &mut c);
+        let scope = m.scopes.containing(node, &mut c);
         let decl = AstFunctionDecl::new(scope, node);
-        scope.borrow_mut().values_mut().add_hoisted(decl, &mut e);
+        scope.activate_ref().values.add_hoisted(decl, &mut e);
     }
     for value_decl_match in qc.matches(&VALUE, root_node) {
         let node = value_decl_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(node, &mut c);
+        let scope = m.scopes.containing(node, &mut c);
         let decl = AstValueDecl::new(scope, node);
-        scope.borrow_mut().values_mut().add_sequential(decl, &mut e);
+        scope.activate_ref().values.add_sequential(decl, &mut e);
     }
     for import_stmt_match in qc.matches(&IMPORT, root_node) {
         let node = import_stmt_match.capture(0).unwrap().node;
-        let scope = m.scopes.of_node(node, &mut c);
-        let import_stmt = AstImportStatement::new(scope, scope.next_import_path_idx(), node);
-        scope.borrow_mut().add_imported(import_stmt, &mut e);
+        let scope = m.scopes.containing(node, &mut c);
+        let import_path_idx = scope.activate_ref().next_import_path_idx();
+        let import_stmt = AstImportStatement::new(scope, import_path_idx, node);
+        scope.activate_ref().add_imported(import_stmt, &mut e);
     }
     // Query and prefill exports, and also add to scopes
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {
@@ -132,25 +135,26 @@ fn begin_transpile_ast<'tree>(
         };
 
         // Add to scope exports, and add to global exports if root scope
-        let scope = m.scopes.of_node(export_id_node, &mut c);
+        let scope_ptr = m.scopes.containing(export_id_node, &mut c);
+        let mut scope = scope_ptr.activate_ref();
         match export {
             Export::Type { original_name, alias } => {
-                if scope.downgrade() == root_scope {
+                if scope == root_scope {
                     if let Some(decl) = scope.types.get(&original_name.name) {
                         exports.add_type(alias.name.clone(), decl.type_decl().box_clone());
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.borrow_mut().types_mut().add_exported(original_name, alias, &mut e);
+                scope.types.add_exported(original_name, alias, &mut e);
             }
             Export::Value { original_name, alias } => {
-                if scope.downgrade() == root_scope {
+                if scope == root_scope {
                     if let Some(decl) = scope.values.at_exact_pos(&original_name.name, original_name.node) {
                         exports.add_value(alias.name.clone(), decl.value_type().box_clone());
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.borrow_mut().values_mut().add_exported(original_name, alias, &mut e);
+                scope.values.add_exported(original_name, alias, &mut e);
             }
         }
     }
@@ -160,34 +164,33 @@ fn begin_transpile_ast<'tree>(
 pub(crate) fn finish_transpile<'tree>(
     ast: &'tree TSTree,
     m: &mut ModuleCtx<'tree>,
-    ctx: &ProjectCtx<'_>
+    ctx: &ProjectCtx<'_>,
+    module_path: &ModulePath
 ) {
-    ast; m; ctx; // TODO
-}
-
-/*
-  // Rest of the code is in a thunk: we don't have to run any of this if we're only
-  // loading the file to read imported decls
-  return async () => {
     // TODO: Add guards (in type analysis, but probably first in function decls we've already scanned. We have to wait until we're in the return block though)
-
+    let diagnostics = ctx.diagnostics.file(module_path);
+    let mut e = FileLogger::new(diagnostics);
+    // Random operation cursor
+    let mut c = ast.walk();
+    let mut skip_nodes = HashSet::new();
     // Run type analysis (and scope analysis and other dependent analyses)
     // Instead of querying here we do an inorder traversal because we need to do inorder
     // But Queries.SCOPE roughly matches what we're using
-    const scopes = new ScopeChain(ctx)
-    const cursor = ast.walk()
-    const skipNodes = new Set<TSNodeId>()
-    let lastMove: 'start' | 'down' | 'right' | 'up' | 'end' = 'start'
-    while (lastMove !== 'end') {
-      const node = cursor.currentNode
-      if (isAtScope(cursor)) {
-        if (lastMove !== 'up') {
-          scopes.push(node)
-        } else {
-          scopes.pop()
+    let mut scopes = ScopeChain::at_root(ast.root_node(), m.scopes.root().clone().activate());
+    let mut traversal_cursor = ast.walk();
+    let mut traversal_state = TraversalState::Start;
+    while !traversal_state.is_end() {
+        let node = traversal_cursor.node();
+        if let Some(scope) = m.scopes.denoted_by(node, &mut c) {
+            if traversal_state != TraversalState::Up {
+                scopes.push(node, scope.clone().activate());
+            } else {
+                scopes.pop();
+            }
         }
-      }
 
+        let mut skip_children = false;
+    /*
       // Nodes are traversed once or twice: once 'start' or 'down' or 'right',
       // once if they have children 'up'
       let skipChildren = false
@@ -832,26 +835,27 @@ pub(crate) fn finish_transpile<'tree>(
           default:
             break
         }
-      }
+      } */
 
-      if (skipChildren) {
-        // Note that lastMove is immediately set afterwards and gotoInorder doesn't
-        // treat it as 'nextMove', so we aren't necessarily going up; we are only
-        // not going down because lastMove is actually passed to gotoInorder to not
-        // get a 'down' -> ... -> 'up' -> 'down' infinite loop. Maybe it should be
-        // made more clear and something besides lastMove should be used instead...
-        lastMove = 'up'
-      }
-      lastMove = cursor.gotoInorder(lastMove)
-    }
+        if skip_children {
+            // Note that lastMove is immediately set afterwards and gotoInorder doesn't
+            // treat it as 'nextMove', so we aren't necessarily going up; we are only
+            // not going down because lastMove is actually passed to gotoInorder to not
+            // get a 'down' -> ... -> 'up' -> 'down' infinite loop. Maybe it should be
+            // made more clear and something besides lastMove should be used instead...
+            traversal_state = TraversalState::Up;
+        }
+        traversal_cursor.goto_preorder(traversal_state);
+    };
 
     // Type analysis (and scope analysis etc.) are done.
     // But not we need to throw errors for bad types
     // (we wait until analysis is done because some of these errors are due to uninferred types,
     // and we may infer types at weird future times which make them disappear.
     // So it's easier to just wait until ALL analysis is done to raise these uninferred-errors and the general category)
-    ctx.typedExprs.checkAll(ast)
+    m.typed_exprs.check_all(&mut e);
 
+    ctx; skip_nodes.insert(ast.root_node()); todo!()
     // Roadmap (partially outdated)
     // - Query all `function_declaration`s, `method_declaration`s, `function_signature`s, etc., in every scope build a map of the static functions' types. Remove their nominal type annotations, replace them with guarded versions and which call a generated unguarded version. Also build a map of them as ordinary global (lambda) constants to their nominal function types (already somewhat done, some of the others are somewhat done as well)
     // - Run type checking: remove and check every type annotation we can. Similar to the last step, we build a map of dynamic functions' (lambdas) types and generate guarded/unguarded versions (the difference is that we're also doing inference, so previous statements don't get the inferred types), and we map ordinary values to their types. All calls go to guarded functions by default since they have the original name; we replace checked calls with their unguarded versions if we're absolutely sure the types are ok. We also add inline guards to nominal type annotated expressions and initializers/assignments of nominal type annotated values when we can't infer their type, including annotated exceptions in `catch` clauses. Whenever we infer a type but it is wrong, we generate a type error but continue to generate with guards (which, unless we messed up somewhere, will always throw a runtime error). We remove all nominal type annotations from the analyzed declarations and checked identifiers/expressions, to mark they've been analyzed and because we need to strip them anyways. To summarize:
@@ -869,7 +873,4 @@ pub(crate) fn finish_transpile<'tree>(
     // - FunctionDecl and ValueDecl nominal-type annotations
     // - Query nominal imports any exports (we already handle them and warn for child scopes)
     // and then log errors for anything we don't remove
-  }
 }
-
- */

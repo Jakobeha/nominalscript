@@ -2,7 +2,7 @@ use enquote::unquote;
 use once_cell::unsync::Lazy;
 
 use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
+use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::import_export::export::ImportPath;
@@ -262,7 +262,7 @@ impl<'tree> AstTypeIdent<'tree> {
 impl_ast_type_binding!(AstTypeParameter name Local);
 impl<'tree> AstTypeParameter<'tree> {
     //noinspection DuplicatedCode
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_parameter"]);
         let name = AstTypeIdent::new(node.named_child(0).unwrap());
         let nominal_supertypes = ast_nominal_supertypes(scope, node.named_child(1));
@@ -314,13 +314,13 @@ impl<'tree> LocalTypeBinding<'tree> for AstTypeParameter<'tree> {}
 impl_ast!(AstType);
 impl<'tree> AstType<'tree> {
     //noinspection DuplicatedCode
-    pub fn of_annotation(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn of_annotation(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_annotation"]);
         node.mark();
         Self::new(scope, node.named_child(0).unwrap())
     }
 
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, [
             "nominal_type_identifier",
             "parenthesized_nominal_type",
@@ -440,13 +440,13 @@ impl<'tree> AstType<'tree> {
 impl_ast!(AstReturnType);
 impl<'tree> AstReturnType<'tree> {
     //noinspection DuplicatedCode
-    pub fn of_annotation(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn of_annotation(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_annotation"]);
         node.mark();
         Self::new(scope, node.named_child(0).unwrap())
     }
 
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, [
             "nominal_type_identifier",
             "parenthesized_nominal_type",
@@ -467,7 +467,7 @@ impl<'tree> AstReturnType<'tree> {
 
 impl_ast_local_value_binding!(AstParameter);
 impl<'tree> AstParameter<'tree> {
-    pub fn formal(scope: &ScopePtr<'tree>, node: TSNode<'tree>, is_arrow: bool) -> Self {
+    pub fn formal(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>, is_arrow: bool) -> Self {
         assert_kind!(node, ["required_parameter", "optional_parameter"]);
         let name_node = node.named_child(0).unwrap();
         let type_ = node.field_child("nominal_type")
@@ -567,7 +567,7 @@ impl<'tree> AstThrow<'tree> {
 
 impl_ast_local_value_binding!(AstValueDecl);
 impl<'tree> AstValueDecl<'tree> {
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["variable_declarator"]);
         let type_ = node.field_child("nominal_type")
             .map(|node| AstType::of_annotation(scope, node));
@@ -594,7 +594,7 @@ impl<'tree> TypedAstNode<'tree> for AstValueDecl<'tree> {
 
 impl_ast_local_value_binding!(AstFunctionDecl);
 impl<'tree> AstFunctionDecl<'tree> {
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, [
             "function_declaration",
             "generator_function_declaration",
@@ -630,7 +630,7 @@ impl<'tree> AstFunctionDecl<'tree> {
         }
     }
 
-    pub fn nominal_params(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
+    pub fn nominal_params(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
         node.field_child("type_parameters").map(|node| {
             node.named_children(&mut node.walk())
                 .filter(|node| node.kind() == "nominal_type_parameter")
@@ -667,7 +667,7 @@ impl<'tree> AstNominalGuard<'tree> {
 
 impl_ast_type_binding!(AstTypeDecl name Local);
 impl<'tree> AstTypeDecl<'tree> {
-    pub fn new(scope: &ScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_declaration"]);
         node.mark();
         let name = AstTypeIdent::new(node.named_child(0).unwrap());
@@ -702,7 +702,7 @@ impl<'tree> AstTypeDecl<'tree> {
 impl_ast_value_binding!(AstValueImportSpecifier alias Imported);
 impl<'tree> AstValueImportSpecifier<'tree> {
     pub fn new(
-        scope: &ScopePtr,
+        scope: &InactiveScopePtr,
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
@@ -734,7 +734,7 @@ impl<'tree> TypedAstNode<'tree> for AstValueImportSpecifier<'tree> {
 impl_ast_type_binding!(AstTypeImportSpecifier alias Imported);
 impl<'tree> AstTypeImportSpecifier<'tree> {
     pub fn new(
-        scope: &ScopePtr,
+        scope: &InactiveScopePtr,
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
@@ -773,7 +773,7 @@ impl<'tree> AstImportPath<'tree> {
 impl_ast!(AstImportStatement);
 impl<'tree> AstImportStatement<'tree> {
     pub fn new(
-        scope: &ScopePtr,
+        scope: &InactiveScopePtr,
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
@@ -805,7 +805,7 @@ impl<'tree> AstImportStatement<'tree> {
     }
 }
 
-fn ast_nominal_supertypes<'tree>(scope: &ScopePtr<'tree>, node: Option<TSNode<'tree>>) -> Vec<AstType<'tree>> {
+fn ast_nominal_supertypes<'tree>(scope: &InactiveScopePtr<'tree>, node: Option<TSNode<'tree>>) -> Vec<AstType<'tree>> {
     node.map(|x| {
         x.named_children(&mut x.walk())
             .map(|node| AstType::of_annotation(scope, node))

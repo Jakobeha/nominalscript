@@ -7,7 +7,7 @@ use elsa::FrozenMap;
 use once_cell::unsync::OnceCell;
 
 use crate::{error, issue};
-use crate::analyses::scopes::{RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
+use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
@@ -144,7 +144,7 @@ pub trait ResolveInto<Fat> {
     /// the thin version was already computed before, it is cached and `resolve` may be skipped.
     /// Therefore `resolve` should have no side-effects except for ones that would be redundant
     /// (e.g. logging diagnostics and going through imports is ok).
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Fat;
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Fat;
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -191,9 +191,9 @@ impl<Thin, Fat: ToThin<Thin>> ResolvedLazy<Thin, Fat> {
 }
 
 impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
-    pub fn new(scope: &ScopePtr<'_>, thin: Thin) -> Self {
+    pub fn new(scope: &InactiveScopePtr<'_>, thin: Thin) -> Self {
         Self {
-            scope_origin: Some(ScopePtr::as_raw(scope)),
+            scope_origin: Some(InactiveScopePtr::as_raw(scope)),
             thin,
             fat: OnceCell::new()
         }
@@ -204,7 +204,7 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
-            let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade() } );
+            let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade().activate() } );
             self.thin.resolve(scope.as_ref(), ctx)
         })
     }
@@ -292,32 +292,32 @@ impl_by_map!(
     ) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
 
 impl ResolveInto<FatType> for ThinType {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
         ctx; scope; todo!()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
         fat_param.into_decl()
     }
 }
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         ctx; scope; todo!()
     }
 }
 
 impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> {
-    fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Alias::Fat {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Alias::Fat {
         let e = FileLogger::new(ctx.diagnostics);
         let scope = scope.expect("ScopeValueImportIdx::resolve: scope must be Some");
         let (import_path, import_node) = scope.import(self);
 
         let (module_path, module) = match ctx.imports.resolve_and_cache_transpile(&import_path.module_path, |script_path, module_path| {
-            begin_transpile_file_no_cache(script_path, ctx.project_diagnostics.file(module_path)).map_err(ImportError::from)
+            begin_transpile_file_no_cache(script_path, module_path, ctx.project_diagnostics.file(module_path)).map_err(ImportError::from)
         }) {
             Err(import_error) => {
                 error!(e,
@@ -340,7 +340,7 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
 
 impl_by_map!(
     <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ResolveInto (
-        fn resolve(&self, scope: Option<&ScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref
+        fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref
     ) for TypeParam, OptionalType, ReturnType
 );
 

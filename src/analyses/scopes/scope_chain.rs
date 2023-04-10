@@ -1,62 +1,48 @@
 use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ModuleCtx, scope_parent_of, ScopePtr};
+use crate::analyses::scopes::{ExprTypeMap, ActiveScopePtr};
 use crate::analyses::types::{DynRlType, RlType};
-use crate::ast::tree_sitter::{TSCursor, TSNode};
+use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueDecl, DynAstValueBinding};
 use crate::diagnostics::{FileLogger};
 use crate::error;
 
 pub struct ScopeChain<'tree> {
-    scopes: Vec<(TSNode<'tree>, ScopePtr<'tree>)>,
+    scopes: Vec<(TSNode<'tree>, ActiveScopePtr<'tree>)>,
 }
 
 impl<'tree> ScopeChain<'tree> {
-    //noinspection RsUnreachableCode (this inspection is bugged for IntelliJ with let-else statements)
-    pub fn new(ctx: &mut ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Self {
-        let mut scopes = Vec::new();
-        let mut scope_parent = scope_parent;
-        loop {
-            let scope = ctx.scopes.get(scope_parent, c).clone();
-            scopes.push((scope_parent, scope));
-            let Some(next_scope_parent) = scope_parent_of(scope_parent, c) else {
-                break
-            };
-            scope_parent = next_scope_parent;
-        }
-        scopes.reverse();
-        Self { scopes }
+    pub fn at_root(root_node: TSNode<'tree>, scope: ActiveScopePtr<'tree>) -> Self {
+        let mut this = ScopeChain { scopes: Vec::new() };
+        this.push(root_node, scope);
+        this
     }
 
-    pub fn push(&mut self, ctx: &mut ModuleCtx<'tree>, scope_parent: TSNode<'tree>, c: &mut TSCursor<'tree>) {
-        let scope = ctx.scopes.get(scope_parent, c).clone();
-        self.scopes.push((scope_parent, scope));
+    pub fn push(&mut self, scope_node: TSNode<'tree>, scope: ActiveScopePtr<'tree>) {
+        self.scopes.push((scope_node, scope));
     }
 
-    pub fn pop(&mut self) -> Option<(TSNode<'tree>, ScopePtr<'tree>)> {
+    pub fn pop(&mut self) -> Option<(TSNode<'tree>, ActiveScopePtr<'tree>)> {
         self.scopes.pop()
     }
 
-    fn top(&self) -> Option<(TSNode<'tree>, &ScopePtr<'tree>)> {
+    fn top(&self) -> Option<(TSNode<'tree>, &ActiveScopePtr<'tree>)> {
         self.scopes.last().map(|(node, scope)| (*node, scope))
     }
 
-    fn top_mut(&mut self) -> Option<(TSNode<'tree>, &mut ScopePtr<'tree>)> {
+    fn top_mut(&mut self) -> Option<(TSNode<'tree>, &mut ActiveScopePtr<'tree>)> {
         self.scopes.last_mut().map(|(node, scope)| (*node, scope))
     }
 
     pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
-        // TODO: Fix so no double borrow
-        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_sequential(decl, e);
+        self.top_mut().expect("ScopeChain is empty").1.values.add_sequential(decl, e);
     }
 
     pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
-        // TODO: Fix so no double borrow
-        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_return(return_, e);
+        self.top_mut().expect("ScopeChain is empty").1.values.add_return(return_, e);
     }
 
     pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
-        // TODO: Fix so no double borrow
-        self.top_mut().expect("ScopeChain is empty").1.borrow_mut().values_mut().add_throw(throw, e);
+        self.top_mut().expect("ScopeChain is empty").1.values.add_throw(throw, e);
     }
 
     pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
@@ -115,7 +101,7 @@ impl<'tree> ScopeChain<'tree> {
             })
     }
 
-    fn iter_top_to_bottom(&self) -> impl Iterator<Item=(TSNode<'tree>, &ScopePtr<'tree>)> + '_ {
+    fn iter_top_to_bottom(&self) -> impl Iterator<Item=(TSNode<'tree>, &ActiveScopePtr<'tree>)> + '_ {
         self.scopes.iter().rev().map(|(node, scope)| (*node, scope))
     }
 }

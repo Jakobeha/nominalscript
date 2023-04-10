@@ -431,7 +431,6 @@ impl FatType {
                     }
                     // We are about to delete other anyways
                     let other_supers = std::mem::take(&mut other.supers);
-                    // TODO: Subst all with Never type if applicable
                     Self::unify_inherited(&mut this.supers, other_supers, bias, TypeLogger::ignore());
                     let is_never = this.supers.is_never;
                     if is_never {

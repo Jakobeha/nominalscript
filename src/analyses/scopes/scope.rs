@@ -5,9 +5,8 @@ use indexmap::IndexMap;
 
 use crate::{error, hint, issue};
 use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
-use crate::analyses::scopes::ExprTypeMap;
+use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, WeakScopePtr};
 use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::scopes::scope_ptr::{ScopePtr, WeakScopePtr};
 use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
@@ -57,14 +56,14 @@ pub struct ExportedId<'tree, Name> {
 }
 
 impl<'tree> Scope<'tree> {
-    pub(super) fn new(parent: Option<&ScopePtr<'tree>>) -> Self {
+    pub(super) fn new(parent: Option<&InactiveScopePtr<'tree>>) -> Self {
         Scope {
             did_set_params: false,
             imported_script_paths: Vec::new(),
             values: ValueScope::new(),
             types: TypeScope::new(),
             resolve_cache: ResolveCache::new(),
-            parent: parent.map_or_else(WeakScopePtr::new, ScopePtr::downgrade),
+            parent: parent.map_or_else(WeakScopePtr::new, InactiveScopePtr::downgrade),
             is_being_mutated: false,
             _pinned: PhantomPinned
         }

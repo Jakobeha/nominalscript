@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::iter::once;
+use std::ptr::null;
 
 use smallvec::SmallVec;
-use crate::analyses::scopes::ExprTypeMap;
+use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr};
 
-use crate::analyses::scopes::scope_ptr::ScopePtr;
 use crate::analyses::types::DeterminedReturnType;
 use crate::ast::tree_sitter::{TSCursor, TSNode};
 
@@ -12,16 +12,16 @@ use crate::ast::tree_sitter::{TSCursor, TSNode};
 #[derive(Debug)]
 pub struct ModuleScopes<'tree> {
     root_node: TSNode<'tree>,
-    scopes: HashMap<TSNode<'tree>, ScopePtr<'tree>>,
-    lexical_parents: HashMap<TSNode<'tree>, TSNode<'tree>>,
-    lexical_children: HashMap<TSNode<'tree>, Vec<TSNode<'tree>>>
+    scopes: HashMap<TSNode<'tree>, InactiveScopePtr<'tree>>,
+    lexical_parents: HashMap<InactiveScopePtr<'tree>, InactiveScopePtr<'tree>>,
+    lexical_children: HashMap<InactiveScopePtr<'tree>, Vec<InactiveScopePtr<'tree>>>
 }
 
 struct SeenLexicalDescendantsOf<'a, 'tree: 'a> {
     module_scopes: &'a ModuleScopes<'tree>,
-    node: TSNode<'tree>,
+    scope: &'a InactiveScopePtr<'tree>,
     index: usize,
-    stack: Vec<TSNode<'tree>>
+    stack: Vec<&'a InactiveScopePtr<'tree>>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,78 +46,92 @@ impl<'tree> ModuleScopes<'tree> {
             lexical_parents: HashMap::new(),
             lexical_children: HashMap::new()
         };
-        this.scopes.insert(root_node, ScopePtr::new(None));
+        this.scopes.insert(root_node, InactiveScopePtr::new(None));
         this
     }
 
-    pub fn root(&self) -> &ScopePtr<'tree> {
+    pub fn root(&self) -> &InactiveScopePtr<'tree> {
         &self.scopes[&self.root_node]
     }
 
     /// Gets the parent scope containing the node
     ///
     /// *Panics* if the node is the tree root
-    pub fn of_node(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &mut ScopePtr<'tree> {
+    pub fn containing(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &InactiveScopePtr<'tree> {
         let parent = scope_parent_of(node, c).expect("node is root so does not have a parent");
-        self.get(parent, c)
+        self._denoted_by(parent, c)
     }
 
     /// Gets the scope denoted by the node (which should be a statement block, etc.)
-    pub fn get(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &mut ScopePtr<'tree> {
-        /*if let Some(scope) = self.scopes.get_mut(&node) {
-            return scope
-        }*/
+    pub fn denoted_by(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Option<&InactiveScopePtr<'tree>> {
+        match is_scope_node(node, c) {
+            false => None,
+            true => Some(self._denoted_by(node, c))
+        }
+    }
+
+    /// [Self::denoted_by] but simply assumes we are at the scope
+    fn _denoted_by(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> &InactiveScopePtr<'tree> {
+        debug_assert!(is_scope_node(node, c));
+        if self.scopes.contains_key(&node) {
+            return &self.scopes[&node]
+        }
         // Truly awful pre-optimized code: what it does is add missing scopes for this node and
         // any parents which are also missing scopes, as well as lexical relations.
         let mut ancestors = scope_ancestors_and_types_of(node, c);
-        let mut descendants = SmallVec::<[TSNode<'tree>; 4]>::new();
+        let mut descendants = SmallVec::<[(TSNode<'tree>, ScopeParentType); 1]>::new();
         let mut node_or_parent = node;
-        while !self.scopes.contains_key(&node_or_parent) {
-            if let Some((parent, parent_type)) = ancestors.next() {
-                if matches!(parent_type, ScopeParentType::Lexical) {
-                    self.lexical_parents.insert(node_or_parent, parent);
-                    self.lexical_children.entry(parent).or_default().push(node_or_parent);
-                }
-                descendants.push(node_or_parent);
-                node_or_parent = parent;
-            } else {
-                break
-            }
+        loop {
+            let Some((parent, parent_type)) = ancestors.next() else {
+                panic!("node is not in the tree (doesn't have root node as an ancestor)")
+            };
+            descendants.push((node_or_parent, parent_type));
+            node_or_parent = parent;
+            if self.scopes.contains_key(&node_or_parent) { break }
         }
-        // This could be done with just references if Rust's borrow checker was smarter / more
-        // granular, because we set scope to None while doing the other borrow (see below)
-        let mut scope = self.scopes.get_mut(&node_or_parent).map(|x| x as *mut _);
-        for child in descendants {
+        // We need this to be a raw pointer so we can call self.scopes.entry
+        let mut scope = &self.scopes[&node_or_parent] as *const _;
+        for (child, child_type) in descendants {
             // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
-            let child_scope = ScopePtr::new(scope.map(|x| unsafe { &*x }));
-            // The assignment isn't necessary but symbolic: it shows we don't want a mut ptr when we
-            // have a mut reference.
-            // scope = None;
-            // Other borrow here, notice we had to set scope to None to not double-borrow
+            let child_scope = {
+                let scope = unsafe { &*scope };
+                let child_scope = InactiveScopePtr::new(Some(scope));
+                if matches!(child_type, ScopeParentType::Lexical) {
+                    self.lexical_parents.insert(child_scope.clone(), scope.clone());
+                    self.lexical_children.entry(scope.clone()).or_default().push(child_scope.clone());
+                }
+                child_scope
+            };
+            // We have to set this before calling self.scopes.entry so that we don't have a pointer
+            // inside of self.scopes when it's mutably borrowed
+            #[allow(unused_assignments)]
+            { scope = null(); }
             let std::collections::hash_map::Entry::Vacant(child_entry) = self.scopes.entry(child) else {
                 unreachable!("we just checked that it's not in the map")
             };
-            scope = Some(child_entry.insert(child_scope) as *mut _);
+            scope = child_entry.insert(child_scope) as *mut _ as *const _;
         }
         // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
-        unsafe { &mut *scope.unwrap() }
+        unsafe { &*scope }
     }
 
-    pub fn seen_lexical_descendants_of(&self, node: TSNode<'tree>) -> impl Iterator<Item=TSNode<'tree>> + '_ {
-        SeenLexicalDescendantsOf::new(self, node)
+    /// Iterate through this scope and all its lexical descendants *which have been created* i.e. "seen"
+    pub fn seen_lexical_descendants_of<'a>(&'a self, scope: &'a InactiveScopePtr<'tree>) -> impl Iterator<Item=&'a InactiveScopePtr<'tree>> + 'a {
+        SeenLexicalDescendantsOf::new(self, scope)
     }
 
-    pub fn seen_return_types<'a>(&'a self, node: TSNode<'tree>, typed_exprs: &'a ExprTypeMap<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'a {
-        once(node).chain(self.seen_lexical_descendants_of(node))
-            .map(|node| self.scopes[&node].values.return_type(typed_exprs))
+    /// Iterate through this scope and all its lexical descendants *which have been created* i.e. "seen"
+    pub fn seen_return_types_of<'a>(&'a self, scope: &'a InactiveScopePtr<'tree>, typed_exprs: &'a ExprTypeMap<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'a {
+        once(scope).chain(self.seen_lexical_descendants_of(scope))
+            .map(|scope| scope.activate_ref().values.return_type(typed_exprs))
     }
 }
 
 impl<'a, 'tree: 'a> SeenLexicalDescendantsOf<'a, 'tree> {
-    fn new(module_scopes: &'a ModuleScopes<'tree>, node: TSNode<'tree>) -> SeenLexicalDescendantsOf<'a, 'tree> {
+    fn new(module_scopes: &'a ModuleScopes<'tree>, scope: &'a InactiveScopePtr<'tree>) -> SeenLexicalDescendantsOf<'a, 'tree> {
         SeenLexicalDescendantsOf {
             module_scopes,
-            node,
+            scope,
             index: 0,
             stack: vec![]
         }
@@ -125,17 +139,17 @@ impl<'a, 'tree: 'a> SeenLexicalDescendantsOf<'a, 'tree> {
 }
 
 impl<'a, 'tree: 'a> Iterator for SeenLexicalDescendantsOf<'a, 'tree> {
-    type Item = TSNode<'tree>;
+    type Item = &'a InactiveScopePtr<'tree>;
 
-    fn next(&mut self) -> Option<TSNode<'tree>> {
+    fn next(&mut self) -> Option<&'a InactiveScopePtr<'tree>> {
         let module_scopes = self.module_scopes;
-        let children = module_scopes.lexical_children.get(&self.node);
-        if let Some(&child) = children.and_then(|children| children.get(self.index)) {
+        let children = module_scopes.lexical_children.get(self.scope);
+        if let Some(child) = children.and_then(|children| children.get(self.index)) {
             self.index += 1;
             self.stack.push(child);
             Some(child)
-        } else if let Some(node) = self.stack.pop() {
-            self.node = node;
+        } else if let Some(scope) = self.stack.pop() {
+            self.scope = scope;
             self.index = 0;
             self.next()
         } else {
@@ -143,43 +157,6 @@ impl<'a, 'tree: 'a> Iterator for SeenLexicalDescendantsOf<'a, 'tree> {
         }
     }
 }
-
-/*  get (node: TSNode): Scope {
-    if (!this.scopes.has(node.id)) {
-      const scope = new Scope(node)
-      this.scopes.set(node.id, scope)
-      const lexicalParent = lexicalScopeParentOf(node)
-      if (lexicalParent !== null) {
-        this.lexicalParents.set(scope, this.get(lexicalParent))
-        this.seenLexicalChildrenOf(scope).push(scope)
-      }
-    }
-    return this.scopes.get(node.id)!
-  }
-
-  /** Note: we won't return children we haven't otherwise seen yet */
-  private seenLexicalChildrenOf (scope: Scope): Scope[] {
-    if (!this.lexicalChildren.has(scope)) {
-      this.lexicalChildren.set(scope, [])
-    }
-    return this.lexicalChildren.get(scope)!
-  }
-
-  * seenLexicalDescendantsOf (scope: Scope): Generator<Scope> {
-    for (const child of this.seenLexicalChildrenOf(scope)) {
-      yield child
-      yield * this.seenLexicalDescendantsOf(child)
-    }
-  }
-
-  * seenReturnTypes (scope: Scope, typedExprs: TypedExprs): Generator<NominalReturnTypeInferred> {
-    yield scope.returnType(typedExprs)
-    for (const descendant of this.seenLexicalDescendantsOf(scope)) {
-      yield descendant.returnType(typedExprs)
-    }
-  }
-}
-*/
 
 impl<'a, 'tree> Iterator for ScopeAncestorsAndTypesOf<'a, 'tree> {
     type Item = (TSNode<'tree>, ScopeParentType);
@@ -268,6 +245,11 @@ fn is_at_lexical_border(c: &TSCursor<'_>) -> bool {
         "class_declaration" => true,
         _ => false
     }
+}
+
+fn is_scope_node<'tree>(node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> bool {
+    c.goto(node);
+    is_at_scope(c)
 }
 
 fn is_at_scope(c: &TSCursor<'_>) -> bool {
