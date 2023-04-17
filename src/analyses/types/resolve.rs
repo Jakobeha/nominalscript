@@ -449,6 +449,11 @@ impl RlTypeDecl {
         // Cannot create because FatTypeDecl has a Box, so we just leave empty
         fat: OnceCell::new()
     };
+
+    /// Converts into the type of an instance of this declaration
+    pub fn into_type(self) -> RlType {
+        unsafe { self.bimap(ThinTypeDecl::into_type, FatTypeDecl::into_type) }
+    }
 }
 
 impl RlType {
@@ -485,6 +490,13 @@ impl RlType {
                 }
             )
         }
+    }
+}
+
+impl DynRlType {
+    /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
+    pub fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> RlType {
+        RlType::resolved(self.resolve(ctx).clone())
     }
 }
 

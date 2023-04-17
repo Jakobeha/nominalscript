@@ -259,7 +259,7 @@ impl FatType {
     ) {
         let (this_regular, this_rest) = this;
         let (other_regular, other_rest) = other;
-        let other_iter = other_regular.into_iter().chain(other_rest.into_iter());
+        let other_iter = other_regular.into_iter().chain(other_rest.into_iter().map(OptionalType::optional));
         Self::unify_optionals2(
             "parameter",
             (this_regular, Some(this_rest)),
@@ -430,7 +430,7 @@ impl FatType {
                         this.variance_bound &= other.variance_bound
                     }
                     // We are about to delete other anyways
-                    let other_supers = std::mem::take(&mut other.supers);
+                    let other_supers = *std::mem::take(&mut other.supers);
                     Self::unify_inherited(&mut this.supers, other_supers, bias, TypeLogger::ignore());
                     let is_never = this.supers.is_never;
                     if is_never {

@@ -28,6 +28,19 @@ impl FatTypeDecl {
             inherited: Box::new(FatTypeInherited::empty())
         }
     }
+
+    /// Converts this into the nominal type it declares: for [FatType], a nominal type with
+    /// the name, type parameters, and inherited
+    pub fn into_type(self) -> FatType {
+        FatType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                generic_args: self.type_params.into_iter().map(|x| x.into_type()).collect(),
+            },
+            inherited: self.inherited
+        }
+    }
 }
 
 impl Default for FatTypeDecl {
@@ -101,7 +114,7 @@ impl FatType {
             Self::Never { nullability: _ } => fun(None),
             Self::Structural { nullability: _, structure: _ } => fun(None),
             Self::Nominal { nullability: _, id, inherited } => fun(Some(once(id).chain(&inherited.super_ids))),
-            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_structure(fun)
+            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_idents(fun)
         }
     }
 
@@ -117,6 +130,17 @@ impl FatType {
             Self::Nominal { nullability: _, id: _, inherited } => fun(inherited.structure.as_ref()),
             Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_structure(fun)
         }
+    }
+
+    /// Temporarily access the type's function structure if it's a function type.
+    ///
+    /// If this is a type hole, it must borrow the structure for the duration, so attempting to
+    /// modify will **panic**.
+    pub fn with_function_structure<R>(&self, fun: impl FnOnce(Option<&FnType<FatType>>) -> R) -> R {
+        self.with_structure(|structure| fun(match structure {
+            Some(TypeStructure::Fn { fn_type }) => Some(fn_type),
+            _ => None
+        }))
     }
 
     /// Destructs this and returns its nullability, ids and structure
@@ -173,7 +197,7 @@ impl HasNullability for FatType {
 }
 
 impl TypeTrait for FatType {
-    type Inherited = FatTypeInherited;
+    type Inherited = Box<FatTypeInherited>;
     type RestArgType = FatRestArgType;
 
     fn is_any(&self) -> bool {
@@ -185,11 +209,11 @@ impl TypeTrait for FatType {
     }
 
     fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited {
-        inherited.map(f)
+        Box::new(inherited.map(f))
     }
 
     fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited {
-        inherited.map_ref(f)
+        Box::new(inherited.map_ref(f))
     }
 
     fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
@@ -204,12 +228,12 @@ impl TypeTrait for FatType {
 impl TypeTraitMapsFrom<ThinType> for FatType {
     fn map_inherited(inherited: <ThinType as TypeTrait>::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
         let inherited = inherited.into_iter().map(f).collect::<Vec<_>>();
-        Self::unify_all_supers(inherited, TypeLogger::ignore())
+        Box::new(Self::unify_all_supers(inherited, TypeLogger::ignore()))
     }
 
     fn map_ref_inherited(inherited: &<ThinType as TypeTrait>::Inherited, mut f: impl FnMut(Cow<'_, ThinType>) -> Self) -> Self::Inherited {
         let inherited = inherited.iter().map(|x| f(Cow::Borrowed(x))).collect::<Vec<_>>();
-        Self::unify_all_supers(inherited, TypeLogger::ignore())
+        Box::new(Self::unify_all_supers(inherited, TypeLogger::ignore()))
     }
 
     fn map_rest_arg_type_in_fn(
@@ -439,7 +463,20 @@ impl FatRestArgType {
         }
     }
 
-    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
+    /// Gets the argument at the specified index, if any.
+    ///
+    /// (Rest arguments are always optional)
+    pub fn get(&self, _idx: usize) -> Option<&FatType> {
+        match self {
+            Self::None => None,
+            Self::Array { element } => Some(element),
+            Self::Illegal { intended_type: _ } => None
+        }
+    }
+
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty.
+    ///
+    /// (Rest arguments are always optional)
     pub fn iter(&self) -> impl Iterator<Item = &FatType> {
         // Use option/flatten to avoid auto_enum
         match self {
@@ -449,12 +486,14 @@ impl FatRestArgType {
         }.into_iter().flatten()
     }
 
-    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
-    pub fn into_iter(self) -> impl Iterator<Item = OptionalType<FatType>> {
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty.
+    ///
+    /// (Rest arguments are always optional)
+    pub fn into_iter(self) -> impl Iterator<Item = FatType> {
         // Use option/flatten to avoid auto_enum
         match self {
             Self::None => None,
-            Self::Array { element } => Some(repeat(OptionalType::optional(element))),
+            Self::Array { element } => Some(repeat(element)),
             Self::Illegal { intended_type: _ } => None
         }.into_iter().flatten()
     }
@@ -529,25 +568,26 @@ impl From<FatType> for FatTypeHole {
 }
 
 impl TypeParam<FatType> {
-    pub fn into_type(self) -> FatType {
-        FatType::Nominal {
-            nullability: Nullability::NonNullable,
-            id: TypeIdent {
-                name: self.name,
-                generic_args: Vec::new()
-            },
-            inherited: Box::new(self.supers)
-        }
-    }
-}
-
-impl TypeParam<FatType> {
     pub fn into_decl(self) -> FatTypeDecl {
         FatTypeDecl {
             name: self.name,
             // No higher-kinded types
             type_params: Vec::new(),
-            inherited: Box::new(self.supers)
+            inherited: self.supers
+        }
+    }
+
+    /// Converts this into the nominal type it declares: for [FatType], just a nominal type with
+    /// the name and inherited
+    pub fn into_type(self) -> FatType {
+        FatType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                // No HKTs
+                generic_args: Vec::new()
+            },
+            inherited: self.supers
         }
     }
 }

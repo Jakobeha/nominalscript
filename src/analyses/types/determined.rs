@@ -1,14 +1,15 @@
 use std::fmt::Display;
 use indexmap::Equivalent;
-use crate::analyses::types::{FatType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
+use crate::analyses::types::{FatType, HasNullability, Nullability, OptionalType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturnType, AstType};
 use crate::diagnostics::{FileLogger, TypeCheckInfo, TypeInfo};
-use crate::{error, hint, hint_if};
+use crate::{error, issue, hint, hint_if};
 use crate::analyses::bindings::FieldName;
 
 /// Required or assigned type with information on what node it was determined from,
 /// and whether it was explicitly provided and/or inferred. For diagnostics.
+// TODO: more information on this (e.g. if the checked type is an arg in a function or ...)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeterminedType<'tree> {
     pub type_: RlType,
@@ -28,19 +29,13 @@ pub struct DeterminedReturnType<'tree> {
 }
 
 impl<'tree> DeterminedType<'tree> {
-    /// Type was inferred from the most recent initializer or assignment (def) before the location
-    /// where its type is checked (use).
-    ///
-    /// Currently the "most recent initializer or assignment" is simply the initializer,
-    /// and types don't get inferred from assignments. We don't support flow typing and don't even
-    /// do control-flow analysis
-    pub fn from_last_def(type_: RlType, inferred_from: TSNode<'tree>) -> Self {
-        Self { type_, defined_value: Some(inferred_from), explicit_type: None }
-    }
-
-    /// Type was explicitly provided via type annotation
-    pub fn explicit(annotation: &AstType<'tree>) -> Self {
-        Self { type_: annotation.shape.clone(), defined_value: None, explicit_type: Some(annotation.node) }
+    /// Type with no location info, e.g. a builtin
+    pub fn intrinsic(type_: RlType) -> Self {
+        Self {
+            type_,
+            defined_value: None,
+            explicit_type: None,
+        }
     }
 
     /// Checks that `assigned` is a subtype of `required`. If not, emits an error at `loc_node`
@@ -258,6 +253,97 @@ impl<'tree> DeterminedType<'tree> {
         );
         DeterminedType {
             type_: RlType::resolved(awaited_type),
+            defined_value: self.defined_value,
+            explicit_type: None,
+        }
+    }
+
+    pub fn call_type(
+        &self,
+        this_arg: Option<(Option<&DeterminedType<'tree>>, TSNode<'tree>)>,
+        args: impl IntoIterator<Item=(Option<&DeterminedType<'tree>>, TSNode<'tree>)>,
+        // TODO: Variable spread args
+        is_nullable_call: bool,
+        fn_loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> DeterminedType<'tree> {
+        let defined_value = self.defined_value;
+        let explicit_type = self.explicit_type;
+        let fat_type = self.type_.resolve(ctx);
+        let return_type = {
+            if matches!(fat_type.nullability(), Nullability::Nullable) && !is_nullable_call {
+                error!(e, "Can't call nullable function without optional chain: {}", self.type_.thin => fn_loc_node;
+                    hint_if!(defined_value => "type inferred here" => defined_value);
+                    hint_if!(explicit_type => "type defined here" => explicit_type));
+            }
+
+            let mut return_type = fat_type.with_function_structure(|fn_type| match fn_type {
+                None => {
+                    error!(e, "Can't call (not a function): {}", self.type_.thin => fn_loc_node;
+                    hint_if!(defined_value => "type inferred here" => defined_value);
+                    hint_if!(explicit_type => "type defined here" => explicit_type));
+                    FatType::NEVER
+                }
+                Some(fn_type) => {
+                    // TODO: Subst type params (which makes the return type non-trivial)
+                    // Check this arg
+                    let this_param = &fn_type.this_type;
+                    let this_param_det = DeterminedType {
+                        type_: RlType::resolved(this_param.clone()),
+                        defined_value: defined_value.or_else(explicit_type),
+                        explicit_type: None,
+                    };
+                    match this_arg {
+                        None => {
+                            if !matches!(this_param.nullability(), Nullability::Nullable) {
+                                error!(e, "Can't call without this arg: {}", self.type_.thin => fn_loc_node;
+                                issue!("this arg has type {}, which isn't nullable", this_param_det.type_.thin);
+                                hint_if!(defined_value => "type inferred here" => defined_value);
+                                hint_if!(explicit_type => "type defined here" => explicit_type));
+                            }
+                        },
+                        Some((this_arg, this_arg_loc_node)) => {
+                            Self::check_subtype(this_arg.cloned(), Some(this_param_det), this_arg_loc_node, e, ctx);
+                        }
+                    }
+
+                    // Check args
+                    let (min_num_args, max_num_args) = fn_type.arity_range();
+                    let mut num_args = 0;
+                    for (arg, arg_loc_node) in args {
+                        let idx = num_args;
+                        num_args += 1;
+                        let Some(param) = fn_type.arg_types.get(idx).map(|t| t.as_ref())
+                            .or_else(|| fn_type.rest_arg_type.get(idx - fn_type.arg_types.len()).map(OptionalType::optional)) else {
+                            continue
+                        };
+                        let param_det = DeterminedType {
+                            type_: RlType::resolved(param.cloned().collapse_optionality_into_nullability()),
+                            defined_value: self.defined_value.or_else(self.explicit_type),
+                            explicit_type: None,
+                        };
+                        Self::check_subtype(arg.cloned(), Some(param_det), arg_loc_node, e, ctx);
+                    }
+                    // Check num args (arity range)
+                    if num_args < min_num_args {
+                        error!(e, "Too few arguments: expected at least {}, got {}", min_num_args, num_args => fn_loc_node;
+                        hint_if!(defined_value => "type inferred here" => defined_value);
+                        hint_if!(explicit_type => "type defined here" => explicit_type));
+                    } else if num_args > max_num_args {
+                        error!(e, "Too many arguments: expected at most {}, got {}", max_num_args, num_args => fn_loc_node;
+                        hint_if!(defined_value => "type inferred here" => defined_value);
+                        hint_if!(explicit_type => "type defined here" => explicit_type));
+                    }
+                    // Return the return type
+                    fn_type.return_type.clone()
+                }
+            });
+            return_type.make_nullable_if(is_nullable_call);
+            return_type
+        };
+        DeterminedType {
+            type_: RlType::resolved(return_type),
             defined_value: self.defined_value,
             explicit_type: None,
         }

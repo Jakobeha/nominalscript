@@ -428,7 +428,7 @@ impl<'tree> TSNode<'tree> {
     }
 
     /// *Panics* if a child is already marked
-    pub fn mark_children_except(&self, cursor: &mut TSCursor<'tree>, except: &TSNode<'tree>) {
+    pub fn mark_children_except(&self, except: TSNode<'tree>, cursor: &mut TSCursor<'tree>) {
         let mut marked_nodes = self.tree.marked_nodes.borrow_mut();
         for child in self.all_children(cursor) {
             if child.id() != except.id() {

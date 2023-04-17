@@ -2,10 +2,11 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use derive_more::Display;
+use indexmap::Equivalent;
 use smol_str::SmolStr;
 use crate::analyses::scopes::ExprTypeMap;
 
-use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, RlType, RlTypeDecl};
+use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolveCtx, RlType, RlTypeDecl};
 use crate::ast::typed_nodes::AstNode;
 
 macro_rules! define_names {
@@ -110,8 +111,10 @@ pub trait ValueBinding<'tree>: Debug {
     fn name(&self) -> &ValueName;
     fn value_type(&self) -> &DynRlType;
     fn locality(&self) -> Locality;
+    fn infer_type_det(&self, typed_exprs: Option<&ExprTypeMap<'tree>>, ctx: &ResolveCtx<'_>) -> DeterminedType<'tree>;
 
-    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
+    #[allow(unused_variables)]
+    fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         self.value_type()
     }
 }
@@ -192,12 +195,12 @@ impl GlobalValueBinding {
         }
     }
 
-    pub fn has(name: &ValueName) -> bool {
+    pub fn has(name: &impl Equivalent<ValueName>) -> bool {
         // TODO: something with lazy_static
         name; false
     }
 
-    pub fn get(name: &ValueName) -> Option<&'static GlobalValueBinding> {
+    pub fn get(name: &impl Equivalent<ValueName>) -> Option<&'static GlobalValueBinding> {
         // TODO: something with lazy_static
         name; None
     }
@@ -214,6 +217,10 @@ impl<'tree> ValueBinding<'tree> for GlobalValueBinding {
 
     fn locality(&self) -> Locality {
         Locality::Global
+    }
+
+    fn infer_type_det(&self, _typed_exprs: Option<&ExprTypeMap<'tree>>, _ctx: &ResolveCtx<'_>) -> DeterminedType<'tree> {
+        DeterminedType::intrinsic( self.type_.clone())
     }
 }
 
@@ -241,14 +248,19 @@ impl GlobalTypeBinding {
         }
     }
 
-    pub fn has(name: &TypeName) -> bool {
+    pub fn has(name: &impl Equivalent<TypeName>) -> bool {
         // TODO: something with lazy_static
         name; false
     }
 
-    pub fn get(name: &TypeName) -> Option<&'static GlobalTypeBinding> {
+    pub fn get(name: &impl Equivalent<TypeName>) -> Option<&'static GlobalTypeBinding> {
         // TODO: something with lazy_static
         name; None
+    }
+
+    /// The declared type as a determined type
+    pub fn type_det<'tree>(&self) -> DeterminedType<'tree> {
+        DeterminedType::intrinsic( self.decl.clone().into_type())
     }
 }
 
@@ -283,6 +295,19 @@ impl Hash for GlobalTypeBinding {
 }
 
 impl<'tree> HoistedValueBinding<'tree> for GlobalValueBinding {}
+
+impl TypeNameStr {
+    /// Gets the type of a number literal, if it is a valid number literal.
+    pub fn of_number_literal(text: &str) -> &'static Self {
+        TypeNameStr::of(match (text.parse::<usize>(), text.parse::<isize>(), text.parse::<f64>()) {
+            (Ok(_), _, _) => "Natural",
+            (_, Ok(_), _) => "Integer",
+            (_, _, Ok(_)) => "Float",
+            // Probably should not actually be possible
+            _ => "Number"
+        })
+    }
+}
 
 // impl<'tree> LocalUses<'tree> {
 //     pub fn new() -> Self {

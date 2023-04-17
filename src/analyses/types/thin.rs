@@ -389,6 +389,18 @@ impl ThinTypeDecl {
         typescript_supertype: None,
         guard: None
     };
+
+    /// Converts this into the nominal type it declares: for [ThinType], just a nominal type with
+    /// the name and type parameters
+    pub fn into_type(self) -> ThinType {
+        ThinType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                generic_args: self.type_params.into_iter().map(|x| x.into_type()).collect(),
+            }
+        }
+    }
 }
 
 impl ThinType {
@@ -500,6 +512,21 @@ impl RestArgTrait for ThinType {
             nullability: Nullability::NonNullable,
             structure: TypeStructure::Tuple { element_types }
         } if element_types.is_empty())
+    }
+}
+
+impl TypeParam<ThinType> {
+    /// Converts this into the nominal type it declares: for [ThinType], just a nominal type with
+    /// the name
+    pub fn into_type(self) -> ThinType {
+        ThinType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                // No HKTs
+                generic_args: Vec::new()
+            }
+        }
     }
 }
 
@@ -736,6 +763,22 @@ impl<Type> OptionalType<Type> {
         OptionalType {
             optionality: self.optionality,
             type_: f(&self.type_),
+        }
+    }
+
+    pub fn as_ref(&self) -> OptionalType<&Type> {
+        OptionalType {
+            optionality: self.optionality,
+            type_: &self.type_,
+        }
+    }
+}
+
+impl<Type: Clone> OptionalType<&Type> {
+    pub fn cloned(self) -> OptionalType<Type> {
+        OptionalType {
+            optionality: self.optionality,
+            type_: self.type_.clone(),
         }
     }
 }

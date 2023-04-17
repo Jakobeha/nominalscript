@@ -7,9 +7,9 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::{FieldNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::bindings::{FieldNameStr, GlobalTypeBinding, TypeNameStr, ValueBinding, ValueNameStr};
 use crate::analyses::scopes::{ModuleCtx, ScopeChain};
-use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, Variance};
+use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
@@ -199,396 +199,316 @@ pub(crate) fn finish_transpile<'tree>(
         if skip_nodes.remove(&node) || node.is_marked() {
             skip_children = true
         } else if node.is_named() {
-            match node.kind() {
-                "function_declaration" |
-                "generator_function_declaration" |
-                "function" |
-                "generator_function" |
-                "arrow_function" => {
-                    let is_decl = node.kind() == "function_declaration" ||
-                        node.kind() == "generator_function_declaration";
-                    let is_arrow = node.kind() == "arrow_function";
-                    // We want to reuse params if a function decl because we can infer
-                    // param types in future calls. In an expression, we assign the type to the
-                    // node to do this
-                    let decl = match is_decl {
-                        false => None,
-                        true => {
-                            let name = ValueNameStr::of(node.field_child("name").unwrap().text());
-                            scopes.hoisted_in_top_scope(name).map(|x| x.down_to_fn_decl().expect("hoisted declaration isn't a function (TODO handle, probably just return None here)"))
-                        }
-                    };
-                    let body = node.field_child("body").unwrap();
-                    let fun_scope_inactive = m.scopes.denoted_by(body, &mut c).expect("function body should have a scope");
-                    if !traversal_state.is_up() {
-                        let mut fun_scope = fun_scope_inactive.activate_ref();
-                        // TODO: Scope nominal type params as well
-                        // Declare parameters in function scope and assign explicit types
-                        let set_params = |params: impl IntoIterator<Item=Rc<AstParameter>>| fun_scope.set_params(params.into_iter().map(|param| {
-                            skip_nodes.extend(param.node.named_children(&mut c2)
-                                .filter(|param_child_node| Some(param_child_node) != param.value.as_ref()))
-                        }));
-                        match (decl, node.field_child("parameters")) {
-                            // Decl parameters
-                            (Some(decl), _) => set_params(decl.formal_params.clone()),
-                            // Expression formal parameters
-                            (None, Some(parameters_node)) => {
-                                set_params(parameters_node.named_children(&mut c).map(|x| Rc::new(AstParameter::formal(&scope, x, is_arrow))))
-                            },
-                            // Arrow parameter
-                            (None, None) => {
-                                debug_assert!(is_arrow);
-                                set_params(once(Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))))
+            'outer: {
+                match node.kind() {
+                    "function_declaration" |
+                    "generator_function_declaration" |
+                    "function" |
+                    "generator_function" |
+                    "arrow_function" => {
+                        let is_decl = node.kind() == "function_declaration" ||
+                            node.kind() == "generator_function_declaration";
+                        let is_arrow = node.kind() == "arrow_function";
+                        // We want to reuse params if a function decl because we can infer
+                        // param types in future calls. In an expression, we assign the type to the
+                        // node to do this
+                        let decl = match is_decl {
+                            false => None,
+                            true => {
+                                let name = ValueNameStr::of(node.field_child("name").unwrap().text());
+                                scopes.hoisted_in_top_scope(name).map(|x| x.down_to_fn_decl().expect("hoisted declaration isn't a function (TODO handle, probably just return None here)"))
                             }
                         };
-                    } else {
-                        // Infer return type, and check with the explicit return type if provided.
-                        // If expression, also assign inferred func type to the node itself
-                        let explicit_return_type_ast = node.field_child("nominal_return_type").map(|x| {
-                            x.mark();
-                            AstReturnType::new(fun_scope_inactive, x.named_child(0).unwrap())
-                        });
-                        let process_inferred_return_types = |inferred_return_types: impl IntoIterator<Item = DeterminedReturnType<'tree>>| -> Option<RlReturnType> {
-                            let mut inferred_return_types = inferred_return_types.into_iter();
-                            match explicit_return_type_ast {
+                        let body = node.field_child("body").unwrap();
+                        let fun_scope_inactive = m.scopes.denoted_by(body, &mut c).expect("function body should have a scope");
+                        if !traversal_state.is_up() {
+                            let mut fun_scope = fun_scope_inactive.activate_ref();
+                            // TODO: Scope nominal type params as well
+                            // Declare parameters in function scope and assign explicit types
+                            let set_params = |params: impl IntoIterator<Item=Rc<AstParameter>>| fun_scope.set_params(params.into_iter().map(|param| {
+                                skip_nodes.extend(param.node.named_children(&mut c2)
+                                    .filter(|param_child_node| Some(param_child_node) != param.value.as_ref()))
+                            }));
+                            match (decl, node.field_child("parameters")) {
+                                // Decl parameters
+                                (Some(decl), _) => set_params(decl.formal_params.clone()),
+                                // Expression formal parameters
+                                (None, Some(parameters_node)) => {
+                                    set_params(parameters_node.named_children(&mut c).map(|x| Rc::new(AstParameter::formal(&scope, x, is_arrow))))
+                                },
+                                // Arrow parameter
+                                (None, None) => {
+                                    debug_assert!(is_arrow);
+                                    set_params(once(Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))))
+                                }
+                            };
+                        } else {
+                            // Infer return type, and check with the explicit return type if provided.
+                            // If expression, also assign inferred func type to the node itself
+                            let explicit_return_type_ast = node.field_child("nominal_return_type").map(|x| {
+                                x.mark();
+                                AstReturnType::new(fun_scope_inactive, x.named_child(0).unwrap())
+                            });
+                            let process_inferred_return_types = |inferred_return_types: impl IntoIterator<Item=DeterminedReturnType<'tree>>| -> Option<RlReturnType> {
+                                let mut inferred_return_types = inferred_return_types.into_iter();
+                                match explicit_return_type_ast {
+                                    None => {
+                                        // Assign inferred return type
+                                        let inferred_return_type = FatType::unify_all(
+                                            inferred_return_types.map(|inferred_return_type| inferred_return_type.type_.into_resolve(ctx).1),
+                                            Variance::Bivariant,
+                                            TypeLogger::ignore()
+                                        );
+                                        Some(RlReturnType::resolved(ReturnType::Type(inferred_return_type)))
+                                    }
+                                    Some(explicit_return_type_ast) => {
+                                        // Check explicit return type
+                                        let mut last_inferred_return_type_det = inferred_return_types.next();
+                                        while let Some(next_inferred_return_type_det) = inferred_return_types.next() {
+                                            last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &e, ctx);
+                                            last_inferred_return_type_det = next_inferred_return_type_det;
+                                        };
+                                        // We can consume the last one
+                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &e, ctx);
+                                        None
+                                    }
+                                }
+                            };
+                            // It's easier to just check if there is a type assigned instead of checking
+                            // if body itself is an expression, since there are many expression node
+                            // types. If it's not than there will never be a type assigned
+                            let custom_inferred_return_type = match m.typed_exprs.get(body) {
+                                None => process_inferred_return_types(m.scopes.seen_return_types_of(fun_scope_inactive, &m.typed_exprs)),
+                                Some(inferred_return_type) => process_inferred_return_types(once(DeterminedReturnType::from(inferred_return_type.clone())))
+                            };
+                            match decl {
                                 None => {
-                                    // Assign inferred return type
-                                    let inferred_return_type = FatType::unify_all(
-                                        inferred_return_types.map(|inferred_return_type| inferred_return_type.type_.into_resolve(ctx).1),
-                                        Variance::Bivariant,
-                                        TypeLogger::ignore()
-                                    );
-                                    Some(RlReturnType::resolved(ReturnType::Type(inferred_return_type)))
-                                }
-                                Some(explicit_return_type_ast) => {
-                                    // Check explicit return type
-                                    let mut last_inferred_return_type_det = inferred_return_types.next();
-                                    while let Some(next_inferred_return_type_det) = inferred_return_types.next() {
-                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &e, ctx);
-                                        last_inferred_return_type_det = next_inferred_return_type_det;
+                                    // We need to set the expression's type
+                                    let mut func_type = AstFunctionDecl::parse_common(&scope, node).3;
+                                    if let Some(custom_inferred_return_type) = custom_inferred_return_type {
+                                        func_type = func_type.with_return_type(custom_inferred_return_type, ctx)
                                     };
-                                    // We can consume the last one
-                                    last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &e, ctx);
-                                    None
+                                    m.typed_exprs.assign(node, DeterminedType {
+                                        type_: func_type,
+                                        defined_value: Some(node),
+                                        explicit_type: None,
+                                    });
                                 }
-                            }
-                        };
-                        // It's easier to just check if there is a type assigned instead of checking
-                        // if body itself is an expression, since there are many expression node
-                        // types. If it's not than there will never be a type assigned
-                        let custom_inferred_return_type = match m.typed_exprs.get(body) {
-                            None => process_inferred_return_types(m.scopes.seen_return_types_of(fun_scope_inactive, &m.typed_exprs)),
-                            Some(inferred_return_type) => process_inferred_return_types(once(DeterminedReturnType::from(inferred_return_type.clone())))
-                        };
-                        match decl {
-                            None => {
-                                // We need to set the expression's type
-                                let mut func_type = AstFunctionDecl::parse_common(&scope, node).3;
-                                if let Some(custom_inferred_return_type) = custom_inferred_return_type {
-                                    func_type = func_type.with_return_type(custom_inferred_return_type, ctx)
-                                };
-                                m.typed_exprs.assign(node, DeterminedType {
-                                    type_: func_type,
-                                    defined_value: Some(node),
-                                    explicit_type: None,
-                                });
-                            }
-                            Some(decl) => {
-                                if let Some(custom_inferred_return_type) = custom_inferred_return_type {
-                                    // We need to set the decl's inferred return type
-                                    decl.set_custom_inferred_return_type(custom_inferred_return_type, ctx);
+                                Some(decl) => {
+                                    if let Some(custom_inferred_return_type) = custom_inferred_return_type {
+                                        // We need to set the decl's inferred return type
+                                        decl.set_custom_inferred_return_type(custom_inferred_return_type, ctx);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                "variable_declarator" => {
-                    let name_node = node.field_child("name").unwrap();
-                    let name = ValueNameStr::of(name_node);
-                    let nominal_type = node.field_child("nominal_type")
-                        .map(|x| AstType::of_annotation(&scope, x));
-                    let value = node.field_child("value");
-                    let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
-                    assert_eq!(decl.type_.map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
-                    if !traversal_state.is_up() {
-                        if let (Some(value), Some(nominal_type)) = (value, nominal_type) {
-                            // Require value to be nominal type
-                            m.typed_exprs.require(value, nominal_type)
+                    "variable_declarator" => {
+                        let name_node = node.field_child("name").unwrap();
+                        let name = ValueNameStr::of(name_node);
+                        let nominal_type = node.field_child("nominal_type")
+                            .map(|x| AstType::of_annotation(&scope, x));
+                        let value = node.field_child("value");
+                        let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
+                        assert_eq!(decl.type_.map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
+                        if !traversal_state.is_up() {
+                            if let (Some(value), Some(nominal_type)) = (value, nominal_type) {
+                                // Require value to be nominal type
+                                m.typed_exprs.require(value, nominal_type)
+                            }
+                            // Don't traverse binding ids
+                            skip_nodes.insert(name_node)
+                            // We also don't traverse nominal type but it's unnecessary to add
+                            // because that gets skipped anyways (deleted)
                         }
-                        // Don't traverse binding ids
-                        skip_nodes.insert(name_node)
-                        // We also don't traverse nominal type but it's unnecessary to add
-                        // because that gets skipped anyways (deleted)
+                        // Already assigned via decl, and the node itself is a statement
+                        // m.typed_exprs.assign(node, nominal_type)
                     }
-                    // Already assigned via decl, and the node itself is a statement
-                    // m.typed_exprs.assign(node, nominal_type)
-                }
-                "return_statement" => {
-                    if traversal_state.is_up() {
-                        scopes.add_return(AstReturn {
-                            node,
-                            returned_value: node.named_child(0),
-                        }, &e)
-                    }
-                }
-                "throw_statement" => {
-                    if traversal_state.is_up() {
-                        scopes.add_throw(AstThrow {
-                            node,
-                            thrown_value: node.named_child(0),
-                        }, &e)
-                    }
-                }
-                "assignment_expression" => {
-                    if traversal_state.is_up() {
-                        let left = node.named_child(0).unwrap();
-                        let right = node.named_child(1).unwrap();
-                        let left_type = m.typed_exprs.get(left);
-                        if let Some(left_type) = left_type {
-                            m.typed_exprs.require(right, left_type)
-                        }
-                        // Can't re-assign right type to the left id,
-                        // because of issues with scope and loops/break,
-                        // but we can assign it to the expression itself.
-                        // Also we need to assign the type because assignments are expressions
-                        // and thus can be inside other expressions
-                        let assigned_type = left_type.or_else(|| m.typed_exprs.get(right));
-                        if let Some(assigned_type) = assigned_type {
-                            m.typed_exprs.assign(node, assigned_type)
+                    "return_statement" => {
+                        if traversal_state.is_up() {
+                            scopes.add_return(AstReturn {
+                                node,
+                                returned_value: node.named_child(0),
+                            }, &e)
                         }
                     }
-                }
-                // "augmented_assignent_expression":
-                // "binary_expression":
-                // "update_expression":
-                //   We will add support for declaring operations on nominal types, e.g.
-                //   `operation; Liters + Liters -> Liters`
-                //   `operation; Liters * Float -> Liters`
-                //   And then call `m.typed_operations.get(left, op, right)`
-                //   to ensure that such a declaration exists and get the return type
-                //   ...But not yet (TODO)
-                "ternary_expression" => {
-                    if traversal_state.is_up() {
-                        // let condition = node.named_child(0).unwrap();
-                        let then = node.named_child(1).unwrap();
-                        let else_ = node.named_child(2).unwrap();
-                        let then_type = m.typed_exprs.get(then);
-                        let else_type = m.typed_exprs.get(else_);
-                        if let (Some(then_type), Some(else_type)) = (then_type, else_type) {
-                            let unified = DeterminedType::check_not_disjoint_then_unify(Some(then_type.clone()), Some(else_type.clone()), node, &e, ctx);
-                            if let Some(unified) = unified {
-                                m.typed_exprs.assign(node, unified)
+                    "throw_statement" => {
+                        if traversal_state.is_up() {
+                            scopes.add_throw(AstThrow {
+                                node,
+                                thrown_value: node.named_child(0),
+                            }, &e)
+                        }
+                    }
+                    "assignment_expression" => {
+                        if traversal_state.is_up() {
+                            let left = node.named_child(0).unwrap();
+                            let right = node.named_child(1).unwrap();
+                            let left_type = m.typed_exprs.get(left);
+                            if let Some(left_type) = left_type {
+                                m.typed_exprs.require(right, left_type)
+                            }
+                            // Can't re-assign right type to the left id,
+                            // because of issues with scope and loops/break,
+                            // but we can assign it to the expression itself.
+                            // Also we need to assign the type because assignments are expressions
+                            // and thus can be inside other expressions
+                            let assigned_type = left_type.or_else(|| m.typed_exprs.get(right));
+                            if let Some(assigned_type) = assigned_type {
+                                m.typed_exprs.assign(node, assigned_type)
                             }
                         }
                     }
-                }
-                "sequence_expression" => {
-                    if traversal_state.is_up() {
-                        let last = node.last_named_child().unwrap();
-                        let last_type = m.typed_exprs.get(last);
-                        if let Some(last_type) = last_type {
-                            m.typed_exprs.assign(node, last_type)
+                    // "augmented_assignent_expression":
+                    // "binary_expression":
+                    // "update_expression":
+                    //   We will add support for declaring operations on nominal types, e.g.
+                    //   `operation; Liters + Liters -> Liters`
+                    //   `operation; Liters * Float -> Liters`
+                    //   And then call `m.typed_operations.get(left, op, right)`
+                    //   to ensure that such a declaration exists and get the return type
+                    //   ...But not yet (TODO)
+                    "ternary_expression" => {
+                        if traversal_state.is_up() {
+                            // let condition = node.named_child(0).unwrap();
+                            let then = node.named_child(1).unwrap();
+                            let else_ = node.named_child(2).unwrap();
+                            let then_type = m.typed_exprs.get(then);
+                            let else_type = m.typed_exprs.get(else_);
+                            if let (Some(then_type), Some(else_type)) = (then_type, else_type) {
+                                let unified = DeterminedType::check_not_disjoint_then_unify(Some(then_type.clone()), Some(else_type.clone()), node, &e, ctx);
+                                if let Some(unified) = unified {
+                                    m.typed_exprs.assign(node, unified)
+                                }
+                            }
                         }
                     }
-                }
-                "member_expression" => {
-                    if traversal_state.is_up() {
-                        let object = node.named_child(0).unwrap();
-                        let field_name = FieldNameStr::of(node.field_child("property").unwrap().text());
-                        let is_nullable_access = node.child_of_type("optional_chain").is_some();
-                        let object_type_det = m.typed_exprs.get(object);
-                        if let Some(object_type_det) = object_type_det {
-                            let field_type = object_type_det.member_type(field_name, is_nullable_access, node, &e, ctx);
-                            m.typed_exprs.assign(node, field_type);
+                    "sequence_expression" => {
+                        if traversal_state.is_up() {
+                            let last = node.last_named_child().unwrap();
+                            let last_type = m.typed_exprs.get(last);
+                            if let Some(last_type) = last_type {
+                                m.typed_exprs.assign(node, last_type)
+                            }
                         }
                     }
-                }
-                "subscript_expression" => {
-                    if traversal_state.is_up() {
-                        let array = node.named_child(0).unwrap();
-                        let index = node.field_child("index").unwrap().text().parse::<usize>().ok();
-                        let is_nullable_access = node.child_of_type("optional_chain").is_some();
-                        let array_type_det = m.typed_exprs.get(array);
-                        if let Some(array_type_det) = array_type_det {
-                            let element_type = array_type_det.subscript_type(index, is_nullable_access, node, &e, ctx);
-                            m.typed_exprs.assign(node, element_type);
+                    "member_expression" => {
+                        if traversal_state.is_up() {
+                            let object = node.named_child(0).unwrap();
+                            let field_name = FieldNameStr::of(node.field_child("property").unwrap().text());
+                            let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                            let object_type_det = m.typed_exprs.get(object);
+                            if let Some(object_type_det) = object_type_det {
+                                let field_type = object_type_det.member_type(field_name, is_nullable_access, node, &e, ctx);
+                                m.typed_exprs.assign(node, field_type);
+                            }
                         }
                     }
-                }
-                "await_expression" => {
-                    if traversal_state.is_up() {
-                        let promise = node.named_child(0).unwrap();
-                        let promise_type_det = m.typed_exprs.get(promise);
-                        if let Some(promise_type_det) = promise_type_det {
-                            let inner_type = promise_type_det.awaited_type(is_nullable_access, node, &e, ctx);
-                            m.typed_exprs.assign(node, inner_type);
+                    "subscript_expression" => {
+                        if traversal_state.is_up() {
+                            let array = node.named_child(0).unwrap();
+                            let index = node.field_child("index").unwrap().text().parse::<usize>().ok();
+                            let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                            let array_type_det = m.typed_exprs.get(array);
+                            if let Some(array_type_det) = array_type_det {
+                                let element_type = array_type_det.subscript_type(index, is_nullable_access, node, &e, ctx);
+                                m.typed_exprs.assign(node, element_type);
+                            }
                         }
                     }
-                }
-                // TODO: Remaining cases
-                _ => {}
-            }
-        }
-    /*
-          case 'call_expression': {
-            if (lastMove === 'up') {
-              const func = node.namedChild(0)!
-              const funcIsNullable = node.childOfType('optional_chain') !== null
-              const args = node.childOfType('arguments')
-              if (args === null) {
-                logError(
-                  'Can\'t handle function which takes template string as args', node
-                )
-                break
-              }
-              const funcTypeRaw = scopes.inferType(func)
-
-              if (funcTypeRaw !== null) {
-                const funcType = await ctx.nominalTypeDeclMap.superStructure2(funcTypeRaw) ?? funcTypeRaw
-                if (!NominalTypeShape.isFunction(funcType.shape)) {
-                  logError(
-                    'Can\'t call non-function', func,
-                    funcType.ast !== null ? ['note: type is here', funcType.ast.node] : null
-                  )
-                } else {
-                  if (funcType.shape.isNullable && !funcIsNullable) {
-                    logError(
-                      'Can\'t call nullable function without optional chain', func,
-                      funcType.ast !== null ? ['note: type is here', funcType.ast.node] : null
-                    )
-                  }
-                  const paramLenRange = NominalFunctionType.paramLenRange(funcType.shape)
-                  if (args.namedChildren.length < paramLenRange.min) {
-                    logError(
-                      `Too few arguments to function, expected ${paramLenRange.min} but got ${args.namedChildren.length}`,
-                      args
-                    )
-                  } else if (args.namedChildren.length > paramLenRange.max) {
-                    logError(
-                      `Too many arguments to function, expected ${paramLenRange.max} but got ${args.namedChildren.length}`,
-                      args
-                    )
-                  }
-                  for (let i = 0; i < args.namedChildren.length; i++) {
-                    const arg = args.namedChildren[i]
-                    const paramType = NominalFunctionType.paramType(funcType.shape, i)
-                    if (paramType !== 'any' && paramType !== 'out-of-range') {
-                      ctx.typedExprs.require(arg, {
-                        shape: paramType,
-                        ast: funcType.ast
-                      })
+                    "await_expression" => {
+                        if traversal_state.is_up() {
+                            let promise = node.named_child(0).unwrap();
+                            let promise_type_det = m.typed_exprs.get(promise);
+                            if let Some(promise_type_det) = promise_type_det {
+                                let inner_type = promise_type_det.awaited_type(is_nullable_access, node, &e, ctx);
+                                m.typed_exprs.assign(node, inner_type);
+                            }
+                        }
                     }
-                  }
-
-                  if (funcType.shape.returnValue !== 'any') {
-                    ctx.typedExprs.assign(node, {
-                      shape: funcType.shape.returnValue,
-                      ast: funcType.ast
-                    })
-                  }
-                }
-              }
-            }
-            break
-          }
-          case 'parenthesized_expression': {
-            if (lastMove !== 'up') {
-              const expr = node.namedChild(0)!
-              const type = mapNullable(
-                node.childOfType('nominal_type_annotation'),
-                x => { x.delete(); return new NominalType(x.namedChild(0)!) }
-              )
-              if (type !== null) {
-                ctx.typedExprs.require(expr, type.asInferred)
-                ctx.typedExprs.assign(node, type.asInferred)
-              }
-            } else {
-              const expr = node.namedChild(0)!
-              const typeAnnotation = node.childOfType('nominal_type_annotation')
-              if (typeAnnotation === null) {
-                const inferredType = scopes.inferType(expr)
-                if (inferredType !== null) {
-                  ctx.typedExprs.assign(node, inferredType)
-                }
-              }
-            }
-            break
-          }
-          case 'this':
-          case 'identifier':
-          case 'shorthand_property_identifier': {
-            const def = scopes.get(node.text, node)
-            if (def === null) {
-              logError(`Unresolved identifier '${node.text}'`, node)
-              break
-            }
-            if (def instanceof AstBinding) {
-              def.addUse(node)
-              const type = await def.inferTypeFor(node)
-              if (type === null) break
-              ctx.typedExprs.assign(node, type)
-            } else if (def instanceof GlobalBinding) {
-              if (def.type === null) break
-              ctx.typedExprs.assign(node, {
-                shape: def.type,
-                ast: { node }
-              })
-            } else {
-              throw new Error(`Unexpected binding type ${def.constructor.name}`)
-            }
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'true':
-          case 'false': {
-            ctx.typedExprs.assign(node, {
-              shape: NominalTypeShape.BOOLEAN,
-              ast: { node }
-            })
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'null': {
-            ctx.typedExprs.assign(node, {
-              shape: NominalTypeShape.NULL,
-              ast: { node }
-            })
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'number': {
-            ctx.typedExprs.assign(node, {
-              shape: NominalTypeShape.number(node.text),
-              ast: { node }
-            })
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'string':
-          case 'template_string': {
-            ctx.typedExprs.assign(node, {
-              shape: NominalTypeShape.STRING,
-              ast: { node }
-            })
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'regex': {
-            ctx.typedExprs.assign(node, {
-              shape: NominalTypeShape.REGEX,
-              ast: { node }
-            })
-
-            skipChildren = true // there are no children
-            break
-          }
-          case 'object': {
-            if (lastMove === 'up') {
+                    "call_expression" => {
+                        if traversal_state.is_up() {
+                            let func = node.named_child(0).unwrap();
+                            let is_nullable_call = node.child_of_kind("optional_chain", &mut c).is_some();
+                            let Some(args_node) = node.child_of_kind("arguments", &mut c) else {
+                                error!(e, "Can't handle function which takes template string as args" => node);
+                                break 'outer
+                            };
+                            if let Some(func_type) = m.typed_exprs.get(func) {
+                                let return_type = func_type.call_type(
+                                    // TODO: This arg and spread args
+                                    None,
+                                    args_node.named_children(&mut c).map(|arg_node| {
+                                        (m.typed_exprs.get(arg_node), arg_node)
+                                    }),
+                                    is_nullable_call,
+                                    node,
+                                    &e,
+                                    ctx
+                                );
+                                m.typed_exprs.assign(node, return_type);
+                            }
+                        }
+                    }
+                    "parenthesized_expression" => {
+                        let expr = node.named_child(0).unwrap();
+                        let type_ = node.field_child("nominal_type").map(|t| AstType::of_annotation(&scope, type_));
+                        if !traversal_state.is_up() {
+                            if let Some(type_) = type_ {
+                                m.typed_exprs.require(expr, type_.clone());
+                                m.typed_exprs.assign(node, type_);
+                            }
+                        } else if type_.is_none() {
+                            let inferred_type = m.typed_exprs.get(expr);
+                            if let Some(inferred_type) = inferred_type {
+                                m.typed_exprs.assign(node, inferred_type.clone());
+                            }
+                        }
+                    }
+                    "this" |
+                    "identifier" |
+                    "shorthand_property_identifier" => {
+                        // No children
+                        let ident = ValueNameStr::of(node.text());
+                        let def = scopes.at_pos(ident, node);
+                        let Some(def) = def else {
+                            error!(e, "Unresolved identifier" => node);
+                            break 'outer
+                        };
+                        let def_type = def.infer_type_det(Some(&m.typed_exprs), ctx);
+                        if let Some(def_type) = def_type {
+                            m.typed_exprs.assign(node, def_type);
+                        }
+                    }
+                    "true" => {
+                        // No children
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("True")).expect("builtin True type should exist").type_det());
+                    }
+                    "false" => {
+                        // No children
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("False")).expect("builtin False type should exist").type_det());
+                    }
+                    "null" => {
+                        // No children
+                        m.typed_exprs.assign(node, DeterminedType::intrinsic(RlType::NULL.clone()));
+                    }
+                    "number" => {
+                        // No children
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of_number_literal(node.text())).expect("builtin number literal type should exist").type_det());
+                    }
+                    "string" |
+                    "template_string" => {
+                        // No children
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("String")).expect("builtin String type should exist").type_det());
+                    }
+                    "regex" => {
+                        // No children
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("Regex")).expect("builtin Regex type should exist").type_det());
+                    }
+                    "object" => {
+                        todo!()
+                        /*
+                                    if (lastMove === 'up') {
               let fields: Array<[string | number, NominalTypeShape]> | null = []
               for (const child of node.namedChildren) {
                 switch (child.type) {
@@ -654,10 +574,13 @@ pub(crate) fn finish_transpile<'tree>(
                 ast: { node }
               })
             }
-            break
-          }
-          case 'array': {
-            if (lastMove === 'up') {
+                         */
+                    }
+                    "array" => {
+                        todo!()
+
+                        /*
+                                    if (lastMove === 'up') {
               let elems: NominalTypeShape[] | NominalTypeShape | null = []
               const pushElems = (...newElems: NominalTypeShape[]): NominalTypeShape[] | NominalTypeShape => {
                 if (elems! instanceof Array) {
@@ -725,39 +648,37 @@ pub(crate) fn finish_transpile<'tree>(
                 ast: { node }
               })
             }
-            break
-          }
-          case 'nominal_wrap_expression':
-          case 'nominal_wrap_unchecked_expression': {
-            if (lastMove !== 'up') {
-              const nominalType = new NominalType(node.namedChild(0)!)
-              const expr = node.namedChild(1)!
-              if (node.type === 'nominal_wrap_expression') {
-                ctx.typedExprs.rtRequire(expr, nominalType.asInferred)
-              }
-              ctx.typedExprs.assign(node, nominalType.asInferred)
-              node.replaceWithChild(expr)
+                         */
+                    }
+                    "nominal_wrap_expression" |
+                    "nominal_wrap_unchecked_expression" => {
+                        if !traversal_state.is_up() {
+                            let is_checked = node_type == "nominal_wrap_expression";
+                            let nominal_type = AstType::new(&scope, node.named_child(0).unwrap());
+                            let expr = node.named_child(1).unwrap();
+                            if is_checked {
+                                m.typed_exprs.runtime_require(expr, nominal_type.clone());
+                            }
+                            m.typed_exprs.assign(node, nominal_type);
+                            node.mark_children_except(expr, &mut c);
+                        }
+                    }
+                    "nominal_type_annotation" |
+                    "nominal_type_identifier" |
+                    "parenthesized_nominal_type" |
+                    "generic_nominal_type" |
+                    "object_nominal_type" |
+                    "array_nominal_type" |
+                    "tuple_nominal_type" |
+                    "function_nominal_type" |
+                    "nullable_nominal_type" => {
+                        skip_children = true;
+                        error!("Unhandled nominal type (nominal type in currently unsupported position)" => node);
+                    }
+                    _ => {}
+                }
             }
-            break
-          }
-          case 'nominal_type_annotation':
-          case 'nominal_type_identifier':
-          case 'parenthesized_nominal_type':
-          case 'generic_nominal_type':
-          case 'object_nominal_type':
-          case 'array_nominal_type':
-          case 'tuple_nominal_type':
-          case 'function_nominal_type':
-          case 'nullable_nominal_type':
-            logError(
-              'Unhandled nominal type (nominal type in currently unsupported position)', node
-            )
-            skipChildren = true
-            break
-          default:
-            break
         }
-      } */
 
         if skip_children {
             // Note that lastMove is immediately set afterwards and gotoInorder doesn't

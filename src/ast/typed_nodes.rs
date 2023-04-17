@@ -13,6 +13,7 @@ pub trait AstNode<'tree> {
 }
 
 pub trait TypedAstNode<'tree>: AstNode<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>>;
     fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType;
 }
 
@@ -47,7 +48,7 @@ pub struct AstTypeParameter<'tree> {
     pub shape: RlTypeParam
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AstType<'tree> {
     pub node: TSNode<'tree>,
     pub shape: RlType,
@@ -208,6 +209,14 @@ macro_rules! impl_ast_value_binding {
 
                 fn locality(&self) -> Locality {
                     Locality::$locality
+                }
+
+                fn infer_type_det(&self, typed_exprs: Option<&ExprTypeMap<'tree>>, ctx: &ResolveCtx<'_>) -> DeterminedType<'tree> {
+                    DeterminedType {
+                        type_: <Self as TypedAstNode>::infer_type(self, typed_exprs).normalize_clone(ctx),
+                        defined_value: Some(self.node()),
+                        explicit_type: self.type_annotation().map(|t| t.node()),
+                    }
                 }
             }
 
@@ -555,6 +564,10 @@ impl<'tree> AstParameter<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstParameter<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>> {
+        self.type_.as_ref()
+    }
+    
     fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
@@ -608,6 +621,10 @@ impl<'tree> AstValueDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstValueDecl<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>> {
+        self.type_.as_ref()
+    }
+    
     fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         match (&self.type_, self.value, typed_exprs) {
             (Some(type_), _, _) => &type_.shape,
@@ -687,6 +704,10 @@ impl<'tree> AstFunctionDecl<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstFunctionDecl<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>> {
+        None
+    }
+    
     fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         self.custom_inferred_fn_type.get().unwrap_or(&self.fn_type)
     }
@@ -772,6 +793,10 @@ impl<'tree> AstValueImportSpecifier<'tree> {
 }
 
 impl<'tree> TypedAstNode<'tree> for AstValueImportSpecifier<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>> {
+        None
+    }
+    
     fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
         &self.shape
     }
