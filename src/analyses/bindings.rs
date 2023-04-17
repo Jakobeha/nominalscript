@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use derive_more::Display;
@@ -8,14 +9,18 @@ use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, RlT
 use crate::ast::typed_nodes::AstNode;
 
 macro_rules! define_names {
-    ($($(#[$attr:meta])* $Name:ident),+) => { $(
+    ($($(#[$attr:meta])* $Name:ident $NameStr:ident),+) => { $(
 $(#[$attr])*
 #[derive(Debug, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct $Name(SmolStr);
 
+#[doc = concat!("A wrapper around str which can be compared to [", stringify!($Name), "] (str wrapper is for type-safety)")]
+#[derive(Debug, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct $NameStr(str);
+
 impl $Name {
-    //noinspection DuplicatedCode
     pub fn new(name: impl Into<SmolStr>) -> Self {
         let name = name.into();
         assert!(!Self::RESERVED.contains(&name.as_str()));
@@ -27,8 +32,6 @@ impl $Name {
         Self(SmolStr::new_inline(name))
     }
 
-    // This cannot be deduplicated
-    //noinspection DuplicatedCode
     pub fn fresh(base_name: &Self, mut is_valid: impl FnMut(&Self) -> bool) -> Self {
         Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
     }
@@ -42,6 +45,50 @@ impl $Name {
 impl AsRef<str> for $Name {
     fn as_ref(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl Borrow<$Name> for $Name {
+    fn borrow(&self) -> &$Name {
+        self
+    }
+}
+
+impl Borrow<$NameStr> for $Name {
+    fn borrow(&self) -> &$NameStr {
+        $NameStr::from(self.as_ref())
+    }
+}
+
+impl $NameStr {
+    pub fn of(s: impl AsRef<str>) -> &Self {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(s.as_ref() as *const str as *const Self) }
+    }
+}
+
+impl<'a> From<&'a str> for &'a $NameStr {
+    fn from(s: &'a str) -> &'a Self {
+        Self::of(s)
+    }
+}
+
+impl<'a> From<&'a $Name> for &'a $NameStr {
+    fn from(s: &'a $Name) -> &'a Self {
+        Self::from(s.as_ref())
+    }
+}
+
+impl AsRef<str> for $NameStr {
+    fn as_ref(&self) -> &str {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(s as *const str as *const Self) }
+    }
+}
+
+impl Into<SmolStr> for $NameStr {
+    fn into(self) -> SmolStr {
+        self.as_ref().into()
     }
 }
     )+ };
@@ -130,11 +177,11 @@ pub struct GlobalTypeBinding {
 
 define_names!(
 /// The string type used for all value names
-ValueName,
+ValueName ValueNameStr,
 /// The string type used for all type names
-TypeName,
+TypeName TypeNameStr,
 /// The string type used for all field names
-FieldName
+FieldName FieldNameStr
 );
 
 impl GlobalValueBinding {

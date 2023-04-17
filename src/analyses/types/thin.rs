@@ -641,6 +641,16 @@ impl<Type: TypeTrait> FnType<Type> {
             |x| f(&x)
         )
     }
+
+    pub fn with_return_type<NewType: TypeTraitMapsFrom<Type>>(self, return_type: ReturnType<NewType>) -> FnType<NewType> {
+        FnType {
+            type_params: self.type_params,
+            this_type: self.this_type,
+            arg_types: self.arg_types,
+            rest_arg_type: self.rest_arg_type,
+            return_type,
+        }
+    }
 }
 
 impl<Type: TypeTrait + Hash> Hash for FnType<Type> where Type::RestArgType: Hash {

@@ -6,7 +6,7 @@ use self_cell::self_cell;
 
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::{ModuleCtx, ScopeImportAlias};
-use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl};
+use crate::analyses::types::{DynResolvedLazy, DynRlType, DynRlTypeDecl, ResolveCtx};
 use crate::ast::tree_sitter::TSTree;
 use crate::compile::finish_transpile;
 use crate::import_export::ModulePath;
@@ -75,7 +75,7 @@ impl Module {
 
     pub fn finish(mut self, ctx: &ProjectCtx<'_>) -> TranspiledModule {
         let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
-            finish_transpile(ast, module_ctx, ctx, &self.path);
+            finish_transpile(ast, module_ctx, &ResolveCtx::new(ctx, &self.path));
             todo!("ast.print()")
         });
         TranspiledModule {

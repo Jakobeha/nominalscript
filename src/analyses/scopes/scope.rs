@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::marker::PhantomPinned;
+use std::rc::Rc;
 
-use indexmap::IndexMap;
+use indexmap::{Equivalent, IndexMap};
 
 use crate::{error, hint, issue};
 use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
@@ -10,7 +11,7 @@ use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, S
 use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
-use crate::diagnostics::FileLogger;
+use crate::diagnostics::{FileLogger, TypeLogger};
 
 /// A local scope: contains all of the bindings in a scope node
 /// (top level, module, statement block, class declaration, arrow function, etc.).
@@ -33,7 +34,7 @@ pub struct Scope<'tree> {
 /// (top level, module, statement block, class declaration, arrow function, etc.)
 #[derive(Debug)]
 pub struct ValueScope<'tree> {
-    params: IndexMap<ValueName, Box<AstParameter<'tree>>>,
+    params: IndexMap<ValueName, Rc<AstParameter<'tree>>>,
     hoisted: HashMap<ValueName, Box<DynAstValueBinding<'tree>>>,
     sequential: HashMap<ValueName, Vec<Box<AstValueDecl<'tree>>>>,
     exported: HashMap<ValueName, ExportedId<'tree, ValueName>>,
@@ -69,7 +70,7 @@ impl<'tree> Scope<'tree> {
         }
     }
 
-    pub fn set_params(&mut self, params: impl Iterator<Item=AstParameter<'tree>>) {
+    pub fn set_params(&mut self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
         assert!(!self.did_set_params, "set_params() can only be called once per scope");
         self.values.set_params(params)
     }
@@ -140,9 +141,9 @@ impl<'tree> ValueScope<'tree> {
         self.add_hoisted(imported, e);
     }
 
-    pub fn set_params(&mut self, params: impl Iterator<Item=AstParameter<'tree>>) {
+    pub fn set_params(&mut self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
         debug_assert!(self.params.is_empty());
-        self.params.extend(params.map(|param| (param.name().clone(), Box::new(param))));
+        self.params.extend(params.map(|param| (param.name().clone(), param)));
     }
 
     pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree> + 'tree, e: &mut FileLogger<'_>) {
@@ -227,33 +228,33 @@ impl<'tree> ValueScope<'tree> {
         self.params.values().map(|param| param.as_ref())
     }
 
-    pub fn hoisted(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn hoisted(&self, name: &impl Equivalent<ValueName>) -> Option<&DynAstValueBinding<'tree>> {
         self.hoisted.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>)
             .or_else(|| self.params.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>))
     }
 
-    pub fn has_any(&self, name: &ValueName) -> bool {
+    pub fn has_any(&self, name: &impl Equivalent<ValueName>) -> bool {
         self.sequential.contains_key(name) || self.hoisted.contains_key(name) || self.params.contains_key(name)
     }
 
-    pub fn last(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn last(&self, name: &impl Equivalent<ValueName>) -> Option<&DynAstValueBinding<'tree>> {
         self.sequential.get(name).map(|sequential| {
             sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &DynAstValueBinding<'tree>
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
+    pub fn has_at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> bool {
         self.at_pos(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
         return self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &DynAstValueBinding<'tree>)
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
+    pub fn at_exact_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().end_byte() >= pos_node.end_byte() && decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &AstValueDecl<'tree>)
@@ -340,11 +341,11 @@ impl<'tree> TypeScope<'tree> {
         });
     }
 
-    pub fn has_any(&self, name: &TypeName) -> bool {
+    pub fn has_any(&self, name: &impl Equivalent<TypeName>) -> bool {
         self.hoisted.contains_key(name)
     }
 
-    pub fn get(&self, name: &TypeName) -> Option<&DynAstTypeBinding<'tree>> {
+    pub fn get(&self, name: &impl Equivalent<TypeName>) -> Option<&DynAstTypeBinding<'tree>> {
         self.hoisted.get(name).map(|decl| decl.as_ref() as &DynAstTypeBinding<'tree>)
     }
 
@@ -357,11 +358,11 @@ impl<'tree> TypeScope<'tree> {
         debug_assert!(decl.name == id.name);
 
         let mut inherited = decl.inherited.as_ref().clone();
-        inherited.subst_parameters(&decl.type_params, &id.generic_args, &ctx.type_logger());
+        inherited.subst_parameters(&decl.type_params, &id.generic_args, &TypeLogger::ignore());
         Some(inherited)
     }
 
-    pub fn exported(&self, alias: &TypeName) -> Option<&ExportedId<TypeName>> {
+    pub fn exported(&self, alias: &impl Equivalent<TypeName>) -> Option<&ExportedId<TypeName>> {
         self.exported.get(alias)
     }
 }

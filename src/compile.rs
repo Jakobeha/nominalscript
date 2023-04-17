@@ -1,17 +1,20 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::iter::once;
 use std::path::Path;
+use std::rc::Rc;
 
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::ValueBinding;
+use crate::analyses::bindings::{ValueBinding, ValueNameStr};
 use crate::analyses::scopes::{ModuleCtx, ScopeChain};
+use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
-use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
-use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger};
+use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstParameter, AstReturnType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger, TypeLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
 use crate::import_export::ModulePath;
@@ -164,14 +167,13 @@ fn begin_transpile_ast<'tree>(
 pub(crate) fn finish_transpile<'tree>(
     ast: &'tree TSTree,
     m: &mut ModuleCtx<'tree>,
-    ctx: &ProjectCtx<'_>,
-    module_path: &ModulePath
+    ctx: &ResolveCtx<'_>,
 ) {
     // TODO: Add guards (in type analysis, but probably first in function decls we've already scanned. We have to wait until we're in the return block though)
-    let diagnostics = ctx.diagnostics.file(module_path);
-    let mut e = FileLogger::new(diagnostics);
+    let mut e = ctx.logger();
     // Random operation cursor
     let mut c = ast.walk();
+    let mut c2 = ast.walk();
     let mut skip_nodes = HashSet::new();
     // Run type analysis (and scope analysis and other dependent analyses)
     // Instead of querying here we do an inorder traversal because we need to do inorder
@@ -188,157 +190,123 @@ pub(crate) fn finish_transpile<'tree>(
                 scopes.pop();
             }
         }
+        let (_scope_node, scope) = scopes.top().unwrap();
+        let scope = scope.inactive_clone();
 
+        // Nodes are traversed once or twice: once 'start' or 'down' or 'right',
+        // once if they have children 'up'
         let mut skip_children = false;
-    /*
-      // Nodes are traversed once or twice: once 'start' or 'down' or 'right',
-      // once if they have children 'up'
-      let skipChildren = false
-      if (skipNodes.has(node.id)) {
-        skipChildren = true
-        skipNodes.delete(node.id)
-      } else if (node.isDeleted()) {
-        skipChildren = true
-      } else if (node.isNamed) {
-        switch (node.type) {
-          case 'function_declaration':
-          case 'generator_function_declaration':
-          case 'function':
-          case 'generator_function':
-          case 'arrow_function': {
-            const isDecl =
-              node.type === 'function_declaration' ||
-              node.type === 'generator_function_declaration'
-            // We want to reuse params if a function decl because we can infer
-            // param types in future calls. In an expression, we assign the type to the
-            // node to do this
-            const decl = !isDecl
-              ? null
-              : (scopes.getHoistedInTopScope(node.fieldChild('name')!.text) as FunctionDecl)
-            assert(!isDecl || (decl !== null && (decl as any) instanceof FunctionDecl))
-            const body = node.fieldChild('body')!
-            const funScope = ctx.scopes.get(body)
-            if (lastMove !== 'up') {
-              // Declare parameters in function scope and assign explicit types
-              // TODO: Scope nominal type params as well
-              const parameters =
-                // Decl parameters
-                decl !== null
-                  ? decl.formalParams
-                // Expression formal parameters
-                  : node.fieldChild('parameters')?.namedChildren?.map(x => new FormalParam(x)) ??
-                // Arrow parameters
-                [new ArrowParam(node.fieldChild('parameter')!)]
-              funScope.setParams(parameters)
-
-              // Don't traverse binding ids
-              for (const param of parameters) {
-                // Use cursor to traverse children because we need field name and it's
-                // more efficient anyways
-                const cursor = param.node.walk()
-                cursor.gotoFirstChild()
-                while (cursor.gotoNextSibling()) {
-                  if (
-                    // We *do* traverse values
-                    cursor.currentFieldName !== 'value' ||
-                    // We also don't traverse nominal type but it's unnecessary to add
-                    // because that gets skipped anyways (deleted)
-                    cursor.nodeType === 'nominal_type_annotation'
-                  ) {
-                    skipNodes.add(cursor.currentNodeId)
-                  }
-                }
-              }
-            } else {
-              // Infer parameter and return types, and check return type if explicit.
-              // If decl, the parameter types are automatically set after backwards-inference
-              // and if we infer the return type we set it on the decl.
-              // If expression, we assign inferred func type to the node itself
-
-              // Backwards-infer param types
-              const parameters = funScope.params!
-              for (const param of parameters) {
-                if (param.nominalType === null) {
-                  param.setCustomInferredType(new LazyPromise(async () => ctx.typedExprs.backwardsInfer(param)))
-                }
-              }
-
-              const explicitReturnType = mapNullable(
-                node.fieldChild('nominal_return_type'),
-                x => { x.delete(); return new NominalType(x.namedChild(0)!) }
-              )
-
-              // It's easier to just check if there is a type assigned instead of checking
-              // if body itself is an expression, since there are many expression node
-              // types. If it's not than there will never be a type assigned
-              const inferredReturnTypes = mapNullable(
-                ctx.typedExprs.get(body),
-                ret => [{ shape: ret.shape, return: body, typeAst: ret.ast }]
-                // We've seen the return types since lastMove === 'up'
-              ) ?? Array.from(ctx.scopes.seenReturnTypes(funScope, ctx.typedExprs))
-
-              if (explicitReturnType !== null) {
-                // Check that explicit and inferred returned types match,
-                // and print a descriptive error based on return Void etc.
-                const logReturnError = (message: string, inferredReturnType: NominalReturnTypeInferred, ...notes: AdditionalInfoArgs[]): void => {
-                  logError(
-                    message, inferredReturnType.return ?? node,
-                    ...notes,
-                    explicitReturnType === null ? null : ['note: return type', explicitReturnType.node]
-                  )
-                }
-                if (NominalTypeShape.isVoid(explicitReturnType.shape)) {
-                  for (const inferredReturnType of inferredReturnTypes) {
-                    if (inferredReturnType.shape === null) {
-                      logReturnError('function doesn\'t return a value but this might (can\'t infer)', inferredReturnType)
-                    } else if (!NominalTypeShape.isVoid(inferredReturnType.shape) &&
-                               !NominalTypeShape.isNever(inferredReturnType.shape)) {
-                      logReturnError('function doesn\'t return a value but this does', inferredReturnType)
-                    }
-                  }
-                } else {
-                  for (const inferredReturnType of inferredReturnTypes) {
-                    if (inferredReturnType.shape === null) {
-                      logReturnError('incorrect (non-nominal) return type', inferredReturnType)
-                    } else if (NominalTypeShape.isVoid(inferredReturnType.shape)) {
-                      logReturnError('expected a return value', inferredReturnType)
+        if skip_nodes.remove(&node) || node.is_marked() {
+            skip_children = true
+        } else if node.is_named() {
+            match node.kind() {
+                "function_declaration" |
+                "generator_function_declaration" |
+                "function" |
+                "generator_function" |
+                "arrow_function" => {
+                    let is_decl = node.kind() == "function_declaration" ||
+                        node.kind() == "generator_function_declaration";
+                    let is_arrow = node.kind() == "arrow_function";
+                    // We want to reuse params if a function decl because we can infer
+                    // param types in future calls. In an expression, we assign the type to the
+                    // node to do this
+                    let decl = match is_decl {
+                        false => None,
+                        true => {
+                            let name = ValueNameStr::of(node.field_child("name").unwrap().text());
+                            scopes.hoisted_in_top_scope(name).map(|x| x.down_to_fn_decl().expect("hoisted declaration isn't a function (TODO handle, probably just return None here)"))
+                        }
+                    };
+                    let body = node.field_child("body").unwrap();
+                    let fun_scope_inactive = m.scopes.denoted_by(body, &mut c).expect("function body should have a scope");
+                    if !traversal_state.is_up() {
+                        let mut fun_scope = fun_scope_inactive.activate_ref();
+                        // TODO: Scope nominal type params as well
+                        // Declare parameters in function scope and assign explicit types
+                        let set_params = |params: impl IntoIterator<Item=Rc<AstParameter>>| fun_scope.set_params(params.into_iter().map(|param| {
+                            skip_nodes.extend(param.node.named_children(&mut c2)
+                                .filter(|param_child_node| Some(param_child_node) != param.value.as_ref()))
+                        }));
+                        match (decl, node.field_child("parameters")) {
+                            // Decl parameters
+                            (Some(decl), _) => set_params(decl.formal_params.clone()),
+                            // Expression formal parameters
+                            (None, Some(parameters_node)) => {
+                                set_params(parameters_node.named_children(&mut c).map(|x| Rc::new(AstParameter::formal(&scope, x, is_arrow))))
+                            },
+                            // Arrow parameter
+                            (None, None) => {
+                                debug_assert!(is_arrow);
+                                set_params(once(Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))))
+                            }
+                        };
                     } else {
-                      const { isAssignable, errors } = NominalTypeShape.isAssignableTo(inferredReturnType.shape, explicitReturnType.shape)
-                      if (!isAssignable) {
-                        logReturnError(
-                          'incorrect return type', inferredReturnType,
-                          ...errors.map(({ error }) => [`issue: ${error}`] as AdditionalInfoArgs)
-                        )
-                      }
+                        // Infer return type, and check with the explicit return type if provided.
+                        // If expression, also assign inferred func type to the node itself
+                        let explicit_return_type_ast = node.field_child("nominal_return_type").map(|x| {
+                            x.mark();
+                            AstReturnType::new(fun_scope_inactive, x.named_child(0).unwrap())
+                        });
+                        let process_inferred_return_types = |inferred_return_types: impl IntoIterator<Item = DeterminedReturnType<'tree>>| -> Option<RlReturnType> {
+                            let mut inferred_return_types = inferred_return_types.into_iter();
+                            match explicit_return_type_ast {
+                                None => {
+                                    // Assign inferred return type
+                                    let inferred_return_type = FatType::unify_all(
+                                        inferred_return_types.map(|inferred_return_type| inferred_return_type.type_.into_resolve(ctx).1),
+                                        Variance::Bivariant,
+                                        TypeLogger::ignore()
+                                    );
+                                    Some(RlReturnType::resolved(ReturnType::Type(inferred_return_type)))
+                                }
+                                Some(explicit_return_type_ast) => {
+                                    // Check explicit return type
+                                    let mut last_inferred_return_type_det = inferred_return_types.next();
+                                    while let Some(next_inferred_return_type_det) = inferred_return_types.next() {
+                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &mut e, ctx);
+                                        last_inferred_return_type_det = next_inferred_return_type_det;
+                                    };
+                                    // We can consume the last one
+                                    last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &mut e, ctx);
+                                    None
+                                }
+                            }
+                        };
+                        // It's easier to just check if there is a type assigned instead of checking
+                        // if body itself is an expression, since there are many expression node
+                        // types. If it's not than there will never be a type assigned
+                        let custom_inferred_return_type = match m.typed_exprs.get(body) {
+                            None => process_inferred_return_types(m.scopes.seen_return_types_of(fun_scope_inactive, &m.typed_exprs)),
+                            Some(inferred_return_type) => process_inferred_return_types(once(DeterminedReturnType::from(inferred_return_type.clone())))
+                        };
+                        match decl {
+                            None => {
+                                // We need to set the expression's type
+                                let mut func_type = AstFunctionDecl::parse_common(&scope, node).3;
+                                if let Some(custom_inferred_return_type) = custom_inferred_return_type {
+                                    func_type = func_type.with_return_type(custom_inferred_return_type, ctx)
+                                };
+                                m.typed_exprs.assign(node, DeterminedType {
+                                    type_: func_type,
+                                    defined_value: Some(node),
+                                    explicit_type: None,
+                                });
+                            }
+                            Some(decl) => {
+                                if let Some(custom_inferred_return_type) = custom_inferred_return_type {
+                                    // We need to set the decl's inferred return type
+                                    decl.set_custom_inferred_return_type(custom_inferred_return_type, ctx);
+                                }
+                            }
+                        }
                     }
-                  }
                 }
-              }
-              const returnType = explicitReturnType?.asInferred?.shape ??
-                NominalReturnTypeInferred.tryUnifyAll('Return', inferredReturnTypes, { node })
-              if (decl !== null && explicitReturnType === null && returnType !== null) {
-                // We need to set the inferred return type on the decl
-                // (if explicit it's already set)
-                decl.setCustomInferredReturnType(returnType)
-              }
-
-              if (decl === null) {
-                const funcType = FunctionDecl.funcType(
-                  null,
-                  FunctionDecl.nominalParams(node),
-                  parameters,
-                  returnType
-                )
-                // Assign the node a function type
-                ctx.typedExprs.assign(node, {
-                  shape: funcType,
-                  // (function expression is its own type signature node)
-                  ast: { node }
-                })
-              }
+                // TODO: Remaining cases
+                _ => {}
             }
-            break
-          }
+        }
+    /*
           case 'variable_declarator': {
             const name = node.namedChild(0)!
             const nominalType = mapNullable(
@@ -853,9 +821,8 @@ pub(crate) fn finish_transpile<'tree>(
     // (we wait until analysis is done because some of these errors are due to uninferred types,
     // and we may infer types at weird future times which make them disappear.
     // So it's easier to just wait until ALL analysis is done to raise these uninferred-errors and the general category)
-    m.typed_exprs.check_all(&mut e);
+    m.typed_exprs.check_all(&mut e, ctx);
 
-    ctx; skip_nodes.insert(ast.root_node()); todo!()
     // Roadmap (partially outdated)
     // - Query all `function_declaration`s, `method_declaration`s, `function_signature`s, etc., in every scope build a map of the static functions' types. Remove their nominal type annotations, replace them with guarded versions and which call a generated unguarded version. Also build a map of them as ordinary global (lambda) constants to their nominal function types (already somewhat done, some of the others are somewhat done as well)
     // - Run type checking: remove and check every type annotation we can. Similar to the last step, we build a map of dynamic functions' (lambdas) types and generate guarded/unguarded versions (the difference is that we're also doing inference, so previous statements don't get the inferred types), and we map ordinary values to their types. All calls go to guarded functions by default since they have the original name; we replace checked calls with their unguarded versions if we're absolutely sure the types are ok. We also add inline guards to nominal type annotated expressions and initializers/assignments of nominal type annotated values when we can't infer their type, including annotated exceptions in `catch` clauses. Whenever we infer a type but it is wrong, we generate a type error but continue to generate with guards (which, unless we messed up somewhere, will always throw a runtime error). We remove all nominal type annotations from the analyzed declarations and checked identifiers/expressions, to mark they've been analyzed and because we need to strip them anyways. To summarize:

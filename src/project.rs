@@ -1,9 +1,8 @@
 use std::path::PathBuf;
-use crate::diagnostics::{FileDiagnostics, ProjectDiagnostics};
+use crate::diagnostics::ProjectDiagnostics;
 use crate::import_export::import_cache::ImportCache;
-use crate::import_export::import_ctx::{FileImportCtx, ProjectImportCtx};
+use crate::import_export::import_ctx::ProjectImportCtx;
 use crate::import_export::import_resolver::{ImportResolver, ImportResolverCreateError};
-use crate::import_export::ModulePath;
 
 /// Project datastructure which contains everything.
 ///
@@ -25,14 +24,6 @@ pub struct ProjectCtx<'a> {
     pub diagnostics: &'a ProjectDiagnostics,
 }
 
-/// File environment = reference to file data
-#[derive(Debug)]
-pub struct FileCtx<'a> {
-    pub import_ctx: FileImportCtx<'a>,
-    pub diagnostics: &'a FileDiagnostics,
-    pub project_diagnostics: &'a ProjectDiagnostics,
-}
-
 impl Project {
     pub fn regular(package_path: PathBuf) -> Result<Self, ImportResolverCreateError> {
         Ok(Self::new(ImportResolver::regular(package_path)?))
@@ -50,16 +41,6 @@ impl Project {
         ProjectCtx {
             import_ctx: ProjectImportCtx::new(&self.import_cache, &self.import_resolver),
             diagnostics: &self.diagnostics,
-        }
-    }
-}
-
-impl<'a> ProjectCtx<'a> {
-    pub fn file<'b>(&'b self, importer_path: &'b ModulePath) -> FileCtx<'b> {
-        FileCtx {
-            import_ctx: self.import_ctx.file(importer_path),
-            diagnostics: self.diagnostics.file(importer_path),
-            project_diagnostics: self.diagnostics,
         }
     }
 }

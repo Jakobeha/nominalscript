@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use smallvec::SmallVec;
 
-use crate::analyses::types::TypeLoc;
+use crate::analyses::types::{ThinType, TypeLoc};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
 use crate::import_export::ModulePath;
@@ -41,13 +41,30 @@ enum _TypeLogger<'a, 'b, 'tree> {
 #[derive(Debug)]
 struct TypeLoggerBase<'b, 'tree> {
     diagnostics: &'b FileDiagnostics,
-    inferred_loc: TSNode<'tree>,
+    info: TypeCheckInfo<'tree>,
     // RULE A: This contains the context of the current TypeLogger:
     // - pushes when a new TypeLogger is created via with_context
     // - pops when that TypeLogger is destroyed.
     // If these are pointers, they are always active references though may have different lifetimes
     // (but they're not so currently we don't have to do anything unsafe)
     context: RefCell<SmallVec<[TypeLoc; 2]>>
+}
+
+/// The additional info displayed to the user in type-check errors
+#[derive(Debug)]
+pub struct TypeCheckInfo<'tree> {
+    pub loc_node: TSNode<'tree>,
+    pub assigned_info: TypeInfo<'tree>,
+    pub required_info: TypeInfo<'tree>,
+}
+
+/// Part of the additional info displayed to the user in type-check errors;
+/// the part for the assigned or required type
+#[derive(Debug)]
+pub struct TypeInfo<'tree> {
+    pub thin_type: ThinType,
+    pub defined_value: Option<TSNode<'tree>>,
+    pub explicit_type: Option<TSNode<'tree>>,
 }
 
 impl<'a> ProjectLogger<'a> {
@@ -73,10 +90,10 @@ impl<'a> FileLogger<'a> {
         self.0.insert(diagnostic)
     }
 
-    pub fn type_<'b, 'tree>(&'b self, inferred_loc: TSNode<'tree>) -> TypeLogger<'static, 'b, 'tree> {
+    pub fn type_<'b, 'tree>(&'b self, info: TypeCheckInfo<'tree>) -> TypeLogger<'static, 'b, 'tree> {
         TypeLogger(_TypeLogger::Base { base: TypeLoggerBase {
             diagnostics: self.0,
-            inferred_loc,
+            info,
             context: RefCell::new(SmallVec::new())
         } })
     }
@@ -113,13 +130,37 @@ impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
         let Some(base) = self.base() else {
             return
         };
-        let mut diagnostic = FileDiagnostic::from_global(
-            diagnostic,
-            base.inferred_loc.range()
-        );
+        let TypeCheckInfo {
+            loc_node,
+            assigned_info: TypeInfo {
+                thin_type: assigned_type,
+                defined_value: assigned_value,
+                explicit_type: assigned_explicit_type
+            },
+            required_info: TypeInfo {
+                thin_type: required_type,
+                defined_value: required_value,
+                explicit_type: required_explicit_type
+            }
+        } = &base.info;
+        let mut diagnostic = FileDiagnostic::from_global(diagnostic, loc_node.range());
         let context_borrow = base.context.borrow();
         for context in &*context_borrow {
             diagnostic.add_info(note!("in {}", context));
+        }
+        diagnostic.add_info(issue!("assigned type: `{}`", assigned_type));
+        diagnostic.add_info(issue!("required type: `{}`", required_type));
+        if let Some(assigned_value) = assigned_value {
+            diagnostic.add_info(hint!("assigned type inferred here" => assigned_value));
+        }
+        if let Some(required_value) = required_value {
+            diagnostic.add_info(hint!("required type inferred here" => required_value));
+        }
+        if let Some(assigned_explicit_type) = assigned_explicit_type {
+            diagnostic.add_info(hint!("assigned type defined here" => assigned_explicit_type));
+        }
+        if let Some(required_explicit_type) = required_explicit_type {
+            diagnostic.add_info(hint!("required type defined here" => required_explicit_type));
         }
         base.diagnostics.insert(diagnostic)
     }
@@ -235,21 +276,30 @@ macro_rules! note {
 
 #[macro_export]
 macro_rules! issue_if {
-    ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
+    ($optional_id:ident => $($arg:tt)*) => {
+        issue_if!($optional_id, $optional_id => $($arg)*)
+    };
+    ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| issue!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! hint_if {
-    ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
+    ($optional_id:ident => $($arg:tt)*) => {
+        hint_if!($optional_id, $optional_id => $($arg)*)
+    };
+    ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| hint!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! note_if {
-    ($optional_expr:expr => $optional_id:ident, $($arg:tt)*) => {
+    ($optional_id:ident => $($arg:tt)*) => {
+        note_if!($optional_id, $optional_id => $($arg)*)
+    };
+    ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
         $optional_expr.into_iter().flat_map(|$optional_id| note!($($arg)*))
     };
 }
@@ -316,13 +366,18 @@ mod tests {
         debug!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
             hint!("hello" => b_node);
-            note_if!(Some(5) => n, "hello {}", n));
+            note_if!(Some(5), n => "hello {}", n));
         error!(e.file(&p), "hello" => a_node;
             issue!("hello {:?}", "hello");
-            hint_if!(None::<String> => n, "hello {}", n);
+            hint_if!(None::<String>, n => "hello {}", n);
             hint!("hello" => b_node));
         warning!(e.file(&p), "hello" => a_node;
-            issue_if!(Some(5) => n, "hello {}", n);
+            issue_if!(Some(5), n => "hello {}", n);
+            hint!("hello {:?}", "hello");
+            hint!("hello" => b_node));
+        let n = Some(n);
+        warning!(e.file(&p), "hello" => a_node;
+            issue_if!(n => "hello {}", n);
             hint!("hello {:?}", "hello");
             hint!("hello" => b_node));
     }

@@ -65,6 +65,20 @@ impl<'tree> ActiveScopePtr<'tree> {
         InactiveScopePtr(this_0)
     }
 
+    /// Clone this as an inactive scope pointer.
+    /// You cannot clone an active pointer because two active pointers can't exist at the same time.
+    pub fn inactive_clone(&self) -> InactiveScopePtr<'tree> {
+        InactiveScopePtr(self.0.clone())
+    }
+
+    /// Temporarily pretend this is an inactive pointer.
+    /// This is safe, because they both have the same repr, and active pointers only have more
+    /// capabilities. However, trying to activate this as an inactive pointer will **panic**.
+    pub fn inactive_ref(&self) -> &InactiveScopePtr<'tree> {
+        // SAFETY: Same repr and the active flag is still set
+        unsafe { &*(self as *const ActiveScopePtr<'tree> as *const InactiveScopePtr<'tree>) }
+    }
+
     /// Downgrade to a weak scope pointer
     pub fn downgrade(&self) -> WeakScopePtr<'tree> {
         WeakScopePtr(Rc::downgrade(&self.0))

@@ -1,3 +1,4 @@
+use indexmap::Equivalent;
 use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ActiveScopePtr};
 use crate::analyses::types::{DynRlType, RlType};
@@ -25,7 +26,7 @@ impl<'tree> ScopeChain<'tree> {
         self.scopes.pop()
     }
 
-    fn top(&self) -> Option<(TSNode<'tree>, &ActiveScopePtr<'tree>)> {
+    pub fn top(&self) -> Option<(TSNode<'tree>, &ActiveScopePtr<'tree>)> {
         self.scopes.last().map(|(node, scope)| (*node, scope))
     }
 
@@ -45,11 +46,11 @@ impl<'tree> ScopeChain<'tree> {
         self.top_mut().expect("ScopeChain is empty").1.values.add_throw(throw, e);
     }
 
-    pub fn hoisted_in_top_scope(&self, name: &ValueName) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn hoisted_in_top_scope(&self, name: &impl Equivalent<ValueName>) -> Option<&DynAstValueBinding<'tree>> {
         self.top().expect("ScopeChain is empty").1.values.hoisted(name)
     }
 
-    pub fn has_at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> bool {
+    pub fn has_at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> bool {
         let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
             if top.values.has_at_pos(name, pos_node) {
@@ -60,7 +61,7 @@ impl<'tree> ScopeChain<'tree> {
             GlobalValueBinding::has(name)
     }
 
-    pub fn at_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&DynValueBinding<'tree>> {
+    pub fn at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&DynValueBinding<'tree>> {
         let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
             if let Some(decl) = top.values.at_pos(name, pos_node) {
@@ -71,7 +72,7 @@ impl<'tree> ScopeChain<'tree> {
             .or_else(|| GlobalValueBinding::get(name).map(|decl| decl as &DynValueBinding<'tree>))
     }
 
-    pub fn at_exact_pos(&self, name: &ValueName, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
+    pub fn at_exact_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.top().expect("ScopeChain is empty").1.values.at_exact_pos(name, pos_node)
     }
 

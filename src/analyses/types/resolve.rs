@@ -1,14 +1,14 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
 use elsa::FrozenMap;
 use once_cell::unsync::OnceCell;
 
-use crate::{error, issue};
+use crate::{error, issue, ProjectCtx};
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{FatType, FatTypeDecl, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
+use crate::analyses::types::{FatType, FatTypeDecl, FatTypeInherited, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};
@@ -148,6 +148,14 @@ pub trait ResolveInto<Fat> {
 }
 
 impl<'a> ResolveCtx<'a> {
+    pub fn new<'b>(project_ctx: &'b ProjectCtx<'a>, importer_path: &'b ModulePath) -> ResolveCtx<'b> {
+        ResolveCtx {
+            imports: project_ctx.import_ctx.file(importer_path),
+            diagnostics: project_ctx.diagnostics.file(importer_path),
+            project_diagnostics: project_ctx.diagnostics,
+        }
+    }
+
     fn other_file<'b>(&'b self, path: &'b ModulePath) -> ResolveCtx<'b> {
         ResolveCtx {
             imports: self.imports.other_file(path),
@@ -156,8 +164,8 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    pub(crate) fn type_logger(&self) -> TypeLogger<'_, '_, '_> {
-        todo!()
+    pub(crate) fn logger(&self) -> FileLogger<'a> {
+        FileLogger::new(self.diagnostics)
     }
 }
 
@@ -198,15 +206,26 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
             fat: OnceCell::new()
         }
     }
-}
 
-impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
-    fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
+    //noinspection DuplicatedCode
+    /// Return the cached fat type or resolve if not cached
+    pub fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
         self.fat.get_or_init(|| {
             // SAFETY: ctx is alive so the scope pointer must also be
             let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade().activate() } );
             self.thin.resolve(scope.as_ref(), ctx)
         })
+    }
+
+    //noinspection DuplicatedCode (can't just abstract the lines in get_or_init because self is consumed here)
+    /// Resolve if not cached, then return the thin and fat types
+    pub fn into_resolve(self, ctx: &ResolveCtx<'_>) -> (Thin, Fat) {
+        let fat = self.fat.into_inner().unwrap_or_else(|| {
+            // SAFETY: ctx is alive so the scope pointer must also be
+            let scope = self.scope_origin.map(|scope_origin| unsafe { scope_origin.upgrade().activate() } );
+            self.thin.resolve(scope.as_ref(), ctx)
+        });
+        (self.thin, fat)
     }
 }
 
@@ -306,7 +325,22 @@ impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
-        ctx; scope; todo!()
+        let supers = self.supertypes.iter().map(|t| t.resolve(scope, ctx)).collect();
+        let mut inherited = FatTypeInherited {
+            super_ids: VecDeque::new(),
+            structure: None,
+            typescript_types: self.typescript_supertype.iter().cloned().collect(),
+            guards: self.guard.iter().cloned().collect(),
+            is_never: false,
+        };
+        for super_ in supers {
+            inherited.unify_with_super(super_, TypeLogger::ignore());
+        }
+        FatTypeDecl {
+            name: self.name.clone(),
+            type_params: self.type_params.iter().map(|p| p.resolve(scope, ctx)).collect(),
+            inherited: Box::new(inherited),
+        }
     }
 }
 
@@ -417,6 +451,43 @@ impl RlTypeDecl {
     };
 }
 
+impl RlType {
+    /// **Panics** if this is not a structural function type.
+    /// Replaces the return type.
+    pub fn with_return_type(self, return_type: RlReturnType, ctx: &ResolveCtx<'_>) -> RlType {
+        let (thin_return_type, fat_return_type) = return_type.into_thin_fat(ctx);
+        // SAFETY: bimap preserves thin/fat relation
+        unsafe {
+            self.bimap(
+                |f_thin| {
+                    let ThinType::Structural {
+                        nullability: Nullability::NonNullable,
+                        structure: TypeStructure::Fn { fn_type }
+                    } = f_thin else {
+                        panic!("ast function's (thin) type is not a structural function type");
+                    };
+                    ThinType::Structural {
+                        nullability: Nullability::NonNullable,
+                        structure: TypeStructure::Fn { fn_type: Box::new(fn_type.with_return_type(thin_return_type)) }
+                    }
+                },
+                |f_fat| {
+                    let FatType::Structural {
+                        nullability: Nullability::NonNullable,
+                        structure: TypeStructure::Fn { fn_type }
+                    } = f_fat else {
+                        panic!("ast function's (fat) type is not a structural function type");
+                    };
+                    FatType::Structural {
+                        nullability: Nullability::NonNullable,
+                        structure: TypeStructure::Fn { fn_type: Box::new(fn_type.with_return_type(fat_return_type)) }
+                    }
+                }
+            )
+        }
+    }
+}
+
 impl RlReturnType {
     pub fn resolved_void() -> Self {
         Self::resolved(ReturnType::Void)
@@ -433,5 +504,13 @@ impl Debug for ResolveCache {
             .field("types_in_progress", &self.types_in_progress.borrow())
             .field("types", &"...")
             .finish()
+    }
+}
+
+impl<Thin: From<Thin2>, Fat: From<Fat2>, Thin2, Fat2> From<ResolvedLazy<Thin2, Fat2>> for ResolvedLazy<Thin, Fat> {
+    fn from(other: ResolvedLazy<Thin2, Fat2>) -> Self {
+        // SAFETY: `From` conversion is assumed to be injective.
+        //     And even if not, this is not `unsafe` to avoid UB, only for extra scrutiny
+        unsafe { other.bimap(Thin::from, Fat::from) }
     }
 }

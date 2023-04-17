@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::analyses::types::DeterminedType;
+use crate::analyses::types::{DeterminedType, ResolveCtx};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
 
@@ -43,14 +43,16 @@ impl<'tree> ExprTypeMap<'tree> {
         self.assigned_types.get(&node)
     }
 
-    pub fn check_all(&self, e: &mut FileLogger<'_>) {
-        for (node, required_type) in &self.required_types {
-            let assigned_type = self.assigned_types.get(node);
-            DeterminedType::check_subtype(assigned_type, Some(required_type), node, e);
+    pub fn check_all(mut self, e: &mut FileLogger<'_>, ctx: &ResolveCtx<'_>) {
+        for (node, required_type) in self.required_types {
+            // Already checking disjoint so no need to check subtype
+            let _runtime_required_type = self.runtime_required_types.remove(&node);
+            let assigned_type = self.assigned_types.remove(&node);
+            DeterminedType::check_subtype(assigned_type, Some(required_type), node, e, ctx);
         }
-        for (node, required_type) in &self.runtime_required_types {
-            let assigned_type = self.assigned_types.get(node);
-            DeterminedType::check_not_disjoint(assigned_type, Some(required_type), node, e);
+        for (node, required_type) in self.runtime_required_types {
+            let assigned_type = self.assigned_types.remove(&node);
+            DeterminedType::check_not_disjoint(assigned_type, Some(required_type), node, e, ctx);
             // TODO insert guard if assigned_type is not a subtype of required_type
         }
     }

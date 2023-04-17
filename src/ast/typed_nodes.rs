@@ -1,9 +1,10 @@
+use std::rc::Rc;
 use enquote::unquote;
-use once_cell::unsync::Lazy;
+use once_cell::unsync::{Lazy, OnceCell};
 
 use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::import_export::export::ImportPath;
 
@@ -18,6 +19,8 @@ pub trait TypedAstNode<'tree>: AstNode<'tree> {
 pub trait AstValueBinding<'tree>: TypedAstNode<'tree> + ValueBinding<'tree> {
     /// Upcast on stable Rust
     fn up(&self) -> &DynValueBinding<'tree>;
+    /// Downcast on stable Rust
+    fn down_to_fn_decl(&self) -> Option<&AstFunctionDecl<'tree>>;
 }
 pub type DynAstValueBinding<'tree> = dyn AstValueBinding<'tree> + 'tree;
 
@@ -50,7 +53,7 @@ pub struct AstType<'tree> {
     pub shape: RlType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AstReturnType<'tree> {
     pub node: TSNode<'tree>,
     pub shape: RlReturnType,
@@ -95,9 +98,10 @@ pub struct AstFunctionDecl<'tree> {
     pub node: TSNode<'tree>,
     pub name: AstValueIdent<'tree>,
     pub nominal_params: Vec<AstTypeParameter<'tree>>,
-    pub formal_params: Vec<AstParameter<'tree>>,
+    pub formal_params: Vec<Rc<AstParameter<'tree>>>,
     pub return_type: Option<AstReturnType<'tree>>,
     fn_type: RlType,
+    custom_inferred_fn_type: OnceCell<RlType>,
     // pub local_uses: LocalUses<'tree>,
 }
 
@@ -171,6 +175,23 @@ macro_rules! assert_kind {
     }
 }
 
+macro_rules! impl_down_to_fn_decl {
+    (AstFunctionDecl) => {
+        impl<'tree> AstFunctionDecl<'tree> {
+            fn _down_to_fn_decl(&self) -> Option<&AstFunctionDecl<'tree>> {
+                Some(self)
+            }
+        }
+    }
+    ($Type:ident) => {
+        impl<'tree> $Type<'tree> {
+            fn _down_to_fn_decl(&self) -> Option<&AstFunctionDecl<'tree>> {
+                None
+            }
+        }
+    }
+}
+
 macro_rules! impl_ast_value_binding {
     ($($Type:ident $name:ident $locality:ident),+) => {
         $(
@@ -194,7 +215,13 @@ macro_rules! impl_ast_value_binding {
                 fn up(&self) -> &DynValueBinding<'tree> {
                     self
                 }
+
+                fn down_to_fn_decl(&self) -> Option<&AstFunctionDecl<'tree>> {
+                    self._down_to_fn_decl()
+                }
             }
+
+            impl_down_to_fn_decl!($Type)
         )+
     }
 }
@@ -600,10 +627,32 @@ impl<'tree> AstFunctionDecl<'tree> {
             "generator_function_declaration",
             "function_signature"
         ]);
-        let nominal_params = Self::nominal_params(scope, node);
+        let (
+            nominal_params,
+            formal_params,
+            return_type,
+            fn_type
+        ) = Self::parse_common(scope, node);
+        Self {
+            node,
+            name: AstValueIdent::new(node.named_child(0).unwrap()),
+            nominal_params,
+            formal_params,
+            return_type,
+            fn_type,
+            custom_inferred_fn_type: OnceCell::new()
+        }
+    }
+
+    /// Extract common information within both function declarations *and* function expressions
+    pub fn parse_common(
+        scope: &InactiveScopePtr<'tree>,
+        node: TSNode<'tree>
+    ) -> (Vec<AstTypeParameter<'tree>>, Vec<Rc<AstParameter<'tree>>>, Option<AstReturnType<'tree>>, RlType) {
+        let nominal_params = Self::nominal_params_of(scope, node);
         let formal_params = node.field_child("parameters").unwrap()
             .named_children(&mut node.walk())
-            .map(|node| AstParameter::formal(scope, node, false))
+            .map(|node| Rc::new(AstParameter::formal(scope, node, false)))
             .collect::<Vec<_>>();
         let return_type = node.field_child("nominal_return_type")
             .map(|node| AstReturnType::of_annotation(scope, node));
@@ -620,17 +669,10 @@ impl<'tree> AstFunctionDecl<'tree> {
             return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
                 .unwrap_or_default()
         ));
-        Self {
-            node,
-            name: AstValueIdent::new(node.named_child(0).unwrap()),
-            nominal_params,
-            formal_params,
-            return_type,
-            fn_type,
-        }
+        (nominal_params, formal_params, return_type, fn_type)
     }
 
-    pub fn nominal_params(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
+    fn nominal_params_of(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
         node.field_child("type_parameters").map(|node| {
             node.named_children(&mut node.walk())
                 .filter(|node| node.kind() == "nominal_type_parameter")
@@ -638,11 +680,15 @@ impl<'tree> AstFunctionDecl<'tree> {
                 .collect()
         }).unwrap_or_default()
     }
+
+    pub fn set_custom_inferred_return_type(&self, return_type: RlReturnType, ctx: &ResolveCtx<'_>) {
+        self.custom_inferred_fn_type.set(self.fn_type.clone().with_return_type(return_type, ctx)).expect("custom_infer_return_type called twice");
+    }
 }
 
 impl<'tree> TypedAstNode<'tree> for AstFunctionDecl<'tree> {
     fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        &self.fn_type
+        self.custom_inferred_fn_type.get().unwrap_or(&self.fn_type)
     }
 }
 

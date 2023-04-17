@@ -631,7 +631,7 @@ impl FatType {
     ///
     /// If you are only creating a union and don't care about type mismatches, even if `self` and
     /// `other` are disjoint, you can provide `TypeLogger::ignore` for `e`, which skips logging.
-    fn unify(
+    pub fn unify(
         &mut self,
         other: Self,
         bias: Variance,
