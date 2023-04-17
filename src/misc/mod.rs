@@ -1,5 +1,7 @@
 /// Iterator chain macro
 mod chain;
+/// Display with context like indentation
+mod fmt_with_ctx;
 /// Iterator for [elsa::FrozenMap], since it has no builtin iteration for some reason
 mod frozen_map_iter;
 /// Generate impl which just calls `map` on the inner value
@@ -26,6 +28,7 @@ mod vec_find_remove;
 
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use chain::chain;
+pub use fmt_with_ctx::*;
 pub(crate) use frozen_map_iter::FrozenMapIter;
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use impl_by_map::impl_by_map;

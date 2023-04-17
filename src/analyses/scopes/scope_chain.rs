@@ -34,15 +34,15 @@ impl<'tree> ScopeChain<'tree> {
         self.scopes.last_mut().map(|(node, scope)| (*node, scope))
     }
 
-    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &FileLogger<'_>) {
         self.top_mut().expect("ScopeChain is empty").1.values.add_sequential(decl, e);
     }
 
-    pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &FileLogger<'_>) {
         self.top_mut().expect("ScopeChain is empty").1.values.add_return(return_, e);
     }
 
-    pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &FileLogger<'_>) {
         self.top_mut().expect("ScopeChain is empty").1.values.add_throw(throw, e);
     }
 
@@ -91,7 +91,7 @@ impl<'tree> ScopeChain<'tree> {
         use_node: TSNode<'tree>,
         scope: &'a ScopeChain<'tree>,
         typed_exprs: &'a ExprTypeMap<'tree>,
-        e: &mut FileLogger<'_>,
+        e: &FileLogger<'_>,
     ) -> &'a DynRlType {
         scope
             .at_pos(use_id, use_node)

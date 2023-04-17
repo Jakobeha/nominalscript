@@ -21,19 +21,22 @@ impl<'tree> ExprTypeMap<'tree> {
         }
     }
 
-    pub fn require(&mut self, node: TSNode<'tree>, type_: DeterminedType<'tree>) {
+    pub fn require(&mut self, node: TSNode<'tree>, type_: impl Into<DeterminedType<'tree>>) {
+        let type_ = type_.into();
         assert!(!self.required_types.contains_key(&node), "node already assigned a required type");
         assert!(!self.runtime_required_types.contains_key(&node), "node already assigned a runtime-required type, can't also be assigned a required type");
         self.required_types.insert(node, type_);
     }
 
-    pub fn runtime_require(&mut self, node: TSNode<'tree>, type_: DeterminedType<'tree>) {
+    pub fn runtime_require(&mut self, node: TSNode<'tree>, type_: impl Into<DeterminedType<'tree>>) {
+        let type_ = type_.into();
         assert!(!self.runtime_required_types.contains_key(&node), "node already assigned a runtime-required type");
         assert!(!self.required_types.contains_key(&node), "node already assigned a required type, can't also be assigned a runtime-required type");
         self.runtime_required_types.insert(node, type_);
     }
 
-    pub fn assign(&mut self, node: TSNode<'tree>, type_: DeterminedType<'tree>) {
+    pub fn assign(&mut self, node: TSNode<'tree>, type_: impl Into<DeterminedType<'tree>>) {
+        let type_ = type_.into();
         assert!(!self.assigned_types.contains_key(&node), "node already assigned a type");
         self.assigned_types.insert(node, type_);
     }
@@ -43,7 +46,7 @@ impl<'tree> ExprTypeMap<'tree> {
         self.assigned_types.get(&node)
     }
 
-    pub fn check_all(mut self, e: &mut FileLogger<'_>, ctx: &ResolveCtx<'_>) {
+    pub fn check_all(mut self, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
         for (node, required_type) in self.required_types {
             // Already checking disjoint so no need to check subtype
             let _runtime_required_type = self.runtime_required_types.remove(&node);

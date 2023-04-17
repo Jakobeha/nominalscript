@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::path::Path;
 use std::fs;
 use std::iter::{once, Once};
@@ -724,6 +725,12 @@ impl PartialEq<SubTree> for SubTree {
 }
 
 impl Eq for SubTree {}
+
+impl Display for SubTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.text)
+    }
+}
 
 impl TraversalState {
     #[inline]

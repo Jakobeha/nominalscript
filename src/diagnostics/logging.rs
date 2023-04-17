@@ -18,7 +18,7 @@ pub struct ProjectLogger<'a>(&'a ProjectDiagnostics);
 
 /// Allows you to log file diagnostics.
 ///
-/// Methods which can log file diagnostics take this as a parameter `e: &mut FileLogger<'_>`.
+/// Methods which can log file diagnostics take this as a parameter `e: &FileLogger<'_>`.
 /// They should not take [FileDiagnostics] in order to separate logging from printing,
 /// though the separation isn't actually necessary or used for anything.
 #[derive(Debug)]
@@ -280,7 +280,7 @@ macro_rules! issue_if {
         issue_if!($optional_id, $optional_id => $($arg)*)
     };
     ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
-        $optional_expr.into_iter().flat_map(|$optional_id| issue!($($arg)*))
+        $optional_expr.into_iter().flat_map(|$optional_id| $crate::issue!($($arg)*))
     };
 }
 
@@ -290,7 +290,7 @@ macro_rules! hint_if {
         hint_if!($optional_id, $optional_id => $($arg)*)
     };
     ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
-        $optional_expr.into_iter().flat_map(|$optional_id| hint!($($arg)*))
+        $optional_expr.into_iter().flat_map(|$optional_id| $crate::hint!($($arg)*))
     };
 }
 
@@ -300,7 +300,7 @@ macro_rules! note_if {
         note_if!($optional_id, $optional_id => $($arg)*)
     };
     ($optional_expr:expr, $optional_id:ident => $($arg:tt)*) => {
-        $optional_expr.into_iter().flat_map(|$optional_id| note!($($arg)*))
+        $optional_expr.into_iter().flat_map(|$optional_id| $crate::note!($($arg)*))
     };
 }
 

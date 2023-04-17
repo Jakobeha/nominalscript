@@ -1,8 +1,11 @@
-use crate::analyses::types::{ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
+use std::fmt::Display;
+use indexmap::Equivalent;
+use crate::analyses::types::{FatType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturnType, AstType};
 use crate::diagnostics::{FileLogger, TypeCheckInfo, TypeInfo};
 use crate::{error, hint, hint_if};
+use crate::analyses::bindings::FieldName;
 
 /// Required or assigned type with information on what node it was determined from,
 /// and whether it was explicitly provided and/or inferred. For diagnostics.
@@ -42,7 +45,7 @@ impl<'tree> DeterminedType<'tree> {
 
     /// Checks that `assigned` is a subtype of `required`. If not, emits an error at `loc_node`
     /// (the location where we want a type of `required` e.g. function argument)
-    pub(crate) fn check_subtype2(self, required: Option<Self>, loc_node: TSNode<'tree>, e: &mut FileLogger<'_>, ctx: &ResolveCtx<'_>) {
+    pub(crate) fn check_subtype2(self, required: Option<Self>, loc_node: TSNode<'tree>, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
         Self::check_subtype(Some(self), required, loc_node, e, ctx)
     }
 
@@ -52,7 +55,7 @@ impl<'tree> DeterminedType<'tree> {
         assigned: Option<Self>,
         required: Option<Self>,
         loc_node: TSNode<'tree>,
-        e: &mut FileLogger<'_>,
+        e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) {
         let Some(
@@ -111,27 +114,60 @@ impl<'tree> DeterminedType<'tree> {
         assigned: Option<Self>,
         required: Option<Self>,
         loc_node: TSNode<'tree>,
-        e: &mut FileLogger<'_>,
+        e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) {
-        let Some(
+      Self::_check_not_disjoint(assigned, required, loc_node, e, ctx);
+    }
+
+    /// [check_not_disjoint] and then returns the unified type
+    pub(crate) fn check_not_disjoint_then_unify(
+        left: Option<Self>,
+        right: Option<Self>,
+        loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> Option<Self> {
+        Self::_check_not_disjoint(left, right, loc_node, e, ctx).map(|fat_type| {
+            let explicit_type = {
+                // Already unwrapped and resolved
+                let left = left.unwrap();
+                let right = right.unwrap();
+                let left_fat_type = left.type_.resolve(ctx);
+                let right_fat_type = right.type_.resolve(ctx);
+                if fat_type == left_fat_type {
+                    left.explicit_type
+                } else if fat_type == right_fat_type {
+                    right.explicit_type
+                } else {
+                    None
+                }
+            };
             DeterminedType {
-                type_: required_type,
-                defined_value: required_defined_value,
-                explicit_type: required_explicit_type
+                type_: RlType::resolved(fat_type),
+                defined_value: Some(loc_node),
+                explicit_type,
             }
-        ) = required else {
-            return
-        };
-        let Some(
-            DeterminedType {
-                type_: assigned_type,
-                defined_value: assigned_defined_value,
-                explicit_type: assigned_explicit_type
-            }
-        ) = assigned else {
-            return
-        };
+        })
+    }
+
+    fn _check_not_disjoint(
+        assigned: Option<Self>,
+        required: Option<Self>,
+        loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> Option<FatType> {
+        let DeterminedType {
+            type_: required_type,
+            defined_value: required_defined_value,
+            explicit_type: required_explicit_type
+        } = required?;
+        let DeterminedType {
+            type_: assigned_type,
+            defined_value: assigned_defined_value,
+            explicit_type: assigned_explicit_type
+        } = assigned?;
         let (assigned_thin_type, mut assigned_type) = assigned_type.into_resolve(ctx);
         let (required_thin_type, required_type) = required_type.into_resolve(ctx);
         let e = e.type_(
@@ -151,14 +187,87 @@ impl<'tree> DeterminedType<'tree> {
         );
 
         assigned_type.unify(required_type, Variance::Bivariant, e);
+        Some(assigned_type)
+    }
 
+    pub fn member_type(
+        &self,
+        field_name: &impl Equivalent<FieldName> + Display,
+        is_nullable_access: bool,
+        loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> DeterminedType<'tree> {
+        let fat_type = self.type_.resolve(ctx);
+        let field_type = fat_type.member(
+            field_name,
+            is_nullable_access,
+            &self.type_.thin,
+            loc_node,
+            self.defined_value,
+            self.explicit_type,
+            e
+        );
+        DeterminedType {
+            type_: RlType::resolved(field_type),
+            defined_value: self.defined_value,
+            explicit_type: None,
+        }
+    }
+
+    pub fn subscript_type(
+        &self,
+        index: Option<usize>,
+        is_nullable_access: bool,
+        loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> DeterminedType<'tree> {
+        let fat_type = self.type_.resolve(ctx);
+        let elem_type = fat_type.subscript(
+            index,
+            is_nullable_access,
+            &self.type_.thin,
+            loc_node,
+            self.defined_value,
+            self.explicit_type,
+            e
+        );
+        DeterminedType {
+            type_: RlType::resolved(elem_type),
+            defined_value: self.defined_value,
+            explicit_type: None,
+        }
+    }
+
+    pub fn awaited_type(
+        &self,
+        is_nullable_access: bool,
+        loc_node: TSNode<'tree>,
+        e: &FileLogger<'_>,
+        ctx: &ResolveCtx<'_>
+    ) -> DeterminedType<'tree> {
+        let fat_type = self.type_.resolve(ctx);
+        let awaited_type = fat_type.awaited(
+            is_nullable_access,
+            &self.type_.thin,
+            loc_node,
+            self.defined_value,
+            self.explicit_type,
+            e
+        );
+        DeterminedType {
+            type_: RlType::resolved(awaited_type),
+            defined_value: self.defined_value,
+            explicit_type: None,
+        }
     }
 }
 
 impl<'tree> DeterminedReturnType<'tree> {
     /// Checks that `assigned` is a subtype of `required`. If not, emits an error at `loc_node`
     /// (the location where we want a type of `required` e.g. function argument)
-    pub(crate) fn check_subtype(self, required: Option<AstReturnType<'tree>>, loc_node: TSNode<'tree>, e: &mut FileLogger<'_>, ctx: &ResolveCtx<'_>) {
+    pub(crate) fn check_subtype(self, required: Option<AstReturnType<'tree>>, loc_node: TSNode<'tree>, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
         let Some(
             AstReturnType {
                 node: required_explicit_type_node,

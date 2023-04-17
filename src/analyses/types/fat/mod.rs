@@ -1,19 +1,22 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::iter::repeat;
+use std::iter::{once, repeat};
 use std::rc::Rc;
 
 pub use data::*;
 
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, Nullability, OptionalType, ReturnType, StructureKind, ThinType, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom};
+use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom};
 use crate::diagnostics::TypeLogger;
 use crate::misc::{once_if, rc_unwrap_or_clone};
 
 mod data;
+mod display;
 mod occurrences;
 mod unify;
+/// Field type, element type, promise inner type
+mod inner;
 /// We try to make [FatType] canonical so normalization usually shouldn't be necessary / do much
 mod normalize;
 
@@ -85,6 +88,37 @@ impl FatType {
         }
     }
 
+    /// Temporarily access the type id and supertypes.
+    ///
+    /// If this is a type hole, it must borrow the id and supertypes for the duration, so attempting
+    /// to modify will **panic**.
+    pub fn with_idents<R>(
+        &self,
+        fun: impl FnOnce(Option<std::iter::Chain<std::iter::Once<&TypeIdent<FatType>>, std::collections::vec_deque::Iter<'_, TypeIdent<FatType>>>>) -> R
+    ) -> R {
+        match self {
+            Self::Any => fun(None),
+            Self::Never { nullability: _ } => fun(None),
+            Self::Structural { nullability: _, structure: _ } => fun(None),
+            Self::Nominal { nullability: _, id, inherited } => fun(Some(once(id).chain(&inherited.super_ids))),
+            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_structure(fun)
+        }
+    }
+
+    /// Temporarily access the type structure.
+    ///
+    /// If this is a type hole, it must borrow the structure for the duration, so attempting to
+    /// modify will **panic**.
+    pub fn with_structure<R>(&self, fun: impl FnOnce(Option<&TypeStructure<FatType>>) -> R) -> R {
+        match self {
+            Self::Any => fun(None),
+            Self::Never { nullability: _ } => fun(None),
+            Self::Structural { nullability: _, structure } => fun(Some(structure)),
+            Self::Nominal { nullability: _, id: _, inherited } => fun(inherited.structure.as_ref()),
+            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_structure(fun)
+        }
+    }
+
     /// Destructs this and returns its nullability, ids and structure
     pub fn into_nullability_ids_and_structure(self) -> (Nullability, Vec<TypeIdent<FatType>>, Option<TypeStructure<FatType>>) {
         match self {
@@ -141,6 +175,14 @@ impl HasNullability for FatType {
 impl TypeTrait for FatType {
     type Inherited = FatTypeInherited;
     type RestArgType = FatRestArgType;
+
+    fn is_any(&self) -> bool {
+        matches!(self, FatType::Any)
+    }
+
+    fn is_never(&self) -> bool {
+        matches!(self, FatType::Never { nullability: Nullability::NonNullable })
+    }
 
     fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited {
         inherited.map(f)
@@ -253,111 +295,6 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
     }
 }
 
-impl FatRestArgType {
-    const EMPTY_REST_ARG_REF: &'static FatType = &FatType::EMPTY_REST_ARG;
-
-    /// Creates from the given [FatType].
-    ///
-    /// Nominal info is stripped, only the structure if it's `Any` or a tuple or array matters:
-    ///
-    /// - If it's a tuple, this will return [FatRestArgType::None] but append the elems to the end
-    ///   of the args array.
-    /// - If it's an array, this will return [FatRestArgType::Array] with the element type,
-    ///   meaning the function can take zero or more extre elements of this type
-    /// - If it's `Any`, that is equivalent to an array of `Any` (can take extra elements of any type)
-    /// - Otherwise, this will return [FatRestArgType::Illegal], which will log an error later if
-    ///   the type is actually used somewhere.
-    pub fn from(intended_type: FatType, arg_types: &mut Vec<OptionalType<FatType>>) -> Self {
-        let kind = FatRestArgKind::of(&intended_type);
-        match kind {
-            FatRestArgKind::Any => Self::Array { element: FatType::Any },
-            FatRestArgKind::Tuple => {
-                let mut elements = intended_type.into_structure().and_then(|x| x.into_tuple_element_types())
-                    .expect("FatRestArgType::from: intended_type is not a tuple but FatRestArgKind::of returned FatRestArgKind::Tuple");
-                arg_types.append(&mut elements);
-                Self::None
-            }
-            FatRestArgKind::Array => {
-                let element = intended_type.into_structure().and_then(|x| x.into_array_element_type())
-                    .expect("FatRestArgType::from: intended_type is not an array but FatRestArgKind::of returned FatRestArgKind::Array");
-                Self::Array { element }
-            }
-            FatRestArgKind::Illegal => Self::Illegal { intended_type }
-        }
-    }
-
-    //Can't really abstract (I mean we could proc-macro this whole map/map_ref thing...)
-    //noinspection DuplicatedCode
-    pub fn map(self, mut f: impl FnMut(FatType) -> FatType) -> Self {
-        match self {
-            Self::None => Self::None,
-            Self::Array { element } => Self::Array { element: f(element) },
-            Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
-        }
-    }
-
-    //noinspection DuplicatedCode
-    pub fn map_ref(&self, mut f: impl FnMut(&FatType) -> FatType) -> Self {
-        match self {
-            Self::None => Self::None,
-            Self::Array { element } => Self::Array { element: f(element) },
-            Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
-        }
-    }
-
-    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
-    pub fn iter(&self) -> impl Iterator<Item = &FatType> {
-        // Use option/flatten to avoid auto_enum
-        match self {
-            Self::None => None,
-            Self::Array { element } => Some(repeat(element)),
-            Self::Illegal { intended_type: _ } => None
-        }.into_iter().flatten()
-    }
-
-    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
-    pub fn into_iter(self) -> impl Iterator<Item = OptionalType<FatType>> {
-        // Use option/flatten to avoid auto_enum
-        match self {
-            Self::None => None,
-            Self::Array { element } => Some(repeat(OptionalType::optional(element))),
-            Self::Illegal { intended_type: _ } => None
-        }.into_iter().flatten()
-    }
-
-    /// Converts into a [FatType]. If possible this will use a static or internal reference.
-    pub fn as_cow(&self) -> Cow<'_, FatType> {
-        match self {
-            Self::None => Cow::Borrowed(Self::EMPTY_REST_ARG_REF),
-            Self::Array { element } => Cow::Owned(FatType::array(element.clone())),
-            Self::Illegal { intended_type } => Cow::Borrowed(intended_type)
-        }
-    }
-}
-
-impl Into<FatType> for FatRestArgType {
-    fn into(self) -> FatType {
-        match self {
-            Self::None => FatType::EMPTY_REST_ARG,
-            Self::Array { element } => FatType::array(element),
-            Self::Illegal { intended_type } => intended_type
-        }
-    }
-}
-
-impl FatRestArgKind {
-    pub fn of(intended_type: &FatType) -> Self {
-        if matches!(intended_type, FatType::Any) {
-            return Self::Any;
-        }
-        match intended_type.structure_kind() {
-            Some(StructureKind::Tuple) => Self::Tuple,
-            Some(StructureKind::Array) => Self::Array,
-            _ => Self::Illegal
-        }
-    }
-}
-
 impl FatTypeInherited {
     pub const EMPTY: Self = Self::empty();
 
@@ -440,6 +377,126 @@ impl FatTypeInherited {
     }
 }
 
+impl InheritedTrait for FatTypeInherited {
+    fn is_empty_inherited(&self) -> bool {
+        !self.is_never &&
+            self.super_ids.is_empty() &&
+            self.structure.is_none() &&
+            self.typescript_types.is_empty() &&
+            self.guards.is_empty()
+    }
+}
+
+impl FatRestArgType {
+    const EMPTY_REST_ARG_REF: &'static FatType = &FatType::EMPTY_REST_ARG;
+
+    /// Creates from the given [FatType].
+    ///
+    /// Nominal info is stripped, only the structure if it's `Any` or a tuple or array matters:
+    ///
+    /// - If it's a tuple, this will return [FatRestArgType::None] but append the elems to the end
+    ///   of the args array.
+    /// - If it's an array, this will return [FatRestArgType::Array] with the element type,
+    ///   meaning the function can take zero or more extre elements of this type
+    /// - If it's `Any`, that is equivalent to an array of `Any` (can take extra elements of any type)
+    /// - Otherwise, this will return [FatRestArgType::Illegal], which will log an error later if
+    ///   the type is actually used somewhere.
+    pub fn from(intended_type: FatType, arg_types: &mut Vec<OptionalType<FatType>>) -> Self {
+        let kind = FatRestArgKind::of(&intended_type);
+        match kind {
+            FatRestArgKind::Any => Self::Array { element: FatType::Any },
+            FatRestArgKind::Tuple => {
+                let mut elements = intended_type.into_structure().and_then(|x| x.into_tuple_element_types())
+                    .expect("FatRestArgType::from: intended_type is not a tuple but FatRestArgKind::of returned FatRestArgKind::Tuple");
+                arg_types.append(&mut elements);
+                Self::None
+            }
+            FatRestArgKind::Array => {
+                let element = intended_type.into_structure().and_then(|x| x.into_array_element_type())
+                    .expect("FatRestArgType::from: intended_type is not an array but FatRestArgKind::of returned FatRestArgKind::Array");
+                Self::Array { element }
+            }
+            FatRestArgKind::Illegal => Self::Illegal { intended_type }
+        }
+    }
+
+    //Can't really abstract (I mean we could proc-macro this whole map/map_ref thing...)
+    //noinspection DuplicatedCode
+    pub fn map(self, mut f: impl FnMut(FatType) -> FatType) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Array { element } => Self::Array { element: f(element) },
+            Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
+        }
+    }
+
+    //noinspection DuplicatedCode
+    pub fn map_ref(&self, mut f: impl FnMut(&FatType) -> FatType) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Array { element } => Self::Array { element: f(element) },
+            Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
+        }
+    }
+
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
+    pub fn iter(&self) -> impl Iterator<Item = &FatType> {
+        // Use option/flatten to avoid auto_enum
+        match self {
+            Self::None => None,
+            Self::Array { element } => Some(repeat(element)),
+            Self::Illegal { intended_type: _ } => None
+        }.into_iter().flatten()
+    }
+
+    /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty
+    pub fn into_iter(self) -> impl Iterator<Item = OptionalType<FatType>> {
+        // Use option/flatten to avoid auto_enum
+        match self {
+            Self::None => None,
+            Self::Array { element } => Some(repeat(OptionalType::optional(element))),
+            Self::Illegal { intended_type: _ } => None
+        }.into_iter().flatten()
+    }
+
+    /// Converts into a [FatType]. If possible this will use a static or internal reference.
+    pub fn as_cow(&self) -> Cow<'_, FatType> {
+        match self {
+            Self::None => Cow::Borrowed(Self::EMPTY_REST_ARG_REF),
+            Self::Array { element } => Cow::Owned(FatType::array(element.clone())),
+            Self::Illegal { intended_type } => Cow::Borrowed(intended_type)
+        }
+    }
+}
+
+impl RestArgTrait for FatRestArgType {
+    fn is_empty_rest_arg(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl Into<FatType> for FatRestArgType {
+    fn into(self) -> FatType {
+        match self {
+            Self::None => FatType::EMPTY_REST_ARG,
+            Self::Array { element } => FatType::array(element),
+            Self::Illegal { intended_type } => intended_type
+        }
+    }
+}
+
+impl FatRestArgKind {
+    pub fn of(intended_type: &FatType) -> Self {
+        if matches!(intended_type, FatType::Any) {
+            return Self::Any;
+        }
+        match intended_type.structure_kind() {
+            Some(StructureKind::Tuple) => Self::Tuple,
+            Some(StructureKind::Array) => Self::Array,
+            _ => Self::Illegal
+        }
+    }
+}
 
 impl FatTypeHole {
     pub fn new() -> Self {

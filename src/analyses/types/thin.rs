@@ -198,13 +198,27 @@ pub trait HasNullability: Debug {
 /// Base type of [ThinType] and [FatType] which contains associated types that are different
 /// between the 2.
 pub trait TypeTrait: HasNullability + Clone + PartialEq + Eq {
-    type Inherited: Debug + Clone + PartialEq + Eq;
-    type RestArgType: Debug + Clone + PartialEq + Eq;
+    type Inherited: InheritedTrait;
+    type RestArgType: RestArgTrait;
 
+    /// Is 'Any' AKA top
+    fn is_any(&self) -> bool;
+    /// Is 'Never' AKA bottom
+    fn is_never(&self) -> bool;
     fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited where Self: Sized;
     fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited;
     fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType where Self: Sized;
     fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType;
+}
+
+pub trait InheritedTrait: Debug + Clone + PartialEq + Eq {
+    /// Is this empty inherited (AKA Any, AKA inherits nothing)
+    fn is_empty_inherited(&self) -> bool;
+}
+
+pub trait RestArgTrait: Debug + Clone + PartialEq + Eq {
+    /// Is the empty rest arg (AKA no arguments after the explicit ones)
+    fn is_empty_rest_arg(&self) -> bool;
 }
 
 /// Maps the associated types of [TypeTrait] from the `OldType` into ours.
@@ -446,6 +460,14 @@ impl TypeTrait for ThinType {
     type Inherited = Vec<ThinType>;
     type RestArgType = ThinType;
 
+    fn is_any(&self) -> bool {
+        matches!(self, Self::Any)
+    }
+
+    fn is_never(&self) -> bool {
+        matches!(self, Self::Never { nullability: Nullability::NonNullable })
+    }
+
     fn map_inherited(mut inherited: Self::Inherited, mut f: impl FnMut(Self) -> Self) -> Self::Inherited {
         for inherited in inherited.iter_mut() {
             replace_with_or_default(inherited, &mut f);
@@ -463,6 +485,21 @@ impl TypeTrait for ThinType {
 
     fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, mut f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
         f(rest_arg_type)
+    }
+}
+
+impl InheritedTrait for Vec<ThinType> {
+    fn is_empty_inherited(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl RestArgTrait for ThinType {
+    fn is_empty_rest_arg(&self) -> bool {
+        matches!(self, Self::Structural {
+            nullability: Nullability::NonNullable,
+            structure: TypeStructure::Tuple { element_types }
+        } if element_types.is_empty())
     }
 }
 

@@ -79,7 +79,7 @@ impl<'tree> Scope<'tree> {
         self.imported_script_paths.len()
     }
 
-    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&mut self, import_stmt: AstImportStatement<'tree>, e: &FileLogger<'_>) {
         self.imported_script_paths.push(import_stmt.path);
         for imported_type in import_stmt.imported_types {
             self.types.add_imported(imported_type, e);
@@ -128,7 +128,7 @@ impl<'tree> ValueScope<'tree> {
         }
     }
 
-    pub fn add_imported(&mut self, imported: AstValueImportSpecifier<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&mut self, imported: AstValueImportSpecifier<'tree>, e: &FileLogger<'_>) {
         let alias = &imported.alias.name;
         if let Some(prev_decl) = self.hoisted(alias) {
             error!(e, "Value '{}' already in scope", alias => imported.node;
@@ -146,7 +146,7 @@ impl<'tree> ValueScope<'tree> {
         self.params.extend(params.map(|param| (param.name().clone(), param)));
     }
 
-    pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree> + 'tree, e: &mut FileLogger<'_>) {
+    pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree> + 'tree, e: &FileLogger<'_>) {
         if let Some(prev_decl) = self.hoisted(decl.name()) {
             error!(e, "Duplicate value declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
@@ -155,7 +155,7 @@ impl<'tree> ValueScope<'tree> {
         self.hoisted.insert(decl.name().clone(), Box::new(decl));
     }
 
-    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &FileLogger<'_>) {
         if let Some(prev_decl) = self.at_pos(decl.name(), decl.node) {
             error!(e, "Duplicate value declaration for '{}'", decl.name() => decl.node;
                 issue!("they are in the same scope");
@@ -164,7 +164,7 @@ impl<'tree> ValueScope<'tree> {
         self.sequential.entry(decl.name().clone()).or_default().push(Box::new(decl))
     }
 
-    pub fn add_exported(&mut self, original_name: AstValueIdent<'tree>, alias: AstValueIdent<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_exported(&mut self, original_name: AstValueIdent<'tree>, alias: AstValueIdent<'tree>, e: &FileLogger<'_>) {
         if !self.has_any(&original_name.name) {
             error!(e, "Value to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }
@@ -188,7 +188,7 @@ impl<'tree> ValueScope<'tree> {
         }
     }
 
-    pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_return(&mut self, return_: AstReturn<'tree>, e: &FileLogger<'_>) {
         if let Some(old_return) = self.return_.as_ref() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => return_.node;
@@ -206,7 +206,7 @@ impl<'tree> ValueScope<'tree> {
         }
     }
 
-    pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_throw(&mut self, throw: AstThrow<'tree>, e: &FileLogger<'_>) {
         if let Some(old_return) = self.return_.as_ref() {
             error!(e,
                 "cannot return/throw multiple times in the same scope" => throw.node;
@@ -304,7 +304,7 @@ impl<'tree> TypeScope<'tree> {
         }
     }
 
-    pub fn add_imported(&mut self, imported: AstTypeImportSpecifier<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_imported(&mut self, imported: AstTypeImportSpecifier<'tree>, e: &FileLogger<'_>) {
         let alias = &imported.alias.name;
         if let Some(prev_decl) = self.get(alias) {
             error!(e, "Nominal type '{}' already in scope", alias => imported.node;
@@ -317,7 +317,7 @@ impl<'tree> TypeScope<'tree> {
         self.set(imported, e)
     }
 
-    pub fn set(&mut self, decl: impl AstTypeBinding<'tree> + 'tree, e: &mut FileLogger<'_>) {
+    pub fn set(&mut self, decl: impl AstTypeBinding<'tree> + 'tree, e: &FileLogger<'_>) {
         if let Some(prev_decl) = self.get(decl.name()) {
             error!(e, "Duplicate nominal type declaration for '{}'", decl.name() => decl.node();
                 issue!("they are in the same scope");
@@ -326,7 +326,7 @@ impl<'tree> TypeScope<'tree> {
         self.hoisted.insert(decl.name().clone(), Box::new(decl));
     }
 
-    pub fn add_exported(&mut self, original_name: AstTypeIdent<'tree>, alias: AstTypeIdent<'tree>, e: &mut FileLogger<'_>) {
+    pub fn add_exported(&mut self, original_name: AstTypeIdent<'tree>, alias: AstTypeIdent<'tree>, e: &FileLogger<'_>) {
         if !self.has_any(&original_name.name) {
             error!(e, "Type to be exported is not in scope '{}'", &original_name.name => original_name.node);
         }

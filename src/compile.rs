@@ -7,13 +7,13 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::{ValueBinding, ValueNameStr};
+use crate::analyses::bindings::{FieldNameStr, ValueBinding, ValueNameStr};
 use crate::analyses::scopes::{ModuleCtx, ScopeChain};
 use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
-use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstParameter, AstReturnType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger, TypeLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
@@ -95,26 +95,26 @@ fn begin_transpile_ast<'tree>(
         let node = type_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.containing(node, &mut c);
         let decl = AstTypeDecl::new(scope, node);
-        scope.activate_ref().types.set(decl, &mut e);
+        scope.activate_ref().types.set(decl, &e);
     }
     for function_decl_match in qc.matches(&FUNCTION, root_node) {
         let node = function_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.containing(node, &mut c);
         let decl = AstFunctionDecl::new(scope, node);
-        scope.activate_ref().values.add_hoisted(decl, &mut e);
+        scope.activate_ref().values.add_hoisted(decl, &e);
     }
     for value_decl_match in qc.matches(&VALUE, root_node) {
         let node = value_decl_match.capture(0).unwrap().node;
         let scope = m.scopes.containing(node, &mut c);
         let decl = AstValueDecl::new(scope, node);
-        scope.activate_ref().values.add_sequential(decl, &mut e);
+        scope.activate_ref().values.add_sequential(decl, &e);
     }
     for import_stmt_match in qc.matches(&IMPORT, root_node) {
         let node = import_stmt_match.capture(0).unwrap().node;
         let scope = m.scopes.containing(node, &mut c);
         let import_path_idx = scope.activate_ref().next_import_path_idx();
         let import_stmt = AstImportStatement::new(scope, import_path_idx, node);
-        scope.activate_ref().add_imported(import_stmt, &mut e);
+        scope.activate_ref().add_imported(import_stmt, &e);
     }
     // Query and prefill exports, and also add to scopes
     for export_id_match in qc.matches(&EXPORT_ID, root_node) {
@@ -148,7 +148,7 @@ fn begin_transpile_ast<'tree>(
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.types.add_exported(original_name, alias, &mut e);
+                scope.types.add_exported(original_name, alias, &e);
             }
             Export::Value { original_name, alias } => {
                 if scope == root_scope {
@@ -157,7 +157,7 @@ fn begin_transpile_ast<'tree>(
                     }
                     // if no decl, add_exported logs an error
                 }
-                scope.values.add_exported(original_name, alias, &mut e);
+                scope.values.add_exported(original_name, alias, &e);
             }
         }
     }
@@ -264,11 +264,11 @@ pub(crate) fn finish_transpile<'tree>(
                                     // Check explicit return type
                                     let mut last_inferred_return_type_det = inferred_return_types.next();
                                     while let Some(next_inferred_return_type_det) = inferred_return_types.next() {
-                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &mut e, ctx);
+                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &e, ctx);
                                         last_inferred_return_type_det = next_inferred_return_type_det;
                                     };
                                     // We can consume the last one
-                                    last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &mut e, ctx);
+                                    last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &e, ctx);
                                     None
                                 }
                             }
@@ -302,180 +302,134 @@ pub(crate) fn finish_transpile<'tree>(
                         }
                     }
                 }
+                "variable_declarator" => {
+                    let name_node = node.field_child("name").unwrap();
+                    let name = ValueNameStr::of(name_node);
+                    let nominal_type = node.field_child("nominal_type")
+                        .map(|x| AstType::of_annotation(&scope, x));
+                    let value = node.field_child("value");
+                    let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
+                    assert_eq!(decl.type_.map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
+                    if !traversal_state.is_up() {
+                        if let (Some(value), Some(nominal_type)) = (value, nominal_type) {
+                            // Require value to be nominal type
+                            m.typed_exprs.require(value, nominal_type)
+                        }
+                        // Don't traverse binding ids
+                        skip_nodes.insert(name_node)
+                        // We also don't traverse nominal type but it's unnecessary to add
+                        // because that gets skipped anyways (deleted)
+                    }
+                    // Already assigned via decl, and the node itself is a statement
+                    // m.typed_exprs.assign(node, nominal_type)
+                }
+                "return_statement" => {
+                    if traversal_state.is_up() {
+                        scopes.add_return(AstReturn {
+                            node,
+                            returned_value: node.named_child(0),
+                        }, &e)
+                    }
+                }
+                "throw_statement" => {
+                    if traversal_state.is_up() {
+                        scopes.add_throw(AstThrow {
+                            node,
+                            thrown_value: node.named_child(0),
+                        }, &e)
+                    }
+                }
+                "assignment_expression" => {
+                    if traversal_state.is_up() {
+                        let left = node.named_child(0).unwrap();
+                        let right = node.named_child(1).unwrap();
+                        let left_type = m.typed_exprs.get(left);
+                        if let Some(left_type) = left_type {
+                            m.typed_exprs.require(right, left_type)
+                        }
+                        // Can't re-assign right type to the left id,
+                        // because of issues with scope and loops/break,
+                        // but we can assign it to the expression itself.
+                        // Also we need to assign the type because assignments are expressions
+                        // and thus can be inside other expressions
+                        let assigned_type = left_type.or_else(|| m.typed_exprs.get(right));
+                        if let Some(assigned_type) = assigned_type {
+                            m.typed_exprs.assign(node, assigned_type)
+                        }
+                    }
+                }
+                // "augmented_assignent_expression":
+                // "binary_expression":
+                // "update_expression":
+                //   We will add support for declaring operations on nominal types, e.g.
+                //   `operation; Liters + Liters -> Liters`
+                //   `operation; Liters * Float -> Liters`
+                //   And then call `m.typed_operations.get(left, op, right)`
+                //   to ensure that such a declaration exists and get the return type
+                //   ...But not yet (TODO)
+                "ternary_expression" => {
+                    if traversal_state.is_up() {
+                        // let condition = node.named_child(0).unwrap();
+                        let then = node.named_child(1).unwrap();
+                        let else_ = node.named_child(2).unwrap();
+                        let then_type = m.typed_exprs.get(then);
+                        let else_type = m.typed_exprs.get(else_);
+                        if let (Some(then_type), Some(else_type)) = (then_type, else_type) {
+                            let unified = DeterminedType::check_not_disjoint_then_unify(Some(then_type.clone()), Some(else_type.clone()), node, &e, ctx);
+                            if let Some(unified) = unified {
+                                m.typed_exprs.assign(node, unified)
+                            }
+                        }
+                    }
+                }
+                "sequence_expression" => {
+                    if traversal_state.is_up() {
+                        let last = node.last_named_child().unwrap();
+                        let last_type = m.typed_exprs.get(last);
+                        if let Some(last_type) = last_type {
+                            m.typed_exprs.assign(node, last_type)
+                        }
+                    }
+                }
+                "member_expression" => {
+                    if traversal_state.is_up() {
+                        let object = node.named_child(0).unwrap();
+                        let field_name = FieldNameStr::of(node.field_child("property").unwrap().text());
+                        let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                        let object_type_det = m.typed_exprs.get(object);
+                        if let Some(object_type_det) = object_type_det {
+                            let field_type = object_type_det.member_type(field_name, is_nullable_access, node, &e, ctx);
+                            m.typed_exprs.assign(node, field_type);
+                        }
+                    }
+                }
+                "subscript_expression" => {
+                    if traversal_state.is_up() {
+                        let array = node.named_child(0).unwrap();
+                        let index = node.field_child("index").unwrap().text().parse::<usize>().ok();
+                        let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                        let array_type_det = m.typed_exprs.get(array);
+                        if let Some(array_type_det) = array_type_det {
+                            let element_type = array_type_det.subscript_type(index, is_nullable_access, node, &e, ctx);
+                            m.typed_exprs.assign(node, element_type);
+                        }
+                    }
+                }
+                "await_expression" => {
+                    if traversal_state.is_up() {
+                        let promise = node.named_child(0).unwrap();
+                        let promise_type_det = m.typed_exprs.get(promise);
+                        if let Some(promise_type_det) = promise_type_det {
+                            let inner_type = promise_type_det.awaited_type(is_nullable_access, node, &e, ctx);
+                            m.typed_exprs.assign(node, inner_type);
+                        }
+                    }
+                }
                 // TODO: Remaining cases
                 _ => {}
             }
         }
     /*
-          case 'variable_declarator': {
-            const name = node.namedChild(0)!
-            const nominalType = mapNullable(
-              node.childOfType('nominal_type_annotation'),
-              x => new NominalType(x.namedChild(0)!)
-            )
-            const value = node.fieldChild('value')
-            const decl = scopes.getExactSequential(name.text, node)
-            assert(decl.nominalType?.node.id === nominalType?.node.id)
-            if (lastMove !== 'up') {
-              if (value !== null && nominalType !== null) {
-                // Require value to be nominal type
-                ctx.typedExprs.require(value, nominalType.asInferred)
-              }
-
-              // Don't traverse binding ids
-              skipNodes.add(name.id)
-              // We also don't traverse nominal type but it's unnecessary to add
-              // because that gets skipped anyways (deleted)
-            } else if (value !== null && nominalType === null) {
-              // Infer nominal type from value
-              decl.setCustomInferredType(new LazyPromise(async () => scopes.inferType(value)))
-            }
-            // Already assigned via decl, and the node itself is a statement
-            // ctx.typedExprs.assign(node, nominalType.asInferred)
-            break
-          }
-          case 'return_statement': {
-            if (lastMove === 'up') {
-              scopes.addReturn(node, node.namedChild(0))
-            }
-            break
-          }
-          case 'throw_statement': {
-            if (lastMove === 'up') {
-              scopes.addThrow(node, node.namedChild(0))
-            }
-            break
-          }
-          case 'assignment_expression': {
-            if (lastMove === 'up') {
-              const left = node.namedChild(0)!
-              const right = node.namedChild(1)!
-              const leftType = scopes.inferType(left)
-              if (leftType !== null) {
-                ctx.typedExprs.require(right, leftType)
-              }
-              // Can't re-assign right type to the left id,
-              // because of issues with scope and loops/break,
-              // but we can assign it to the expression itself.
-              // Also we need to assign the type because assignments are expressions
-              // and thus can be inside other expressions
-              const assignedType = leftType ?? scopes.inferType(right)
-              if (assignedType !== null) {
-                ctx.typedExprs.assign(node, assignedType)
-              }
-            }
-            break
-          }
-          // case 'augmented_assignent_expression':
-          // case 'binary_expression':
-          // case 'update_expression':
-          //   We will add support for declaring operations on nominal types, e.g.
-          //   `operation; Liters + Liters -> Liters`
-          //   `operation; Liters * Float -> Liters`
-          //   And then call `ctx.typedOperations.get(left, op, right)`
-          //   to ensure that such a declaration exists and get the return type
-          //   ...But not yet
-          case 'ternary_expression': {
-            if (lastMove === 'up') {
-              // const condition = node.namedChild(0)!
-              const then = node.namedChild(1)!
-              const else_ = node.namedChild(2)!
-              const thenType = scopes.inferType(then)
-              const elseType = scopes.inferType(else_)
-              if (thenType !== null && elseType !== null) {
-                const unified = NominalTypeInferred.tryUnify('Ternary branch', thenType, elseType, { node })
-                if (unified !== null) {
-                  ctx.typedExprs.assign(node, unified)
-                }
-              }
-            }
-            break
-          }
-          case 'sequence_expression': {
-            if (lastMove === 'up') {
-              const last = node.lastNamedChild()!
-              const lastType = scopes.inferType(last)
-              if (lastType !== null) {
-                ctx.typedExprs.assign(node, lastType)
-              }
-            }
-            break
-          }
-          case 'member_expression': {
-            if (lastMove === 'up') {
-              const obj = node.namedChild(0)!
-              const member = node.fieldChild('property')!.text
-              const isOptional = node.childOfType('optional_chain') !== null
-              const objTypeRaw = scopes.inferType(obj)
-              if (objTypeRaw !== null) {
-                const objType = await ctx.nominalTypeDeclMap.superStructure2(objTypeRaw) ?? objTypeRaw
-                if (!NominalTypeShape.isObject(objType.shape)) {
-                  logError(
-                    `Expected object type, got ${NominalTypeShape.print(objType.shape)}`, node,
-                    ['note: type declared here', objTypeRaw.ast.node]
-                  )
-                } else {
-                  const memberType = NominalTypeInferred.member(objType, member, isOptional)
-                  if (memberType === null) {
-                    logError(
-                      `No such member ${member} in ${NominalTypeShape.print(objType.shape)}`, node,
-                      ['note: type declared here', objTypeRaw.ast.node]
-                    )
-                  } else {
-                    ctx.typedExprs.assign(node, memberType)
-                  }
-                }
-              }
-            }
-            break
-          }
-          case 'subscript_expression': {
-            if (lastMove === 'up') {
-              const obj = node.namedChild(0)!
-              let index: number | null = parseInt(node.fieldChild('index')!.text)
-              if (isNaN(index)) {
-                index = null
-              }
-              const isOptional = node.childOfType('optional_chain') !== null
-              const arrayTypeRaw = scopes.inferType(obj)
-              if (arrayTypeRaw !== null) {
-                const arrayType = await ctx.nominalTypeDeclMap.superStructure2(arrayTypeRaw) ?? arrayTypeRaw
-                if (!NominalTypeShape.isTuple(arrayType.shape) && !NominalTypeShape.isArray(arrayType.shape)) {
-                  logError(
-                    `Expected tuple or array type, got ${NominalTypeShape.print(arrayType.shape)}`, node,
-                    ['note: type declared here', arrayTypeRaw.ast.node]
-                  )
-                } else {
-                  const subscriptType = NominalTypeInferred.subscript(arrayType, index, isOptional)
-                  if (subscriptType === null && index !== null) {
-                    logError(
-                      `Index ${index} out of bounds in ${NominalTypeShape.print(arrayType.shape)}`, node,
-                      ['note: type declared here', arrayTypeRaw.ast.node]
-                    )
-                  } else if (subscriptType !== null) {
-                    ctx.typedExprs.assign(node, subscriptType)
-                  }
-                }
-              }
-            }
-            break
-          }
-          case 'await_expression': {
-            if (lastMove === 'up') {
-              const expr = node.namedChild(0)!
-              const exprType = scopes.inferType(expr)
-              if (exprType !== null) {
-                const promiseType = await ctx.nominalTypeDeclMap.superPromise2(exprType)
-                if (promiseType !== null) {
-                  const awaitedType = NominalTypeInferred.await_(exprType)
-                  if (awaitedType !== null) {
-                    ctx.typedExprs.assign(node, awaitedType)
-                  }
-                }
-              }
-            }
-            break
-          }
           case 'call_expression': {
             if (lastMove === 'up') {
               const func = node.namedChild(0)!
@@ -821,7 +775,7 @@ pub(crate) fn finish_transpile<'tree>(
     // (we wait until analysis is done because some of these errors are due to uninferred types,
     // and we may infer types at weird future times which make them disappear.
     // So it's easier to just wait until ALL analysis is done to raise these uninferred-errors and the general category)
-    m.typed_exprs.check_all(&mut e, ctx);
+    m.typed_exprs.check_all(&e, ctx);
 
     // Roadmap (partially outdated)
     // - Query all `function_declaration`s, `method_declaration`s, `function_signature`s, etc., in every scope build a map of the static functions' types. Remove their nominal type annotations, replace them with guarded versions and which call a generated unguarded version. Also build a map of them as ordinary global (lambda) constants to their nominal function types (already somewhat done, some of the others are somewhat done as well)
