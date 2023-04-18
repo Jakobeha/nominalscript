@@ -7,9 +7,9 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::{FieldNameStr, GlobalTypeBinding, TypeNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::bindings::{FieldName, FieldNameStr, GlobalTypeBinding, GlobalValueBinding, TypeNameStr, ValueBinding, ValueNameStr};
 use crate::analyses::scopes::{ModuleCtx, ScopeChain};
-use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, RlType, Variance};
+use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, Nullability, OptionalType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, RlType, TypeStructure, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
@@ -205,7 +205,8 @@ pub(crate) fn finish_transpile<'tree>(
                     "generator_function_declaration" |
                     "function" |
                     "generator_function" |
-                    "arrow_function" => {
+                    "arrow_function" |
+                    "method_definition" => {
                         let is_decl = node.kind() == "function_declaration" ||
                             node.kind() == "generator_function_declaration";
                         let is_arrow = node.kind() == "arrow_function";
@@ -506,149 +507,138 @@ pub(crate) fn finish_transpile<'tree>(
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("Regex")).expect("builtin Regex type should exist").type_det());
                     }
                     "object" => {
-                        todo!()
-                        /*
-                                    if (lastMove === 'up') {
-              let fields: Array<[string | number, NominalTypeShape]> | null = []
-              for (const child of node.namedChildren) {
-                switch (child.type) {
-                  case 'pair': {
-                    const key = child.namedChild(0)!
-                    const value = child.namedChild(1)!
-                    const type = scopes.inferType(value)?.shape ?? NominalTypeShape.ANY
-                    fields.push([key.text, type])
-                    break
-                  }
-                  case 'shorthand_property_identifier': {
-                    const name = child.namedChild(0)!
-                    const type = scopes.inferType(name)?.shape ?? NominalTypeShape.ANY
-                    fields.push([name.text, type])
-                    break
-                  }
-                  case 'spread_element': {
-                    const expr = child.namedChild(0)!
-                    const spreadType = scopes.inferType(expr)
-                    if (spreadType === null) {
-                      fields = null
-                    } else {
-                      const spreadObjType = (await ctx.nominalTypeDeclMap.superStructure2(spreadType))?.shape ?? null
-                      if (spreadObjType === null || !NominalTypeShape.isObject(spreadObjType)) {
-                        logError(
-                          'Cannot spread non-object type', expr,
-                          ['note: type declared here', spreadType.ast.node],
-                          spreadObjType === null ? null : [`note: actual structure is ${NominalTypeShape.print(spreadObjType)}`]
-                        )
-                        fields = null
-                      } else if (spreadObjType.isNullable) {
-                        logError(
-                          'Cannot spread nullable object type', expr,
-                          ['note: type declared here', spreadType.ast.node],
-                          [`note: actual structure is ${NominalTypeShape.print(spreadObjType)}`]
-                        )
-                        fields = null
-                      } else {
-                        fields.push(...spreadObjType.fields)
-                      }
-                    }
-                    break
-                  }
-                  case 'method_definition': {
-                    const name = child.namedChild(0)!
-                    const type = scopes.inferType(child)?.shape ?? NominalTypeShape.FUNCTION
-                    fields.push([name.text, type])
-                    break
-                  }
-                  default:
-                    throw new Error(`unhandled object literal child type: ${child.type}`)
-                }
-                if (fields === null) {
-                  break
-                }
-              }
-              fields = mapNullable(fields, x => ArrayUtil.dedupedBy(x, ([key, _]) => key))
-
-              ctx.typedExprs.assign(node, {
-                shape: fields === null
-                  ? NominalTypeShape.OBJECT
-                  : NominalTypeShape.object(fields),
-                ast: { node }
-              })
-            }
-                         */
+                        if traversal_state.is_up() {
+                            let field_nodes = node.named_children(&mut c);
+                            let mut type_override = None;
+                            let mut fields = Vec::with_capacity(field_nodes.len());
+                            for field_node in field_nodes {
+                                match field_node.kind() {
+                                    "pair" => {
+                                        let key = field_node.named_child(0).unwrap();
+                                        let value = field_node.named_child(1).unwrap();
+                                        let value_type = m.typed_exprs.get(value).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        fields.push((key.text(), OptionalType::required(value_type)))
+                                    },
+                                    "shorthand_property_identifier" => {
+                                        let name = field_node.named_child(0).unwrap();
+                                        let name_type = m.typed_exprs.get(name).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        fields.push((name.text(), OptionalType::required(name_type)))
+                                    }
+                                    "method_definition" => {
+                                        let name = field_node.named_child(0).unwrap();
+                                        // Since the field node is a function declaration the type is directly assigned to it
+                                        let type_ = m.typed_exprs.get(field_node).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        fields.push((name.text(), OptionalType::required(type_)))
+                                    }
+                                    "spread_element" => {
+                                        let expr = field_node.named_child(0).unwrap();
+                                        let spread_type = m.typed_exprs.get(expr).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        let spread_is_nullable = matches!(spread_type.nullability(), Nullability::Nullable);
+                                        if spread_is_nullable {
+                                            error!(e, "Can't object-spread nullable type because it's a type error to object-spread null" => field_node);
+                                        }
+                                        match spread_type {
+                                            FatType::Any => {
+                                                type_override = Some(GlobalValueBinding::get(ValueNameStr::of("Object")).expect("builtin Object type should exist").type_det());
+                                                break
+                                            }
+                                            FatType::Never { nullability } => {
+                                                if matches!(nullability, Nullability::NonNullable) {
+                                                    type_override = Some(FatType::NEVER.clone());
+                                                }
+                                                break
+                                            }
+                                            FatType::Hole { .. } => todo!("fix holes in general"),
+                                            _ => {}
+                                        }
+                                        spread_type.with_structure(|structure| match structure {
+                                            Some(TypeStructure::Object { field_types }) => {
+                                                fields.extend(field_types.iter().map(|Field { name, type_ }| {
+                                                    let mut type_ = type_.as_ref();
+                                                    type_.make_optional_if(spread_is_nullable);
+                                                    (name.as_str(), type_)
+                                                }))
+                                            }
+                                            _ => {
+                                                error!(e, "Can't object-spread non-object type" => field_node);
+                                            }
+                                        })
+                                    }
+                                    _ => panic!("Unexpected field node kind: {}", field_node.kind())
+                                }
+                            }
+                            let type_ = type_override.unwrap_or_else(|| {
+                                fields.dedup_by(|(key1, _), (key2, _)| key1 == key2);
+                                FatType::object(fields.into_iter().map(|(name, type_)| Field {
+                                    name: FieldName::of(name),
+                                    type_: type_.cloned()
+                                }))
+                            });
+                            m.typed_exprs.assign(node, type_);
+                        }
                     }
                     "array" => {
-                        todo!()
-
-                        /*
-                                    if (lastMove === 'up') {
-              let elems: NominalTypeShape[] | NominalTypeShape | null = []
-              const pushElems = (...newElems: NominalTypeShape[]): NominalTypeShape[] | NominalTypeShape => {
-                if (elems! instanceof Array) {
-                  elems.push(...newElems)
-                  return elems
-                } else {
-                  return GeneratorUtil.last(NominalTypeShape.tryUnifyAll([elems, ...newElems]))!
-                }
-              }
-              const pushArray = (newElem: NominalTypeShape): NominalTypeShape[] | NominalTypeShape => {
-                if (elems! instanceof Array) {
-                  return GeneratorUtil.last(NominalTypeShape.tryUnifyAll([...elems, newElem]))!
-                } else {
-                  return GeneratorUtil.last(NominalTypeShape.tryUnify(elems, newElem, '_', '_', false))!
-                }
-              }
-              for (const child of node.namedChildren) {
-                switch (child.type) {
-                  case 'spread_element': {
-                    const expr = child.namedChild(0)!
-                    const spreadType = scopes.inferType(expr)
-                    if (spreadType === null) {
-                      elems = null
-                    } else {
-                      const spreadArrayType = (await ctx.nominalTypeDeclMap.superStructure2(spreadType))?.shape ?? null
-                      if (spreadArrayType === null ||
-                          (!NominalTypeShape.isArray(spreadArrayType) && !NominalTypeShape.isTuple(spreadArrayType))) {
-                        logError(
-                          'Cannot spread non-array and non-tuple type', expr,
-                          ['note: type declared here', spreadType.ast.node],
-                          spreadArrayType === null ? null : [`note: actual structure is ${NominalTypeShape.print(spreadArrayType)}`]
-                        )
-                        elems = null
-                      } else if (spreadArrayType.isNullable) {
-                        logError(
-                          'Cannot spread nullable array type', expr,
-                          ['note: type declared here', spreadType.ast.node],
-                          [`note: actual structure is ${NominalTypeShape.print(spreadArrayType)}`]
-                        )
-                        elems = null
-                      } else if (NominalTypeShape.isTuple(spreadArrayType)) {
-                        elems = pushElems(...spreadArrayType.elems)
-                      } else {
-                        elems = pushArray(spreadArrayType.elem)
-                      }
-                    }
-                    break
-                  }
-                  default: {
-                    elems = pushElems(scopes.inferType(child)?.shape ?? NominalTypeShape.ANY)
-                    break
-                  }
-                }
-                if (elems === null) {
-                  break
-                }
-              }
-
-              ctx.typedExprs.assign(node, {
-                shape: elems === null
-                  ? NominalTypeShape.ARRAY
-                  : elems instanceof Array
-                    ? NominalTypeShape.tuple(elems)
-                    : NominalTypeShape.array(elems),
-                ast: { node }
-              })
-            }
-                         */
+                        if traversal_state.is_up() {
+                            let elem_nodes = node.named_children(&mut c);
+                            let mut type_override = None;
+                            let mut elems = Vec::with_capacity(elem_nodes.len());
+                            let mut is_array = false;
+                            for elem_node in elem_nodes {
+                                match elem_node.kind() {
+                                    "spread_element" => {
+                                        let expr = elem_node.named_child(0).unwrap();
+                                        let spread_type = m.typed_exprs.get(expr).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        let spread_is_nullable = matches!(spread_type.nullability(), Nullability::Nullable);
+                                        if spread_is_nullable {
+                                            error!(e, "Can't array-spread nullable type because it's a type error to array-spread null" => elem_node);
+                                        }
+                                        match spread_type {
+                                            FatType::Any => {
+                                                type_override = Some(GlobalValueBinding::get(ValueNameStr::of("Array")).expect("builtin Array type should exist").type_det());
+                                                break
+                                            }
+                                            FatType::Never { nullability } => {
+                                                if matches!(nullability, Nullability::NonNullable) {
+                                                    type_override = Some(FatType::NEVER.clone());
+                                                }
+                                                break
+                                            }
+                                            FatType::Hole { .. } => todo!("fix holes in general"),
+                                            _ => {}
+                                        }
+                                        spread_type.with_structure(|structure| match structure {
+                                            Some(TypeStructure::Tuple { element_types }) => {
+                                                elems.extend(element_types.iter().map(|element_type| element_type.as_ref()));
+                                            }
+                                            Some(TypeStructure::Array { element_type }) => {
+                                                is_array = true;
+                                                elems.push(OptionalType::optional(element_type.as_ref()));
+                                            }
+                                            _ => {
+                                                error!(e, "Can't array-spread non-array, non-tuple type" => elem_node);
+                                            }
+                                        })
+                                    }
+                                    _ => {
+                                        let elem_type = m.typed_exprs.get(elem_node).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        elems.push(OptionalType::required(elem_type));
+                                    },
+                                }
+                            }
+                            let type_ = type_override.unwrap_or_else(|| {
+                                let elems = elems.into_iter().map(|elem| elem.cloned());
+                                if is_array {
+                                    FatType::array(FatType::unify_all(
+                                        elems.map(|e| e.collapse_optionality_into_nullability()),
+                                        Variance::Bivariant,
+                                        TypeLogger::ignore()
+                                    ))
+                                } else {
+                                    FatType::tuple(elems)
+                                }
+                            });
+                            m.typed_exprs.assign(node, type_);
+                        }
                     }
                     "nominal_wrap_expression" |
                     "nominal_wrap_unchecked_expression" => {

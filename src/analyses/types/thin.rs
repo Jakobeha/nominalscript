@@ -752,6 +752,18 @@ impl<Type> OptionalType<Type> {
         }
     }
 
+    /// Like [HasNullability::make_nullable] but for optional types
+    pub fn make_optional(&mut self) {
+        self.optionality = Optionality::Optional;
+    }
+
+    /// Like [HasNullability::make_nullable_if] but for optional types
+    pub fn make_optional_if(&mut self, condition: bool) {
+        if condition {
+            self.make_optional();
+        }
+    }
+
     pub fn map<NewType>(self, f: impl FnOnce(Type) -> NewType) -> OptionalType<NewType> {
         OptionalType {
             optionality: self.optionality,
