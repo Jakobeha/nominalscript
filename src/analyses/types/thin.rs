@@ -247,50 +247,6 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
     ) -> FnType<Self> where Self: Sized;
 }
 
-impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
-    fn map_inherited(inherited: T::Inherited, f: impl FnMut(T) -> Self) -> Self::Inherited {
-        Self::map_inherited(inherited, f)
-    }
-
-    fn map_ref_inherited(inherited: &T::Inherited, mut f: impl FnMut(Cow<'_, T>) -> Self) -> Self::Inherited {
-        Self::map_ref_inherited(inherited, |x| f(Cow::Borrowed(x)))
-    }
-
-    fn map_rest_arg_type_in_fn(
-        type_params: Vec<TypeParam<Self>>,
-        this_type: Self,
-        arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: T::RestArgType,
-        return_type: ReturnType<Self>,
-        f: impl FnMut(T) -> Self
-    ) -> FnType<Self> {
-        FnType {
-            type_params,
-            this_type,
-            arg_types,
-            rest_arg_type: Self::map_rest_arg_type(rest_arg_type, f),
-            return_type,
-        }
-    }
-
-    fn map_ref_rest_arg_type_in_fn(
-        type_params: Vec<TypeParam<Self>>,
-        this_type: Self,
-        arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: &T::RestArgType,
-        return_type: ReturnType<Self>,
-        mut f: impl FnMut(Cow<'_, T>) -> Self
-    ) -> FnType<Self> {
-        FnType {
-            type_params,
-            this_type,
-            arg_types,
-            rest_arg_type: Self::map_ref_rest_arg_type(rest_arg_type, |x| f(Cow::Borrowed(x))),
-            return_type,
-        }
-    }
-}
-
 /// Whether or not a type permits `null`.
 ///
 /// **Important:** A *nullable* type is different from an *optional* type:
@@ -380,6 +336,56 @@ macro_rules! impl_structural_type_constructors {
     }
 }
 pub(crate) use impl_structural_type_constructors;
+
+impl<T: InheritedTrait> InheritedTrait for Box<T> {
+    fn is_empty_inherited(&self) -> bool {
+        self.as_ref().is_empty_inherited()
+    }
+}
+
+impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
+    fn map_inherited(inherited: T::Inherited, f: impl FnMut(T) -> Self) -> Self::Inherited {
+        Self::map_inherited(inherited, f)
+    }
+
+    fn map_ref_inherited(inherited: &T::Inherited, mut f: impl FnMut(Cow<'_, T>) -> Self) -> Self::Inherited {
+        Self::map_ref_inherited(inherited, |x| f(Cow::Borrowed(x)))
+    }
+
+    fn map_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: T::RestArgType,
+        return_type: ReturnType<Self>,
+        f: impl FnMut(T) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            rest_arg_type: Self::map_rest_arg_type(rest_arg_type, f),
+            return_type,
+        }
+    }
+
+    fn map_ref_rest_arg_type_in_fn(
+        type_params: Vec<TypeParam<Self>>,
+        this_type: Self,
+        arg_types: Vec<OptionalType<Self>>,
+        rest_arg_type: &T::RestArgType,
+        return_type: ReturnType<Self>,
+        mut f: impl FnMut(Cow<'_, T>) -> Self
+    ) -> FnType<Self> {
+        FnType {
+            type_params,
+            this_type,
+            arg_types,
+            rest_arg_type: Self::map_ref_rest_arg_type(rest_arg_type, |x| f(Cow::Borrowed(x))),
+            return_type,
+        }
+    }
+}
 
 impl ThinTypeDecl {
     pub const MISSING: Self = Self {
@@ -706,7 +712,7 @@ impl<Type: TypeTrait> FnType<Type> {
         )
     }
 
-    pub fn with_return_type<NewType: TypeTraitMapsFrom<Type>>(self, return_type: ReturnType<NewType>) -> FnType<NewType> {
+    pub fn with_return_type(self, return_type: ReturnType<Type>) -> Self {
         FnType {
             type_params: self.type_params,
             this_type: self.this_type,
@@ -821,6 +827,12 @@ impl<Type> ReturnType<Type> {
             ReturnType::Type(type_) => ReturnType::Type(f(type_)),
             ReturnType::Void => ReturnType::Void,
         }
+    }
+}
+
+impl<Type> From<Type> for ReturnType<Type> {
+    fn from(value: Type) -> Self {
+        ReturnType::Type(value)
     }
 }
 

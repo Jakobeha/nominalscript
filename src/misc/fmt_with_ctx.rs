@@ -56,6 +56,18 @@ pub trait DisplayWithCtx2<Ctx1: ?Sized, Ctx2: ?Sized> {
     }
 }
 
+impl<T: DisplayWithCtx<Ctx>, Ctx: ?Sized> DisplayWithCtx<Ctx> for Box<T> {
+    fn fmt(&self, f: &mut Formatter<'_>, ctx: &Ctx) -> std::fmt::Result {
+        self.as_ref().fmt(f, ctx)
+    }
+}
+
+impl<T: DisplayWithCtx2<Ctx1, Ctx2>, Ctx1: ?Sized, Ctx2: ?Sized> DisplayWithCtx2<Ctx1, Ctx2> for Box<T> {
+    fn fmt(&self, f: &mut Formatter<'_>, ctxs: (&Ctx1, &Ctx2)) -> std::fmt::Result {
+        self.as_ref().fmt(f, ctxs)
+    }
+}
+
 // I don't really care that this is not actually used.
 // Should probably move this code into a crate eventually
 #[allow(dead_code)]

@@ -228,56 +228,56 @@ impl<'tree> ValueScope<'tree> {
         self.params.values().map(|param| param.as_ref())
     }
 
-    pub fn hoisted(&self, name: &impl Equivalent<ValueName>) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn hoisted(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&DynAstValueBinding<'tree>> {
         self.hoisted.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>)
             .or_else(|| self.params.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>))
     }
 
-    pub fn has_any(&self, name: &impl Equivalent<ValueName>) -> bool {
+    pub fn has_any(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> bool {
         self.sequential.contains_key(name) || self.hoisted.contains_key(name) || self.params.contains_key(name)
     }
 
-    pub fn last(&self, name: &impl Equivalent<ValueName>) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn last(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&DynAstValueBinding<'tree>> {
         self.sequential.get(name).map(|sequential| {
             sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &DynAstValueBinding<'tree>
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn has_at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> bool {
+    pub fn has_at_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> bool {
         self.at_pos(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn at_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
         return self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &DynAstValueBinding<'tree>)
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn at_exact_pos(&self, name: &impl Equivalent<ValueName>, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
+    pub fn at_exact_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
         self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().end_byte() >= pos_node.end_byte() && decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &AstValueDecl<'tree>)
         })
     }
 
-    pub fn exported(&self, alias: &ValueName) -> Option<&ExportedId<ValueName>> {
+    pub fn exported(&self, alias: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&ExportedId<ValueName>> {
         self.exported.get(alias)
     }
 
     pub fn return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> DeterminedReturnType<'tree> {
+        self.explicit_return_type(typed_exprs).unwrap_or_else(DeterminedReturnType::implicit_void)
+    }
+
+    pub fn explicit_return_type(&self, typed_exprs: &ExprTypeMap<'tree>) -> Option<DeterminedReturnType<'tree>> {
         match (self.return_.as_ref(), self.throw.as_ref()) {
-            (None, None) => DeterminedReturnType {
-                type_: RlReturnType::resolved_void(),
-                return_node: None,
-                explicit_type: None,
-            },
+            (None, None) => None,
             (return_, Some(throw))
-            if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => DeterminedReturnType {
+            if return_.is_none() || throw.node.start_byte() < return_.unwrap().node.start_byte() => Some(DeterminedReturnType {
                 type_: RlReturnType::resolved_type(FatType::NEVER),
                 return_node: Some(throw.node),
                 explicit_type: None
-            },
+            }),
             (None, Some(_)) => unreachable!("guard succeeds if return_.is_none()"),
             (Some(return_), _) => {
                 let expr = return_.returned_value.and_then(|x| typed_exprs.get(x));
@@ -285,12 +285,12 @@ impl<'tree> ValueScope<'tree> {
                     None => (RlType::ANY, None),
                     Some(expr) => (expr.type_.clone(), expr.explicit_type)
                 };
-                DeterminedReturnType {
+                Some(DeterminedReturnType {
                     // SAFETY: These are the same function, they are bijective
                     type_: unsafe { type_.bimap(ReturnType::Type, ReturnType::Type) },
                     return_node: Some(return_.node),
                     explicit_type
-                }
+                })
             }
         }
     }
@@ -341,11 +341,11 @@ impl<'tree> TypeScope<'tree> {
         });
     }
 
-    pub fn has_any(&self, name: &impl Equivalent<TypeName>) -> bool {
+    pub fn has_any(&self, name: &(impl Equivalent<TypeName> + ?Sized)) -> bool {
         self.hoisted.contains_key(name)
     }
 
-    pub fn get(&self, name: &impl Equivalent<TypeName>) -> Option<&DynAstTypeBinding<'tree>> {
+    pub fn get(&self, name: &(impl Equivalent<TypeName> + ?Sized)) -> Option<&DynAstTypeBinding<'tree>> {
         self.hoisted.get(name).map(|decl| decl.as_ref() as &DynAstTypeBinding<'tree>)
     }
 
@@ -362,7 +362,7 @@ impl<'tree> TypeScope<'tree> {
         Some(inherited)
     }
 
-    pub fn exported(&self, alias: &impl Equivalent<TypeName>) -> Option<&ExportedId<TypeName>> {
+    pub fn exported(&self, alias: &(impl Equivalent<TypeName> + ?Sized)) -> Option<&ExportedId<TypeName>> {
         self.exported.get(alias)
     }
 }

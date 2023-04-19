@@ -1,5 +1,6 @@
+use std::borrow::Borrow;
 use std::fmt::Display;
-use indexmap::Equivalent;
+use std::ops::Range;
 use crate::analyses::types::{FatType, HasNullability, Nullability, OptionalType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturnType, AstType};
@@ -130,9 +131,9 @@ impl<'tree> DeterminedType<'tree> {
                 let right = right.unwrap();
                 let left_fat_type = left.type_.resolve(ctx);
                 let right_fat_type = right.type_.resolve(ctx);
-                if fat_type == left_fat_type {
+                if &fat_type == left_fat_type {
                     left.explicit_type
-                } else if fat_type == right_fat_type {
+                } else if &fat_type == right_fat_type {
                     right.explicit_type
                 } else {
                     None
@@ -185,14 +186,14 @@ impl<'tree> DeterminedType<'tree> {
         Some(assigned_type)
     }
 
-    pub fn member_type(
+    pub fn member_type<N: Display + ?Sized>(
         &self,
-        field_name: &impl Equivalent<FieldName> + Display,
+        field_name: &N,
         is_nullable_access: bool,
         loc_node: TSNode<'tree>,
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
-    ) -> DeterminedType<'tree> {
+    ) -> DeterminedType<'tree> where FieldName: Borrow<N> {
         let fat_type = self.type_.resolve(ctx);
         let field_type = fat_type.member(
             field_name,
@@ -237,14 +238,12 @@ impl<'tree> DeterminedType<'tree> {
 
     pub fn awaited_type(
         &self,
-        is_nullable_access: bool,
         loc_node: TSNode<'tree>,
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) -> DeterminedType<'tree> {
         let fat_type = self.type_.resolve(ctx);
         let awaited_type = fat_type.awaited(
-            is_nullable_access,
             &self.type_.thin,
             loc_node,
             self.defined_value,
@@ -258,16 +257,16 @@ impl<'tree> DeterminedType<'tree> {
         }
     }
 
-    pub fn call_type(
+    pub fn call_type<'a, 'b>(
         &self,
-        this_arg: Option<(Option<&DeterminedType<'tree>>, TSNode<'tree>)>,
-        args: impl IntoIterator<Item=(Option<&DeterminedType<'tree>>, TSNode<'tree>)>,
+        this_arg: Option<(Option<&'a DeterminedType<'tree>>, TSNode<'tree>)>,
+        args: impl IntoIterator<Item=(Option<&'b DeterminedType<'tree>>, TSNode<'tree>)>,
         // TODO: Variable spread args
         is_nullable_call: bool,
         fn_loc_node: TSNode<'tree>,
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
-    ) -> DeterminedType<'tree> {
+    ) -> DeterminedType<'tree> where 'tree: 'a, 'tree: 'b {
         let defined_value = self.defined_value;
         let explicit_type = self.explicit_type;
         let fat_type = self.type_.resolve(ctx);
@@ -291,7 +290,7 @@ impl<'tree> DeterminedType<'tree> {
                     let this_param = &fn_type.this_type;
                     let this_param_det = DeterminedType {
                         type_: RlType::resolved(this_param.clone()),
-                        defined_value: defined_value.or_else(explicit_type),
+                        defined_value: defined_value.or(explicit_type),
                         explicit_type: None,
                     };
                     match this_arg {
@@ -309,7 +308,7 @@ impl<'tree> DeterminedType<'tree> {
                     }
 
                     // Check args
-                    let (min_num_args, max_num_args) = fn_type.arity_range();
+                    let Range { start: min_num_args, end: max_num_args } = fn_type.arity_range();
                     let mut num_args = 0;
                     for (arg, arg_loc_node) in args {
                         let idx = num_args;
@@ -320,7 +319,7 @@ impl<'tree> DeterminedType<'tree> {
                         };
                         let param_det = DeterminedType {
                             type_: RlType::resolved(param.cloned().collapse_optionality_into_nullability()),
-                            defined_value: self.defined_value.or_else(self.explicit_type),
+                            defined_value: self.defined_value.or(self.explicit_type),
                             explicit_type: None,
                         };
                         Self::check_subtype(arg.cloned(), Some(param_det), arg_loc_node, e, ctx);
@@ -336,7 +335,13 @@ impl<'tree> DeterminedType<'tree> {
                         hint_if!(explicit_type => "type defined here" => explicit_type));
                     }
                     // Return the return type
-                    fn_type.return_type.clone()
+                    // TODO: Should be special-cased so we can prevent void functions in expression position)
+                    //   This also means we change the return type of this, though not to `DeterminedReturnType` since there is no `return_node`,
+                    //   instead give `DeterminedType` a default generic for the type.
+                    match fn_type.return_type.clone() {
+                        ReturnType::Void => FatType::Any,
+                        ReturnType::Type(t) => t,
+                    }
                 }
             });
             return_type.make_nullable_if(is_nullable_call);
@@ -351,6 +356,15 @@ impl<'tree> DeterminedType<'tree> {
 }
 
 impl<'tree> DeterminedReturnType<'tree> {
+    /// Functions with no `return` statement at the end implicitly return `Void` AKA this
+    pub fn implicit_void() -> Self {
+        DeterminedReturnType {
+            type_: RlReturnType::implicit_void(),
+            return_node: None,
+            explicit_type: None,
+        }
+    }
+
     /// Checks that `assigned` is a subtype of `required`. If not, emits an error at `loc_node`
     /// (the location where we want a type of `required` e.g. function argument)
     pub(crate) fn check_subtype(self, required: Option<AstReturnType<'tree>>, loc_node: TSNode<'tree>, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
@@ -413,13 +427,19 @@ impl<'tree> DeterminedReturnType<'tree> {
 }
 
 impl<'tree> From<AstType<'tree>> for DeterminedType<'tree> {
+    fn from(value: AstType<'tree>) -> Self {
+        Self { type_: value.shape, defined_value: None, explicit_type: Some(value.node) }
+    }
+}
+
+impl<'tree> From<AstReturnType<'tree>> for DeterminedReturnType<'tree> {
     fn from(value: AstReturnType<'tree>) -> Self {
-        Self { type_: value.shape.into(), defined_value: None, explicit_type: Some(value.node) }
+        Self { type_: value.shape, return_node: None, explicit_type: Some(value.node) }
     }
 }
 
 impl<'tree> From<DeterminedType<'tree>> for DeterminedReturnType<'tree> {
     fn from(value: DeterminedType<'tree>) -> Self {
-        Self { type_: value.type_.into(), return_node: value.defined_value, explicit_type: value.explicit_type }
+        Self { type_: RlReturnType::from(value.type_), return_node: value.defined_value, explicit_type: value.explicit_type }
     }
 }

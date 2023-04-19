@@ -1,25 +1,26 @@
+use std::borrow::Borrow;
 use std::fmt::Display;
-use indexmap::Equivalent;
-use crate::analyses::bindings::FieldName;
+use crate::analyses::bindings::{FieldName, TypeNameStr};
 use crate::analyses::types::{FatType, HasNullability, Nullability, ThinType, TypeStructure, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileLogger, TypeLogger};
 use crate::{error, issue, hint_if};
+use join_lazy_fmt::Join;
 
 impl FatType {
     /// Returns the member access type.
     /// Will log an error if this is a nominal or structural type and not an object or doesn't
     /// contain the field. Also throws an error on non-nullable access of a nullable type.
-    pub fn member(
+    pub fn member<N: Display + ?Sized>(
         &self,
-        field_name: &impl Equivalent<FieldName> + Display,
+        field_name: &N,
         is_nullable_access: bool,
         thin_type: &ThinType,
         loc_node: TSNode<'_>,
         defined_value: Option<TSNode<'_>>,
         explicit_type: Option<TSNode<'_>>,
         e: &FileLogger<'_>
-    ) -> FatType {
+    ) -> FatType where FieldName: Borrow<N> {
         if matches!(self.nullability(), Nullability::Nullable) && !is_nullable_access {
             error!(e, "Can't do non-nullable member access on potentially nullable type {}", thin_type => loc_node;
                     hint_if!(defined_value => "type inferred here" => defined_value);
@@ -31,7 +32,7 @@ impl FatType {
             FatType::Structural { .. } | FatType::Nominal { .. } => self.with_structure(|structure| match structure {
                 Some(TypeStructure::Object { field_types }) => {
                     let member_type = field_types.iter()
-                        .find(|f| field_name.equivalent(&f.name))
+                        .find(|f| f.name.borrow() == field_name)
                         .map(|f| f.type_.clone().collapse_optionality_into_nullability());
                     match member_type {
                         None => {
@@ -42,8 +43,7 @@ impl FatType {
                             FatType::NULL
                         }
                         Some(mut member_type) => {
-                            member_type.make_nullable_if(is_optional);
-                            member_type |= nullability;
+                            member_type.make_nullable_if(is_nullable_access || matches!(self.nullability(), Nullability::Nullable));
                             member_type
                         }
                     }
@@ -71,7 +71,7 @@ impl FatType {
                     explicit_type,
                     e
                 );
-                result |= nullability;
+                result.make_nullable_if(matches!(nullability, Nullability::Nullable));
                 result
             }
         }
@@ -125,16 +125,14 @@ impl FatType {
                             FatType::NULL
                         }
                         Some(mut subscript_type) => {
-                            subscript_type.make_nullable_if(is_optional);
-                            subscript_type |= nullability;
+                            subscript_type.make_nullable_if(is_nullable_access || matches!(self.nullability(), Nullability::Nullable));
                             subscript_type
                         }
                     }
                 }
                 Some(TypeStructure::Array { element_type }) => {
-                    let mut subscript_type = element_type.clone().collapse_optionality_into_nullability();
-                    subscript_type.make_nullable_if(is_optional);
-                    subscript_type |= nullability;
+                    let mut subscript_type = element_type.as_ref().clone();
+                    subscript_type.make_nullable_if(is_nullable_access || matches!(self.nullability(), Nullability::Nullable));
                     subscript_type
                 }
                 structure => {
@@ -160,7 +158,7 @@ impl FatType {
                     explicit_type,
                     e
                 );
-                result |= nullability;
+                result.make_nullable_if(matches!(nullability, Nullability::Nullable));
                 result
             }
         }
@@ -170,7 +168,6 @@ impl FatType {
     /// Will throw an error if this is a nominal or structural type and not a promise.
     pub fn awaited(
         &self,
-        is_nullable_access: bool,
         thin_type: &ThinType,
         loc_node: TSNode<'_>,
         defined_value: Option<TSNode<'_>>,
@@ -180,11 +177,10 @@ impl FatType {
         match self {
             FatType::Any => FatType::Any,
             FatType::Never { nullability } => FatType::Never { nullability: *nullability },
-            FatType::Structural { .. } | FatType::Nominal { .. } => self.with_idents(|ids| match ids.into_iter().flatten().find(|id| id.name == "Promise") {
+            FatType::Structural { .. } | FatType::Nominal { .. } => self.with_idents(|ids| match ids.into_iter().flatten().find(|id| &id.name == TypeNameStr::of("Promise")) {
                 Some(promise) => {
                     let mut awaited_type = promise.generic_args.get(0).cloned().unwrap_or(FatType::Any);
-                    awaited_type.make_nullable_if(is_optional);
-                    awaited_type |= nullability;
+                    awaited_type.make_nullable_if(matches!(self.nullability(), Nullability::Nullable));
                     awaited_type
                 }
                 None => {
@@ -197,16 +193,14 @@ impl FatType {
             // TODO: Fix this and other cases which just assume hole.upper_bound.borrow is ok;
             //    they should proably use a mapped hole or something
             FatType::Hole { nullability, hole } => {
-                let mut result = hole.upper_bound.borrow().subscript(
-                    index,
-                    is_nullable_access,
+                let mut result = hole.upper_bound.borrow().awaited(
                     thin_type,
                     loc_node,
                     defined_value,
                     explicit_type,
                     e
                 );
-                result |= nullability;
+                result.make_nullable_if(matches!(nullability, Nullability::Nullable));
                 result
             }
         }

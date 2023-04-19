@@ -122,8 +122,8 @@ impl<'tree> ModuleScopes<'tree> {
 
     /// Iterate through this scope and all its lexical descendants *which have been created* i.e. "seen"
     pub fn seen_return_types_of<'a>(&'a self, scope: &'a InactiveScopePtr<'tree>, typed_exprs: &'a ExprTypeMap<'tree>) -> impl Iterator<Item=DeterminedReturnType<'tree>> + 'a {
-        once(scope).chain(self.seen_lexical_descendants_of(scope))
-            .map(|scope| scope.activate_ref().values.return_type(typed_exprs))
+        once(scope.activate_ref().values.return_type(typed_exprs))
+            .chain(self.seen_lexical_descendants_of(scope).filter_map(|scope| scope.activate_ref().values.explicit_return_type(typed_exprs)))
     }
 }
 

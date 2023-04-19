@@ -2,7 +2,6 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use derive_more::Display;
-use indexmap::Equivalent;
 use smol_str::SmolStr;
 use crate::analyses::scopes::ExprTypeMap;
 
@@ -49,33 +48,39 @@ impl AsRef<str> for $Name {
     }
 }
 
-impl Borrow<$Name> for $Name {
-    fn borrow(&self) -> &$Name {
-        self
+impl Borrow<$NameStr> for $Name {
+    fn borrow(&self) -> &$NameStr {
+        $NameStr::of(self)
     }
 }
 
-impl Borrow<$NameStr> for $Name {
-    fn borrow(&self) -> &$NameStr {
-        $NameStr::from(self.as_ref())
+impl PartialEq<$NameStr> for $Name {
+    fn eq(&self, other: &$NameStr) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl PartialOrd<$NameStr> for $Name {
+    fn partial_cmp(&self, other: &$NameStr) -> Option<std::cmp::Ordering> {
+        self.as_ref().partial_cmp(other.as_ref())
     }
 }
 
 impl $NameStr {
-    pub fn of(s: impl AsRef<str>) -> &Self {
+    pub fn of(s: &(impl AsRef<str> + ?Sized)) -> &Self {
         // SAFETY: Same repr + transparent
         unsafe { &*(s.as_ref() as *const str as *const Self) }
     }
 }
 
 impl<'a> From<&'a str> for &'a $NameStr {
-    fn from(s: &'a str) -> &'a Self {
-        Self::of(s)
+    fn from(s: &'a str) -> Self {
+        $NameStr::of(s)
     }
 }
 
 impl<'a> From<&'a $Name> for &'a $NameStr {
-    fn from(s: &'a $Name) -> &'a Self {
+    fn from(s: &'a $Name) -> Self {
         Self::from(s.as_ref())
     }
 }
@@ -83,13 +88,19 @@ impl<'a> From<&'a $Name> for &'a $NameStr {
 impl AsRef<str> for $NameStr {
     fn as_ref(&self) -> &str {
         // SAFETY: Same repr + transparent
-        unsafe { &*(s as *const str as *const Self) }
+        unsafe { &*(self as *const Self as *const str) }
     }
 }
 
-impl Into<SmolStr> for $NameStr {
-    fn into(self) -> SmolStr {
-        self.as_ref().into()
+impl PartialEq<$Name> for $NameStr {
+    fn eq(&self, other: &$Name) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl PartialOrd<$Name> for $NameStr {
+    fn partial_cmp(&self, other: &$Name) -> Option<std::cmp::Ordering> {
+        self.as_ref().partial_cmp(other.as_ref())
     }
 }
     )+ };
@@ -195,12 +206,12 @@ impl GlobalValueBinding {
         }
     }
 
-    pub fn has(name: &impl Equivalent<ValueName>) -> bool {
+    pub fn has<N: ?Sized>(name: &N) -> bool where ValueName: Borrow<N> {
         // TODO: something with lazy_static
         name; false
     }
 
-    pub fn get(name: &impl Equivalent<ValueName>) -> Option<&'static GlobalValueBinding> {
+    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalValueBinding> where ValueName: Borrow<N> {
         // TODO: something with lazy_static
         name; None
     }
@@ -248,12 +259,12 @@ impl GlobalTypeBinding {
         }
     }
 
-    pub fn has(name: &impl Equivalent<TypeName>) -> bool {
+    pub fn has<N: ?Sized>(name: &N) -> bool where TypeName: N {
         // TODO: something with lazy_static
         name; false
     }
 
-    pub fn get(name: &impl Equivalent<TypeName>) -> Option<&'static GlobalTypeBinding> {
+    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalTypeBinding> where TypeName: N {
         // TODO: something with lazy_static
         name; None
     }

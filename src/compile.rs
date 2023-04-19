@@ -7,12 +7,12 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::{FieldName, FieldNameStr, GlobalTypeBinding, GlobalValueBinding, TypeNameStr, ValueBinding, ValueNameStr};
-use crate::analyses::scopes::{ModuleCtx, ScopeChain};
-use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, Nullability, OptionalType, ResolveCtx, ResolvedLazyTrait, ReturnType, RlReturnType, RlType, TypeStructure, Variance};
+use crate::analyses::bindings::{FieldName, FieldNameStr, GlobalTypeBinding, TypeNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
+use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, TypeStructure, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
-use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSQueryCursor, TSTree};
+use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSCursor, TSNode, TSQueryCursor, TSTree};
 use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger, TypeLogger};
 use crate::import_export::export::{Exports, Module};
@@ -170,7 +170,7 @@ pub(crate) fn finish_transpile<'tree>(
     ctx: &ResolveCtx<'_>,
 ) {
     // TODO: Add guards (in type analysis, but probably first in function decls we've already scanned. We have to wait until we're in the return block though)
-    let mut e = ctx.logger();
+    let e = ctx.logger();
     // Random operation cursor
     let mut c = ast.walk();
     let mut c2 = ast.walk();
@@ -226,21 +226,24 @@ pub(crate) fn finish_transpile<'tree>(
                             let mut fun_scope = fun_scope_inactive.activate_ref();
                             // TODO: Scope nominal type params as well
                             // Declare parameters in function scope and assign explicit types
-                            let set_params = |params: impl IntoIterator<Item=Rc<AstParameter>>| fun_scope.set_params(params.into_iter().map(|param| {
-                                skip_nodes.extend(param.node.named_children(&mut c2)
-                                    .filter(|param_child_node| Some(param_child_node) != param.value.as_ref()))
-                            }));
+                            fn set_params<'tree>(fun_scope: &mut ActiveScopeRef<'_, 'tree>, skip_nodes: &mut HashSet<TSNode<'tree>>, c2: &mut TSCursor<'tree>, params: impl IntoIterator<Item=Rc<AstParameter<'tree>>>) {
+                                fun_scope.set_params(params.into_iter().map(|param| {
+                                    skip_nodes.extend(param.node.named_children(c2)
+                                        .filter(|param_child_node| Some(param_child_node) != param.value.as_ref()));
+                                    param
+                                }));
+                            }
                             match (decl, node.field_child("parameters")) {
                                 // Decl parameters
-                                (Some(decl), _) => set_params(decl.formal_params.clone()),
+                                (Some(decl), _) => set_params(&mut fun_scope, &mut skip_nodes, &mut c2, decl.formal_params.clone()),
                                 // Expression formal parameters
                                 (None, Some(parameters_node)) => {
-                                    set_params(parameters_node.named_children(&mut c).map(|x| Rc::new(AstParameter::formal(&scope, x, is_arrow))))
+                                    set_params(&mut fun_scope, &mut skip_nodes, &mut c2, parameters_node.named_children(&mut c).map(|x| Rc::new(AstParameter::formal(&scope, x, is_arrow))))
                                 },
                                 // Arrow parameter
                                 (None, None) => {
                                     debug_assert!(is_arrow);
-                                    set_params(once(Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))))
+                                    set_params(&mut fun_scope, &mut skip_nodes, &mut c2, once(Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))))
                                 }
                             };
                         } else {
@@ -250,37 +253,39 @@ pub(crate) fn finish_transpile<'tree>(
                                 x.mark();
                                 AstReturnType::new(fun_scope_inactive, x.named_child(0).unwrap())
                             });
-                            let process_inferred_return_types = |inferred_return_types: impl IntoIterator<Item=DeterminedReturnType<'tree>>| -> Option<RlReturnType> {
+                            fn process_inferred_return_types<'tree>(explicit_return_type_ast: Option<AstReturnType<'tree>>, node: TSNode<'tree>, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>, inferred_return_types: impl IntoIterator<Item=DeterminedReturnType<'tree>>) -> Option<RlReturnType> {
                                 let mut inferred_return_types = inferred_return_types.into_iter();
                                 match explicit_return_type_ast {
                                     None => {
                                         // Assign inferred return type
-                                        let inferred_return_type = FatType::unify_all(
+                                        let inferred_return_type = FatType::unify_all_returns(
                                             inferred_return_types.map(|inferred_return_type| inferred_return_type.type_.into_resolve(ctx).1),
                                             Variance::Bivariant,
                                             TypeLogger::ignore()
                                         );
-                                        Some(RlReturnType::resolved(ReturnType::Type(inferred_return_type)))
+                                        Some(RlReturnType::resolved(inferred_return_type))
                                     }
                                     Some(explicit_return_type_ast) => {
                                         // Check explicit return type
-                                        let mut last_inferred_return_type_det = inferred_return_types.next();
+                                        let mut last_inferred_return_type_det = inferred_return_types.next().expect("function always at least has one return type (the implicit return)");
                                         while let Some(next_inferred_return_type_det) = inferred_return_types.next() {
-                                            last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, &e, ctx);
+                                            last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast.clone()), node, e, ctx);
                                             last_inferred_return_type_det = next_inferred_return_type_det;
                                         };
                                         // We can consume the last one
-                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, &e, ctx);
+                                        last_inferred_return_type_det.check_subtype(Some(explicit_return_type_ast), node, e, ctx);
                                         None
                                     }
                                 }
-                            };
+                            }
                             // It's easier to just check if there is a type assigned instead of checking
                             // if body itself is an expression, since there are many expression node
                             // types. If it's not than there will never be a type assigned
                             let custom_inferred_return_type = match m.typed_exprs.get(body) {
-                                None => process_inferred_return_types(m.scopes.seen_return_types_of(fun_scope_inactive, &m.typed_exprs)),
-                                Some(inferred_return_type) => process_inferred_return_types(once(DeterminedReturnType::from(inferred_return_type.clone())))
+                                // We get seen return types in the scope
+                                None => process_inferred_return_types(explicit_return_type_ast, node, &e, ctx, m.scopes.seen_return_types_of(fun_scope_inactive, &m.typed_exprs)),
+                                // Body is expression and it's the return type
+                                Some(inferred_return_type) => process_inferred_return_types(explicit_return_type_ast, node, &e, ctx, once(DeterminedReturnType::from(inferred_return_type.clone())))
                             };
                             match decl {
                                 None => {
@@ -306,7 +311,7 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "variable_declarator" => {
                         let name_node = node.field_child("name").unwrap();
-                        let name = ValueNameStr::of(name_node);
+                        let name = ValueNameStr::of(name_node.text());
                         let nominal_type = node.field_child("nominal_type")
                             .map(|x| AstType::of_annotation(&scope, x));
                         let value = node.field_child("value");
@@ -318,7 +323,7 @@ pub(crate) fn finish_transpile<'tree>(
                                 m.typed_exprs.require(value, nominal_type)
                             }
                             // Don't traverse binding ids
-                            skip_nodes.insert(name_node)
+                            skip_nodes.insert(name_node);
                             // We also don't traverse nominal type but it's unnecessary to add
                             // because that gets skipped anyways (deleted)
                         }
@@ -347,7 +352,7 @@ pub(crate) fn finish_transpile<'tree>(
                             let right = node.named_child(1).unwrap();
                             let left_type = m.typed_exprs.get(left);
                             if let Some(left_type) = left_type {
-                                m.typed_exprs.require(right, left_type)
+                                m.typed_exprs.require(right, left_type.clone())
                             }
                             // Can't re-assign right type to the left id,
                             // because of issues with scope and loops/break,
@@ -356,7 +361,7 @@ pub(crate) fn finish_transpile<'tree>(
                             // and thus can be inside other expressions
                             let assigned_type = left_type.or_else(|| m.typed_exprs.get(right));
                             if let Some(assigned_type) = assigned_type {
-                                m.typed_exprs.assign(node, assigned_type)
+                                m.typed_exprs.assign(node, assigned_type.clone())
                             }
                         }
                     }
@@ -389,7 +394,7 @@ pub(crate) fn finish_transpile<'tree>(
                             let last = node.last_named_child().unwrap();
                             let last_type = m.typed_exprs.get(last);
                             if let Some(last_type) = last_type {
-                                m.typed_exprs.assign(node, last_type)
+                                m.typed_exprs.assign(node, last_type.clone())
                             }
                         }
                     }
@@ -397,7 +402,7 @@ pub(crate) fn finish_transpile<'tree>(
                         if traversal_state.is_up() {
                             let object = node.named_child(0).unwrap();
                             let field_name = FieldNameStr::of(node.field_child("property").unwrap().text());
-                            let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                            let is_nullable_access = node.child_of_kind("optional_chain", &mut c).is_some();
                             let object_type_det = m.typed_exprs.get(object);
                             if let Some(object_type_det) = object_type_det {
                                 let field_type = object_type_det.member_type(field_name, is_nullable_access, node, &e, ctx);
@@ -409,7 +414,7 @@ pub(crate) fn finish_transpile<'tree>(
                         if traversal_state.is_up() {
                             let array = node.named_child(0).unwrap();
                             let index = node.field_child("index").unwrap().text().parse::<usize>().ok();
-                            let is_nullable_access = node.child_of_type("optional_chain").is_some();
+                            let is_nullable_access = node.child_of_kind("optional_chain", &mut c).is_some();
                             let array_type_det = m.typed_exprs.get(array);
                             if let Some(array_type_det) = array_type_det {
                                 let element_type = array_type_det.subscript_type(index, is_nullable_access, node, &e, ctx);
@@ -422,7 +427,7 @@ pub(crate) fn finish_transpile<'tree>(
                             let promise = node.named_child(0).unwrap();
                             let promise_type_det = m.typed_exprs.get(promise);
                             if let Some(promise_type_det) = promise_type_det {
-                                let inner_type = promise_type_det.awaited_type(is_nullable_access, node, &e, ctx);
+                                let inner_type = promise_type_det.awaited_type(node, &e, ctx);
                                 m.typed_exprs.assign(node, inner_type);
                             }
                         }
@@ -453,7 +458,7 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "parenthesized_expression" => {
                         let expr = node.named_child(0).unwrap();
-                        let type_ = node.field_child("nominal_type").map(|t| AstType::of_annotation(&scope, type_));
+                        let type_ = node.field_child("nominal_type").map(|t| AstType::of_annotation(&scope, t));
                         if !traversal_state.is_up() {
                             if let Some(type_) = type_ {
                                 m.typed_exprs.require(expr, type_.clone());
@@ -477,9 +482,7 @@ pub(crate) fn finish_transpile<'tree>(
                             break 'outer
                         };
                         let def_type = def.infer_type_det(Some(&m.typed_exprs), ctx);
-                        if let Some(def_type) = def_type {
-                            m.typed_exprs.assign(node, def_type);
-                        }
+                        m.typed_exprs.assign(node, def_type);
                     }
                     "true" => {
                         // No children
@@ -510,7 +513,7 @@ pub(crate) fn finish_transpile<'tree>(
                         if traversal_state.is_up() {
                             let field_nodes = node.named_children(&mut c);
                             let mut type_override = None;
-                            let mut fields = Vec::with_capacity(field_nodes.len());
+                            let mut fields = Vec::with_capacity(field_nodes.size_hint().0);
                             for field_node in field_nodes {
                                 match field_node.kind() {
                                     "pair" => {
@@ -539,7 +542,7 @@ pub(crate) fn finish_transpile<'tree>(
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalValueBinding::get(ValueNameStr::of("Object")).expect("builtin Object type should exist").type_det());
+                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {
@@ -556,7 +559,7 @@ pub(crate) fn finish_transpile<'tree>(
                                                 fields.extend(field_types.iter().map(|Field { name, type_ }| {
                                                     let mut type_ = type_.as_ref();
                                                     type_.make_optional_if(spread_is_nullable);
-                                                    (name.as_str(), type_)
+                                                    (name.as_ref(), type_)
                                                 }))
                                             }
                                             _ => {
@@ -570,18 +573,24 @@ pub(crate) fn finish_transpile<'tree>(
                             let type_ = type_override.unwrap_or_else(|| {
                                 fields.dedup_by(|(key1, _), (key2, _)| key1 == key2);
                                 FatType::object(fields.into_iter().map(|(name, type_)| Field {
-                                    name: FieldName::of(name),
+                                    name: FieldName::new(name),
                                     type_: type_.cloned()
                                 }))
                             });
-                            m.typed_exprs.assign(node, type_);
+                            m.typed_exprs.assign(node, DeterminedType {
+                                // ???: We can do better be taking the thin types to construct a thin object as well,
+                                //    but does it actually improve the thin signature?
+                                type_: RlType::resolved(type_),
+                                defined_value: Some(node),
+                                explicit_type: None,
+                            });
                         }
                     }
                     "array" => {
                         if traversal_state.is_up() {
                             let elem_nodes = node.named_children(&mut c);
                             let mut type_override = None;
-                            let mut elems = Vec::with_capacity(elem_nodes.len());
+                            let mut elems = Vec::with_capacity(elem_nodes.size_hint().0);
                             let mut is_array = false;
                             for elem_node in elem_nodes {
                                 match elem_node.kind() {
@@ -594,7 +603,7 @@ pub(crate) fn finish_transpile<'tree>(
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalValueBinding::get(ValueNameStr::of("Array")).expect("builtin Array type should exist").type_det());
+                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {
@@ -637,13 +646,19 @@ pub(crate) fn finish_transpile<'tree>(
                                     FatType::tuple(elems)
                                 }
                             });
-                            m.typed_exprs.assign(node, type_);
+                            m.typed_exprs.assign(node, DeterminedType {
+                                // ???: We can do better be taking the thin types to construct a thin object as well,
+                                //    but does it actually improve the thin signature?
+                                type_: RlType::resolved(type_),
+                                defined_value: Some(node),
+                                explicit_type: None,
+                            });
                         }
                     }
                     "nominal_wrap_expression" |
                     "nominal_wrap_unchecked_expression" => {
                         if !traversal_state.is_up() {
-                            let is_checked = node_type == "nominal_wrap_expression";
+                            let is_checked = node.kind() == "nominal_wrap_expression";
                             let nominal_type = AstType::new(&scope, node.named_child(0).unwrap());
                             let expr = node.named_child(1).unwrap();
                             if is_checked {
@@ -663,7 +678,7 @@ pub(crate) fn finish_transpile<'tree>(
                     "function_nominal_type" |
                     "nullable_nominal_type" => {
                         skip_children = true;
-                        error!("Unhandled nominal type (nominal type in currently unsupported position)" => node);
+                        error!(e, "Unhandled nominal type (nominal type in currently unsupported position)" => node);
                     }
                     _ => {}
                 }

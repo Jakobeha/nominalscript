@@ -4,7 +4,7 @@ use once_cell::unsync::{Lazy, OnceCell};
 
 use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::import_export::export::ImportPath;
 
@@ -183,7 +183,7 @@ macro_rules! impl_down_to_fn_decl {
                 Some(self)
             }
         }
-    }
+    };
     ($Type:ident) => {
         impl<'tree> $Type<'tree> {
             fn _down_to_fn_decl(&self) -> Option<&AstFunctionDecl<'tree>> {
@@ -230,7 +230,7 @@ macro_rules! impl_ast_value_binding {
                 }
             }
 
-            impl_down_to_fn_decl!($Type)
+            impl_down_to_fn_decl!($Type);
         )+
     }
 }
@@ -676,12 +676,12 @@ impl<'tree> AstFunctionDecl<'tree> {
         let fn_type = ResolvedLazy::new(scope, ThinType::func(
             nominal_params.iter().map(|param| param.shape.thin.clone()),
             formal_params.iter().find(|param| param.is_this_param)
-                .map(AstParameter::thin)
+                .map(|p| p.thin())
                 .unwrap_or_default(),
             formal_params.iter().filter(|param| !param.is_this_param && !param.is_rest_param)
-                .map(AstParameter::optional_thin),
+                .map(|p| p.optional_thin()),
             formal_params.iter().find(|param| param.is_rest_param)
-                .map(AstParameter::thin)
+                .map(|p| p.thin())
                 .unwrap_or(ThinType::EMPTY_REST_ARG),
             return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
                 .unwrap_or_default()

@@ -262,6 +262,13 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
             fat: OnceCell::with_option(self.fat.into_inner().map(f_fat))
         }
     }
+
+    /// Assumes that the invariants of [Self::bimap] are maintained by the `From` conversions.
+    pub fn from<OldThin: Into<Thin>, OldFat: Into<Fat>>(other: ResolvedLazy<OldThin, OldFat>) -> Self {
+        // SAFETY: `From` conversion is assumed to be injective.
+        //     And even if not, this is not `unsafe` to avoid UB, only for extra scrutiny
+        unsafe { other.bimap(|t| t.into(), |t| t.into()) }
+    }
 }
 
 impl ToThin<ThinType> for FatType {
@@ -325,7 +332,7 @@ impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
 
 impl ResolveInto<FatTypeDecl> for ThinTypeDecl {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
-        let supers = self.supertypes.iter().map(|t| t.resolve(scope, ctx)).collect();
+        let supers = self.supertypes.iter().map(|t| t.resolve(scope, ctx));
         let mut inherited = FatTypeInherited {
             super_ids: VecDeque::new(),
             structure: None,
@@ -460,7 +467,7 @@ impl RlType {
     /// **Panics** if this is not a structural function type.
     /// Replaces the return type.
     pub fn with_return_type(self, return_type: RlReturnType, ctx: &ResolveCtx<'_>) -> RlType {
-        let (thin_return_type, fat_return_type) = return_type.into_thin_fat(ctx);
+        let (thin_return_type, fat_return_type) = return_type.into_resolve(ctx);
         // SAFETY: bimap preserves thin/fat relation
         unsafe {
             self.bimap(
@@ -501,7 +508,8 @@ impl DynRlType {
 }
 
 impl RlReturnType {
-    pub fn resolved_void() -> Self {
+    /// Functions with no `return` statement at the end implicitly return `Void` AKA this
+    pub fn implicit_void() -> Self {
         Self::resolved(ReturnType::Void)
     }
 
@@ -516,13 +524,5 @@ impl Debug for ResolveCache {
             .field("types_in_progress", &self.types_in_progress.borrow())
             .field("types", &"...")
             .finish()
-    }
-}
-
-impl<Thin: From<Thin2>, Fat: From<Fat2>, Thin2, Fat2> From<ResolvedLazy<Thin2, Fat2>> for ResolvedLazy<Thin, Fat> {
-    fn from(other: ResolvedLazy<Thin2, Fat2>) -> Self {
-        // SAFETY: `From` conversion is assumed to be injective.
-        //     And even if not, this is not `unsafe` to avoid UB, only for extra scrutiny
-        unsafe { other.bimap(Thin::from, Fat::from) }
     }
 }

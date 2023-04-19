@@ -6,7 +6,7 @@ use crate::analyses::types::{ThinType, TypeLoc};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
 use crate::import_export::ModulePath;
-use crate::note;
+use crate::{note, hint, issue};
 
 /// Allows you to log project (global or file) diagnostics.
 ///

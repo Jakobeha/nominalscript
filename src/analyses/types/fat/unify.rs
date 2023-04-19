@@ -913,6 +913,24 @@ impl FatType {
         inherited
     }
 
+    /// [Unifies](FatType::unify_return) all types and logs subtype/disjoint errors based on `bias`.
+    ///
+    /// `bias` is transitive, so e.g. covariant bias would mean every types must be a subtype of
+    /// types which come afterward.
+    ///
+    /// **Panics** if there are no types, since there should at least be the implicit void return
+    /// if there are no return statements anywhere in-scope
+    pub fn unify_all_returns(types: impl IntoIterator<Item=ReturnType<Self>>, bias: Variance, e: TypeLogger<'_, '_, '_>) -> ReturnType<Self> {
+        let mut types = types.into_iter();
+        let Some(mut result) = types.next() else {
+            panic!("unify_all_returns called with no return types")
+        };
+        for (index, other) in types.enumerate() {
+            Self::unify_return(&mut result, other, bias, e.with_context(TypeLoc::Position { index }));
+        }
+        result
+    }
+
     /// [Unifies](FatType::unify) all types and logs subtype/disjoint errors based on `bias`.
     ///
     /// `bias` is transitive, so e.g. covariant bias would mean every types must be a subtype of

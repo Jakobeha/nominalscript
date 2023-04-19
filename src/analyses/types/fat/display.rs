@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 use join_lazy_fmt::Join;
-use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, RestArgTrait, ThinType, TypeIdent, TypeStructure, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType};
+use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, ThinType, TypeIdent, TypeStructure, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType, ReturnType, RestArgTrait};
 use crate::misc::DisplayWithCtx;
 
 /// Context which affects how a type is formatted when printed. This includes rules like
@@ -192,13 +192,13 @@ impl<Type: Display> Display for TypeIdent<Type> {
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: DisplayWithCtx<DisplayInherited>, RestArgType: Display> Display for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> Display for TypeStructure<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.with_ctx(&TypeDisplayCtx::default()))
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: DisplayWithCtx<DisplayInherited>, RestArgType: Display> DisplayWithCtx<TypeDisplayCtx> for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for TypeStructure<Type> {
     fn fmt(&self, f: &mut Formatter<'_>, ctx: &TypeDisplayCtx) -> std::fmt::Result {
         match self {
             TypeStructure::Fn { fn_type } => write!(f, "{}", fn_type.with_ctx(ctx)),
@@ -213,7 +213,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWith
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, Inherited: DisplayWithCtx<DisplayInherited>, RestArgType: Display> DisplayWithCtx<TypeDisplayCtx> for FnType<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for FnType<Type> {
     fn fmt(&self, f: &mut Formatter<'_>, ctx: &TypeDisplayCtx) -> std::fmt::Result {
         if ctx.must_paren_fn {
             write!(f, "(")?;
@@ -241,7 +241,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, In
             wrote_args = true;
             write!(f, "...{}", self.rest_arg_type)?;
         }
-        write!(") => {}", self.return_type)?;
+        write!(f, ") => {}", self.return_type)?;
         if ctx.must_paren_fn {
             write!(f, "(")?;
         }
@@ -249,7 +249,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, In
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited> + Display, Inherited: DisplayWithCtx<DisplayInherited>> Display for TypeParam<Type> {
+impl<Type: TypeTrait<Inherited=Inherited> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>> Display for TypeParam<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.variance_bound != Variance::default() {
             write!(f, "{} ", self.variance_bound)?;
@@ -288,5 +288,14 @@ impl<Type: Display> Display for OptionalType<Type> {
 impl<Type: Display> Display for Field<OptionalType<Type>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}{}: {}", self.name, self.type_.optionality, self.type_.type_)
+    }
+}
+
+impl<Type: Display> Display for ReturnType<Type> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReturnType::Void => write!(f, "Void"),
+            ReturnType::Type(type_) => write!(f, "{}", type_),
+        }
     }
 }

@@ -2,12 +2,13 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::iter::{once, repeat};
+use std::ops::Range;
 use std::rc::Rc;
 
 pub use data::*;
 
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom};
+use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom};
 use crate::diagnostics::TypeLogger;
 use crate::misc::{once_if, rc_unwrap_or_clone};
 
@@ -319,6 +320,45 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
     }
 }
 
+impl FnType<FatType> {
+    /// Min and max number of arguments.
+    /// Returns `usize::MAX` for unbounded max arguments (array rest type)
+    pub fn arity_range(&self) -> Range<usize> {
+        let min = self.arg_types.len() - self.arg_types.iter().rev().take_while(|x| matches!(x.optionality, Optionality::Optional)).count();
+        let max = match self.rest_arg_type {
+            FatRestArgType::None => self.arg_types.len(),
+            FatRestArgType::Array { .. } => usize::MAX,
+            FatRestArgType::Illegal { .. } => self.arg_types.len()
+        };
+        min..max
+    }
+}
+
+impl TypeParam<FatType> {
+    pub fn into_decl(self) -> FatTypeDecl {
+        FatTypeDecl {
+            name: self.name,
+            // No higher-kinded types
+            type_params: Vec::new(),
+            inherited: self.supers
+        }
+    }
+
+    /// Converts this into the nominal type it declares: for [FatType], just a nominal type with
+    /// the name and inherited
+    pub fn into_type(self) -> FatType {
+        FatType::Nominal {
+            nullability: Nullability::NonNullable,
+            id: TypeIdent {
+                name: self.name,
+                // No HKTs
+                generic_args: Vec::new()
+            },
+            inherited: self.supers
+        }
+    }
+}
+
 impl FatTypeInherited {
     pub const EMPTY: Self = Self::empty();
 
@@ -563,31 +603,6 @@ impl From<FatType> for FatTypeHole {
     fn from(t: FatType) -> Self {
         Self {
             upper_bound: Rc::new(RefCell::new(t))
-        }
-    }
-}
-
-impl TypeParam<FatType> {
-    pub fn into_decl(self) -> FatTypeDecl {
-        FatTypeDecl {
-            name: self.name,
-            // No higher-kinded types
-            type_params: Vec::new(),
-            inherited: self.supers
-        }
-    }
-
-    /// Converts this into the nominal type it declares: for [FatType], just a nominal type with
-    /// the name and inherited
-    pub fn into_type(self) -> FatType {
-        FatType::Nominal {
-            nullability: Nullability::NonNullable,
-            id: TypeIdent {
-                name: self.name,
-                // No HKTs
-                generic_args: Vec::new()
-            },
-            inherited: self.supers
         }
     }
 }
