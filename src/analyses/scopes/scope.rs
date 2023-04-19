@@ -1,4 +1,6 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::marker::PhantomPinned;
 use std::rc::Rc;
 
@@ -228,40 +230,40 @@ impl<'tree> ValueScope<'tree> {
         self.params.values().map(|param| param.as_ref())
     }
 
-    pub fn hoisted(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn hoisted<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
         self.hoisted.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>)
             .or_else(|| self.params.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>))
     }
 
-    pub fn has_any(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> bool {
+    pub fn has_any<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> bool where ValueName: Borrow<N> {
         self.sequential.contains_key(name) || self.hoisted.contains_key(name) || self.params.contains_key(name)
     }
 
-    pub fn last(&self, name: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn last<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
         self.sequential.get(name).map(|sequential| {
             sequential.last().expect("sequential should never be Some(<empty vec>)").as_ref() as &DynAstValueBinding<'tree>
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn has_at_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> bool {
+    pub fn has_at_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> bool where ValueName: Borrow<N> {
         self.at_pos(name, pos_node).is_some()
     }
 
-    pub fn at_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> {
+    pub fn at_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
         return self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &DynAstValueBinding<'tree>)
         }).or_else(|| self.hoisted(name))
     }
 
-    pub fn at_exact_pos(&self, name: &(impl Equivalent<ValueName> + ?Sized), pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> {
+    pub fn at_exact_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> where ValueName: Borrow<N> {
         self.sequential.get(name).and_then(|sequential| {
             sequential.iter().rfind(|decl| decl.node().end_byte() >= pos_node.end_byte() && decl.node().start_byte() <= pos_node.start_byte())
                 .map(|decl| decl.as_ref() as &AstValueDecl<'tree>)
         })
     }
 
-    pub fn exported(&self, alias: &(impl Equivalent<ValueName> + ?Sized)) -> Option<&ExportedId<ValueName>> {
+    pub fn exported<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, alias: &N) -> Option<&ExportedId<ValueName>> where ValueName: Borrow<N> {
         self.exported.get(alias)
     }
 
@@ -341,11 +343,11 @@ impl<'tree> TypeScope<'tree> {
         });
     }
 
-    pub fn has_any(&self, name: &(impl Equivalent<TypeName> + ?Sized)) -> bool {
+    pub fn has_any<N: Equivalent<TypeName> + Eq + Hash + ?Sized>(&self, name: &N) -> bool where TypeName: Borrow<N> {
         self.hoisted.contains_key(name)
     }
 
-    pub fn get(&self, name: &(impl Equivalent<TypeName> + ?Sized)) -> Option<&DynAstTypeBinding<'tree>> {
+    pub fn get<N: Equivalent<TypeName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstTypeBinding<'tree>> where TypeName: Borrow<N> {
         self.hoisted.get(name).map(|decl| decl.as_ref() as &DynAstTypeBinding<'tree>)
     }
 
@@ -362,7 +364,7 @@ impl<'tree> TypeScope<'tree> {
         Some(inherited)
     }
 
-    pub fn exported(&self, alias: &(impl Equivalent<TypeName> + ?Sized)) -> Option<&ExportedId<TypeName>> {
+    pub fn exported<N: Equivalent<TypeName> + Eq + Hash + ?Sized>(&self, alias: &N) -> Option<&ExportedId<TypeName>> where TypeName: Borrow<N> {
         self.exported.get(alias)
     }
 }

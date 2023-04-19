@@ -11,7 +11,7 @@ impl FatType {
     /// Returns the member access type.
     /// Will log an error if this is a nominal or structural type and not an object or doesn't
     /// contain the field. Also throws an error on non-nullable access of a nullable type.
-    pub fn member<N: Display + ?Sized>(
+    pub fn member<N: Eq + Display + ?Sized>(
         &self,
         field_name: &N,
         is_nullable_access: bool,
@@ -37,7 +37,7 @@ impl FatType {
                     match member_type {
                         None => {
                             error!(e, "No such field {} in {}", field_name, thin_type => loc_node;
-                                issue!("the fields are: {}", ", ".join(field_types.iter().map(|f| f.name)));
+                                issue!("the fields are: {}", ", ".join(field_types.iter().map(|f| &f.name)));
                                 hint_if!(defined_value => "type inferred here" => defined_value);
                                 hint_if!(explicit_type => "type declared here" => explicit_type));
                             FatType::NULL
@@ -62,7 +62,7 @@ impl FatType {
             // TODO: Fix this and other cases which just assume hole.upper_bound.borrow is ok;
             //    they should proably use a mapped hole or something
             FatType::Hole { nullability, hole } => {
-                let mut result = hole.upper_bound.borrow().member(
+                let mut result = hole.upper_bound.as_ref().borrow().member(
                     field_name,
                     is_nullable_access,
                     thin_type,
@@ -149,7 +149,7 @@ impl FatType {
             // TODO: Fix this and other cases which just assume hole.upper_bound.borrow is ok;
             //    they should proably use a mapped hole or something
             FatType::Hole { nullability, hole } => {
-                let mut result = hole.upper_bound.borrow().subscript(
+                let mut result = hole.upper_bound.as_ref().borrow().subscript(
                     index,
                     is_nullable_access,
                     thin_type,
@@ -193,7 +193,7 @@ impl FatType {
             // TODO: Fix this and other cases which just assume hole.upper_bound.borrow is ok;
             //    they should proably use a mapped hole or something
             FatType::Hole { nullability, hole } => {
-                let mut result = hole.upper_bound.borrow().awaited(
+                let mut result = hole.upper_bound.as_ref().borrow().awaited(
                     thin_type,
                     loc_node,
                     defined_value,

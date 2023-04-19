@@ -259,12 +259,12 @@ impl GlobalTypeBinding {
         }
     }
 
-    pub fn has<N: ?Sized>(name: &N) -> bool where TypeName: N {
+    pub fn has<N: ?Sized>(name: &N) -> bool where TypeName: Borrow<N> {
         // TODO: something with lazy_static
         name; false
     }
 
-    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalTypeBinding> where TypeName: N {
+    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalTypeBinding> where TypeName: Borrow<N> {
         // TODO: something with lazy_static
         name; None
     }

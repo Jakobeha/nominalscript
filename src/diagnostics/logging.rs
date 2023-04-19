@@ -90,7 +90,7 @@ impl<'a> FileLogger<'a> {
         self.0.insert(diagnostic)
     }
 
-    pub fn type_<'b, 'tree>(&'b self, info: TypeCheckInfo<'tree>) -> TypeLogger<'static, 'b, 'tree> {
+    pub fn type_<'b, 'tree>(&'b self, info: TypeCheckInfo<'tree>) -> TypeLogger<'b, 'b, 'tree> {
         TypeLogger(_TypeLogger::Base { base: TypeLoggerBase {
             diagnostics: self.0,
             info,

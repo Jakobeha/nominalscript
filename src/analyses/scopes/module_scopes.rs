@@ -62,7 +62,26 @@ impl<'tree> ModuleScopes<'tree> {
         self._denoted_by(parent, c)
     }
 
-    /// Gets the scope denoted by the node (which should be a statement block, etc.)
+    /// Creates the scope if it doesn't exist, so that [Self::existing_denoted_by] won't panic.
+    /// Returns whether `node` is a scope node, otherwise [Self::existing_denoted_by] will still
+    /// panic since the node has no scope.
+    pub fn setup_denoted_by(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> bool {
+        self.denoted_by(node, c).is_some()
+    }
+
+    /// Gets the scope denoted by the node, which must already exist. **Panics** otherwise.
+    /// Use [Self::setup_denoted_by] to create the scope if it doesn't exist,
+    /// or just call [Self::denoted_by] to automatically create and retreive the scope (which is
+    /// also faster, but requires a mutable borrow on `self` while you have the scope).
+    pub fn existing_denoted_by(&self, node: TSNode<'tree>) -> &InactiveScopePtr<'tree> {
+        self.scopes.get(&node).expect("scope does not exist for this node")
+    }
+
+    /// Gets the scope denoted by the node (which should be a statement block, etc.), or `None` if
+    /// it's not a scope node.
+    ///
+    /// To hold an immutable borrow on `self` while you have the scope, use [Self::setup_denoted_by]
+    /// and then [Self::existing_denoted_by]
     pub fn denoted_by(&mut self, node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> Option<&InactiveScopePtr<'tree>> {
         match is_scope_node(node, c) {
             false => None,

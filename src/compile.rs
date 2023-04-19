@@ -80,7 +80,7 @@ fn begin_transpile_ast<'tree>(
     diagnostics: &FileDiagnostics,
 ) {
     // TODO handle error nodes (don't just crash but ignore, then we can traverse error nodes and throw syntax errors)
-    let mut e = FileLogger::new(diagnostics);
+    let e = FileLogger::new(diagnostics);
     let mut c = ast.walk();
     let mut qc = TSQueryCursor::new();
     let root_node = ast.root_node();
@@ -216,12 +216,15 @@ pub(crate) fn finish_transpile<'tree>(
                         let decl = match is_decl {
                             false => None,
                             true => {
-                                let name = ValueNameStr::of(node.field_child("name").unwrap().text());
+                                let name_node = node.field_child("name").unwrap();
+                                let name = ValueNameStr::of(name_node.text());
                                 scopes.hoisted_in_top_scope(name).map(|x| x.down_to_fn_decl().expect("hoisted declaration isn't a function (TODO handle, probably just return None here)"))
                             }
                         };
                         let body = node.field_child("body").unwrap();
-                        let fun_scope_inactive = m.scopes.denoted_by(body, &mut c).expect("function body should have a scope");
+                        let has_fun_scope = m.scopes.setup_denoted_by(body, &mut c);
+                        debug_assert!(has_fun_scope, "function body should have a scope");
+                        let fun_scope_inactive = m.scopes.existing_denoted_by(body);
                         if !traversal_state.is_up() {
                             let mut fun_scope = fun_scope_inactive.activate_ref();
                             // TODO: Scope nominal type params as well
@@ -316,7 +319,7 @@ pub(crate) fn finish_transpile<'tree>(
                             .map(|x| AstType::of_annotation(&scope, x));
                         let value = node.field_child("value");
                         let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
-                        assert_eq!(decl.type_.map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
+                        assert_eq!(decl.type_.as_ref().map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
                         if !traversal_state.is_up() {
                             if let (Some(value), Some(nominal_type)) = (value, nominal_type) {
                                 // Require value to be nominal type
@@ -350,8 +353,8 @@ pub(crate) fn finish_transpile<'tree>(
                         if traversal_state.is_up() {
                             let left = node.named_child(0).unwrap();
                             let right = node.named_child(1).unwrap();
-                            let left_type = m.typed_exprs.get(left);
-                            if let Some(left_type) = left_type {
+                            let left_type = m.typed_exprs.get(left).cloned();
+                            if let Some(left_type) = left_type.as_ref() {
                                 m.typed_exprs.require(right, left_type.clone())
                             }
                             // Can't re-assign right type to the left id,
@@ -359,9 +362,9 @@ pub(crate) fn finish_transpile<'tree>(
                             // but we can assign it to the expression itself.
                             // Also we need to assign the type because assignments are expressions
                             // and thus can be inside other expressions
-                            let assigned_type = left_type.or_else(|| m.typed_exprs.get(right));
+                            let assigned_type = left_type.or_else(|| m.typed_exprs.get(right).cloned());
                             if let Some(assigned_type) = assigned_type {
-                                m.typed_exprs.assign(node, assigned_type.clone())
+                                m.typed_exprs.assign(node, assigned_type)
                             }
                         }
                     }
@@ -401,7 +404,8 @@ pub(crate) fn finish_transpile<'tree>(
                     "member_expression" => {
                         if traversal_state.is_up() {
                             let object = node.named_child(0).unwrap();
-                            let field_name = FieldNameStr::of(node.field_child("property").unwrap().text());
+                            let field_name_node = node.field_child("property").unwrap();
+                            let field_name = FieldNameStr::of(field_name_node.text());
                             let is_nullable_access = node.child_of_kind("optional_chain", &mut c).is_some();
                             let object_type_det = m.typed_exprs.get(object);
                             if let Some(object_type_det) = object_type_det {
@@ -519,30 +523,30 @@ pub(crate) fn finish_transpile<'tree>(
                                     "pair" => {
                                         let key = field_node.named_child(0).unwrap();
                                         let value = field_node.named_child(1).unwrap();
-                                        let value_type = m.typed_exprs.get(value).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
-                                        fields.push((key.text(), OptionalType::required(value_type)))
+                                        let value_type = m.typed_exprs.get(value).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
+                                        fields.push(Field { name: FieldName::new(key.text()), type_: OptionalType::required(value_type) })
                                     },
                                     "shorthand_property_identifier" => {
                                         let name = field_node.named_child(0).unwrap();
-                                        let name_type = m.typed_exprs.get(name).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
-                                        fields.push((name.text(), OptionalType::required(name_type)))
+                                        let name_type = m.typed_exprs.get(name).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
+                                        fields.push(Field { name: FieldName::new(name.text()), type_: OptionalType::required(name_type) })
                                     }
                                     "method_definition" => {
                                         let name = field_node.named_child(0).unwrap();
                                         // Since the field node is a function declaration the type is directly assigned to it
-                                        let type_ = m.typed_exprs.get(field_node).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
-                                        fields.push((name.text(), OptionalType::required(type_)))
+                                        let type_ = m.typed_exprs.get(field_node).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
+                                        fields.push(Field { name: FieldName::new(name.text()), type_: OptionalType::required(type_) })
                                     }
                                     "spread_element" => {
                                         let expr = field_node.named_child(0).unwrap();
-                                        let spread_type = m.typed_exprs.get(expr).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        let spread_type = m.typed_exprs.get(expr).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
                                         let spread_is_nullable = matches!(spread_type.nullability(), Nullability::Nullable);
                                         if spread_is_nullable {
                                             error!(e, "Can't object-spread nullable type because it's a type error to object-spread null" => field_node);
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).into_type());
+                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {
@@ -554,28 +558,25 @@ pub(crate) fn finish_transpile<'tree>(
                                             FatType::Hole { .. } => todo!("fix holes in general"),
                                             _ => {}
                                         }
-                                        spread_type.with_structure(|structure| match structure {
+                                        match spread_type.into_structure() {
                                             Some(TypeStructure::Object { field_types }) => {
-                                                fields.extend(field_types.iter().map(|Field { name, type_ }| {
-                                                    let mut type_ = type_.as_ref();
+                                                // spread_field_arena.extend(field_types.len());
+                                                fields.extend(field_types.into_iter().map(|Field { name, mut type_ }| {
                                                     type_.make_optional_if(spread_is_nullable);
-                                                    (name.as_ref(), type_)
+                                                    Field { name, type_ }
                                                 }))
                                             }
                                             _ => {
                                                 error!(e, "Can't object-spread non-object type" => field_node);
                                             }
-                                        })
+                                        }
                                     }
                                     _ => panic!("Unexpected field node kind: {}", field_node.kind())
                                 }
                             }
                             let type_ = type_override.unwrap_or_else(|| {
-                                fields.dedup_by(|(key1, _), (key2, _)| key1 == key2);
-                                FatType::object(fields.into_iter().map(|(name, type_)| Field {
-                                    name: FieldName::new(name),
-                                    type_: type_.cloned()
-                                }))
+                                fields.dedup_by(|Field { name: name1, type_: _ }, Field { name: name2, type_: _ }| name1 == name2);
+                                FatType::object(fields)
                             });
                             m.typed_exprs.assign(node, DeterminedType {
                                 // ???: We can do better be taking the thin types to construct a thin object as well,
@@ -596,14 +597,14 @@ pub(crate) fn finish_transpile<'tree>(
                                 match elem_node.kind() {
                                     "spread_element" => {
                                         let expr = elem_node.named_child(0).unwrap();
-                                        let spread_type = m.typed_exprs.get(expr).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        let spread_type = m.typed_exprs.get(expr).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
                                         let spread_is_nullable = matches!(spread_type.nullability(), Nullability::Nullable);
                                         if spread_is_nullable {
                                             error!(e, "Can't array-spread nullable type because it's a type error to array-spread null" => elem_node);
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).into_type());
+                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {
@@ -615,30 +616,29 @@ pub(crate) fn finish_transpile<'tree>(
                                             FatType::Hole { .. } => todo!("fix holes in general"),
                                             _ => {}
                                         }
-                                        spread_type.with_structure(|structure| match structure {
+                                        match spread_type.into_structure() {
                                             Some(TypeStructure::Tuple { element_types }) => {
-                                                elems.extend(element_types.iter().map(|element_type| element_type.as_ref()));
+                                                elems.extend(element_types);
                                             }
                                             Some(TypeStructure::Array { element_type }) => {
                                                 is_array = true;
-                                                elems.push(OptionalType::optional(element_type.as_ref()));
+                                                elems.push(OptionalType::optional(*element_type));
                                             }
                                             _ => {
                                                 error!(e, "Can't array-spread non-array, non-tuple type" => elem_node);
                                             }
-                                        })
+                                        }
                                     }
                                     _ => {
-                                        let elem_type = m.typed_exprs.get(elem_node).map_or(&FatType::Any, |t| t.type_.resolve(ctx));
+                                        let elem_type = m.typed_exprs.get(elem_node).map_or(FatType::Any, |t| t.type_.resolve(ctx).clone());
                                         elems.push(OptionalType::required(elem_type));
                                     },
                                 }
                             }
                             let type_ = type_override.unwrap_or_else(|| {
-                                let elems = elems.into_iter().map(|elem| elem.cloned());
                                 if is_array {
                                     FatType::array(FatType::unify_all(
-                                        elems.map(|e| e.collapse_optionality_into_nullability()),
+                                        elems.into_iter().map(|e| e.collapse_optionality_into_nullability()),
                                         Variance::Bivariant,
                                         TypeLogger::ignore()
                                     ))

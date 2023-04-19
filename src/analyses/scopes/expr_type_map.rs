@@ -46,14 +46,14 @@ impl<'tree> ExprTypeMap<'tree> {
         self.assigned_types.get(&node)
     }
 
-    pub fn check_all(mut self, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
-        for (node, required_type) in self.required_types {
+    pub fn check_all(&mut self, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>) {
+        for (node, required_type) in self.required_types.drain() {
             // Already checking disjoint so no need to check subtype
             let _runtime_required_type = self.runtime_required_types.remove(&node);
             let assigned_type = self.assigned_types.remove(&node);
             DeterminedType::check_subtype(assigned_type, Some(required_type), node, e, ctx);
         }
-        for (node, required_type) in self.runtime_required_types {
+        for (node, required_type) in self.runtime_required_types.drain() {
             let assigned_type = self.assigned_types.remove(&node);
             DeterminedType::check_not_disjoint(assigned_type, Some(required_type), node, e, ctx);
             // TODO insert guard if assigned_type is not a subtype of required_type

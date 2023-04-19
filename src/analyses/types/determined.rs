@@ -1,6 +1,8 @@
 use std::borrow::Borrow;
 use std::fmt::Display;
+use std::hash::Hash;
 use std::ops::Range;
+use indexmap::Equivalent;
 use crate::analyses::types::{FatType, HasNullability, Nullability, OptionalType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturnType, AstType};
@@ -124,7 +126,7 @@ impl<'tree> DeterminedType<'tree> {
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) -> Option<Self> {
-        Self::_check_not_disjoint(left, right, loc_node, e, ctx).map(|fat_type| {
+        Self::_check_not_disjoint(left.clone(), right.clone(), loc_node, e, ctx).map(|fat_type| {
             let explicit_type = {
                 // Already unwrapped and resolved
                 let left = left.unwrap();
@@ -186,7 +188,7 @@ impl<'tree> DeterminedType<'tree> {
         Some(assigned_type)
     }
 
-    pub fn member_type<N: Display + ?Sized>(
+    pub fn member_type<N: Equivalent<FieldName> + Eq + Hash + Display + ?Sized>(
         &self,
         field_name: &N,
         is_nullable_access: bool,

@@ -287,9 +287,9 @@ macro_rules! impl_structural_type_constructors {
     };
 
     pub fn func(
-        type_params: impl Iterator<Item=$crate::analyses::types::TypeParam<Self>>,
+        type_params: impl IntoIterator<Item=$crate::analyses::types::TypeParam<Self>>,
         this_type: Self,
-        arg_types: impl Iterator<Item=$crate::analyses::types::OptionalType<Self>>,
+        arg_types: impl IntoIterator<Item=$crate::analyses::types::OptionalType<Self>>,
         rest_arg_type: <Self as $crate::analyses::types::TypeTrait>::RestArgType,
         return_type: $crate::analyses::types::ReturnType<Self>
     ) -> Self {
@@ -316,20 +316,20 @@ macro_rules! impl_structural_type_constructors {
         }
     }
 
-    pub fn tuple(element_types: impl Iterator<Item=$crate::analyses::types::OptionalType<Self>>) -> Self {
+    pub fn tuple(element_types: impl IntoIterator<Item=$crate::analyses::types::OptionalType<Self>>) -> Self {
         Self::Structural {
             nullability: $crate::analyses::types::Nullability::NonNullable,
             structure: $crate::analyses::types::TypeStructure::Tuple {
-                element_types: element_types.collect(),
+                element_types: element_types.into_iter().collect(),
             }
         }
     }
 
-    pub fn object(property_types: impl Iterator<Item=$crate::analyses::types::Field<$crate::analyses::types::OptionalType<Self>>>) -> Self {
+    pub fn object(property_types: impl IntoIterator<Item=$crate::analyses::types::Field<$crate::analyses::types::OptionalType<Self>>>) -> Self {
         Self::Structural {
             nullability: $crate::analyses::types::Nullability::NonNullable,
             structure: $crate::analyses::types::TypeStructure::Object {
-                field_types: property_types.collect(),
+                field_types: property_types.into_iter().collect(),
             }
         }
     }
@@ -667,16 +667,16 @@ impl<Type: TypeTrait + Hash> Hash for TypeStructure<Type> where Type::RestArgTyp
 
 impl<Type: TypeTrait> FnType<Type> {
     pub fn new(
-        type_params: impl Iterator<Item=TypeParam<Type>>,
+        type_params: impl IntoIterator<Item=TypeParam<Type>>,
         this_type: Type,
-        arg_types: impl Iterator<Item=OptionalType<Type>>,
+        arg_types: impl IntoIterator<Item=OptionalType<Type>>,
         rest_arg_type: Type::RestArgType,
         return_type: ReturnType<Type>
     ) -> Self {
         FnType {
-            type_params: type_params.collect(),
+            type_params: type_params.into_iter().collect(),
             this_type,
-            arg_types: arg_types.collect(),
+            arg_types: arg_types.into_iter().collect(),
             rest_arg_type,
             return_type,
         }

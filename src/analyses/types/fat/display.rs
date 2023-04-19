@@ -186,7 +186,7 @@ impl<Type: Display> Display for TypeIdent<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if !self.generic_args.is_empty() {
-            write!(f, "<{}>", ", ".join(self.generic_args))?;
+            write!(f, "<{}>", ", ".join(&self.generic_args))?;
         }
         Ok(())
     }
@@ -238,7 +238,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, In
             if !wrote_args {
                 write!(f, ", ")?;
             }
-            wrote_args = true;
+            // wrote_args = true;
             write!(f, "...{}", self.rest_arg_type)?;
         }
         write!(f, ") => {}", self.return_type)?;

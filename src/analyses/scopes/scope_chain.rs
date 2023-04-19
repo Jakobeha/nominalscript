@@ -1,5 +1,7 @@
 use std::borrow::Borrow;
 use std::fmt::Display;
+use std::hash::Hash;
+use indexmap::Equivalent;
 use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, ActiveScopePtr};
 use crate::analyses::types::{DynRlType, RlType};
@@ -47,11 +49,11 @@ impl<'tree> ScopeChain<'tree> {
         self.top_mut().expect("ScopeChain is empty").1.values.add_throw(throw, e);
     }
 
-    pub fn hoisted_in_top_scope<N: ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
+    pub fn hoisted_in_top_scope<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
         self.top().expect("ScopeChain is empty").1.values.hoisted(name)
     }
 
-    pub fn has_at_pos<N: ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> bool where ValueName: Borrow<N> {
+    pub fn has_at_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> bool where ValueName: Borrow<N> {
         let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
             if top.values.has_at_pos(name, pos_node) {
@@ -62,7 +64,7 @@ impl<'tree> ScopeChain<'tree> {
             GlobalValueBinding::has(name)
     }
 
-    pub fn at_pos<N: ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&DynValueBinding<'tree>> where ValueName: Borrow<N> {
+    pub fn at_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&DynValueBinding<'tree>> where ValueName: Borrow<N> {
         let mut top_to_bottom = self.iter_top_to_bottom();
         if let Some((_, top)) = top_to_bottom.next() {
             if let Some(decl) = top.values.at_pos(name, pos_node) {
@@ -73,7 +75,7 @@ impl<'tree> ScopeChain<'tree> {
             .or_else(|| GlobalValueBinding::get(name).map(|decl| decl as &DynValueBinding<'tree>))
     }
 
-    pub fn at_exact_pos<N: ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> where ValueName: Borrow<N> {
+    pub fn at_exact_pos<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N, pos_node: TSNode<'tree>) -> Option<&AstValueDecl<'tree>> where ValueName: Borrow<N> {
         self.top().expect("ScopeChain is empty").1.values.at_exact_pos(name, pos_node)
     }
 
@@ -87,7 +89,7 @@ impl<'tree> ScopeChain<'tree> {
     /// for subsequent calls (backwards inference).
     ///
     /// If the identifier has no binding, then logs an error and returns `NEVER`.
-    pub fn lookup<'a, N: Display + ?Sized>(
+    pub fn lookup<'a, N: Equivalent<ValueName> + Eq + Hash + Display + ?Sized>(
         use_id: &N,
         use_node: TSNode<'tree>,
         scope: &'a ScopeChain<'tree>,
