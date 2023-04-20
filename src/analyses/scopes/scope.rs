@@ -22,6 +22,7 @@ use crate::diagnostics::{FileLogger, TypeLogger};
 /// but they are all provided for conformity and because it uses negligible effort and resources.
 #[derive(Debug)]
 pub struct Scope<'tree> {
+    pub node: TSNode<'tree>,
     did_set_params: bool,
     imported_script_paths: Vec<AstImportPath<'tree>>,
     pub values: ValueScope<'tree>,
@@ -59,8 +60,9 @@ pub struct ExportedId<'tree, Name> {
 }
 
 impl<'tree> Scope<'tree> {
-    pub(super) fn new(parent: Option<&InactiveScopePtr<'tree>>) -> Self {
+    pub(super) fn new(node: TSNode<'tree>, parent: Option<&InactiveScopePtr<'tree>>) -> Self {
         Scope {
+            node,
             did_set_params: false,
             imported_script_paths: Vec::new(),
             values: ValueScope::new(),
@@ -352,7 +354,7 @@ impl<'tree> TypeScope<'tree> {
     }
 
     /// Lookup the identifier and substitute generic parameters to get its resolved inherited types
-    fn inherited(&self, id: TypeIdent<FatType>, ctx: &ResolveCtx<'_>) -> Option<FatTypeInherited> {
+    pub fn inherited(&self, id: TypeIdent<FatType>, ctx: &ResolveCtx<'_>) -> Option<FatTypeInherited> {
         let decl_ast = self.get(&id.name)?;
         // let decl_node = decl_ast.node(); (TODO: use in type logger)
         let decl = decl_ast.type_decl().resolve(ctx);

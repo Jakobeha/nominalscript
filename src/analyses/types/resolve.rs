@@ -319,7 +319,24 @@ impl_by_map!(
 
 impl ResolveInto<FatType> for ThinType {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
-        ctx; scope; todo!()
+        let e = FileLogger::new(ctx.diagnostics);
+        match self {
+            ThinType::Any => FatType::Any,
+            ThinType::Never { nullability } => FatType::Never { nullability: *nullability },
+            ThinType::Structural { nullability, structure } => {
+                FatType::Structural { nullability: *nullability, structure: structure.resolve(scope, ctx) }
+            },
+            ThinType::Nominal { nullability, id } => {
+                let id = id.resolve(scope, ctx);
+                let inherited = scope.and_then(|scope| {
+                    scope.types.inherited(id.clone(), ctx).or_else(|| {
+                        error!(e, "Unresolved type: {}", id => scope.node);
+                        None
+                    })
+                }).unwrap_or_else(FatTypeInherited::empty);
+                FatType::Nominal { nullability: *nullability, id, inherited: Box::new(inherited) }
+            }
+        }
     }
 }
 
@@ -382,7 +399,7 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
 impl_by_map!(
     <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ResolveInto (
         fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref
-    ) for TypeParam, OptionalType, ReturnType
+    ) for TypeStructure, TypeIdent, TypeParam, OptionalType, ReturnType
 );
 
 impl RlType {

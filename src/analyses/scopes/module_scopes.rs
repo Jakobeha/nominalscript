@@ -46,7 +46,7 @@ impl<'tree> ModuleScopes<'tree> {
             lexical_parents: HashMap::new(),
             lexical_children: HashMap::new()
         };
-        this.scopes.insert(root_node, InactiveScopePtr::new(None));
+        this.scopes.insert(root_node, InactiveScopePtr::new(root_node, None));
         this
     }
 
@@ -114,7 +114,7 @@ impl<'tree> ModuleScopes<'tree> {
             // SAFETY: See other comments. This reference is alive and not borrowed anywhere else
             let child_scope = {
                 let scope = unsafe { &*scope };
-                let child_scope = InactiveScopePtr::new(Some(scope));
+                let child_scope = InactiveScopePtr::new(child, Some(scope));
                 if matches!(child_type, ScopeParentType::Lexical) {
                     self.lexical_parents.insert(child_scope.clone(), scope.clone());
                     self.lexical_children.entry(scope.clone()).or_default().push(child_scope.clone());

@@ -178,20 +178,19 @@ pub(crate) fn finish_transpile<'tree>(
     // Run type analysis (and scope analysis and other dependent analyses)
     // Instead of querying here we do an inorder traversal because we need to do inorder
     // But Queries.SCOPE roughly matches what we're using
-    let mut scopes = ScopeChain::at_root(ast.root_node(), m.scopes.root().clone().activate());
+    let mut scopes = ScopeChain::at_root(m.scopes.root().clone().activate());
     let mut traversal_cursor = ast.walk();
     let mut traversal_state = TraversalState::Start;
     while !traversal_state.is_end() {
         let node = traversal_cursor.node();
         if let Some(scope) = m.scopes.denoted_by(node, &mut c) {
             if traversal_state != TraversalState::Up {
-                scopes.push(node, scope.clone().activate());
+                scopes.push(scope.clone().activate());
             } else {
                 scopes.pop();
             }
         }
-        let (_scope_node, scope) = scopes.top().unwrap();
-        let scope = scope.inactive_clone();
+        let scope = scopes.top().unwrap().inactive_clone();
 
         // Nodes are traversed once or twice: once 'start' or 'down' or 'right',
         // once if they have children 'up'
@@ -555,7 +554,8 @@ pub(crate) fn finish_transpile<'tree>(
                                                 }
                                                 break
                                             }
-                                            FatType::Hole { .. } => todo!("fix holes in general"),
+                                            // TODO: fix holes in general
+                                            FatType::Hole { .. } => panic!("fix holes in general"),
                                             _ => {}
                                         }
                                         match spread_type.into_structure() {
@@ -613,7 +613,8 @@ pub(crate) fn finish_transpile<'tree>(
                                                 }
                                                 break
                                             }
-                                            FatType::Hole { .. } => todo!("fix holes in general"),
+                                            // TODO: fix holes in general
+                                            FatType::Hole { .. } => panic!("fix holes in general"),
                                             _ => {}
                                         }
                                         match spread_type.into_structure() {

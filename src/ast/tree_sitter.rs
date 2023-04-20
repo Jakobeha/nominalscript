@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::path::Path;
-use std::fs;
 use std::iter::{once, Once};
 use std::str::Utf8Error;
 use derive_more::{Display, From, Error};
@@ -132,6 +131,9 @@ pub struct TraversalItem<'tree> {
     last_state: TraversalState
 }
 
+#[derive(Debug)]
+pub struct DisplayUnmarkedTSTree<'a>(&'a TSTree);
+
 impl TSParser {
     #[inline]
     pub fn new(language: tree_sitter::Language) -> Result<Self, TSLanguageError> {
@@ -152,7 +154,7 @@ impl TSParser {
 
     #[inline]
     pub fn parse_file(&mut self, path: &Path) -> Result<TSTree, TreeCreateError> {
-        self.parse_bytes(fs::read(path)?)
+        self.parse_bytes(std::fs::read(path)?)
     }
 
     #[inline]
@@ -213,6 +215,12 @@ impl TSTree {
     #[inline]
     pub fn walk(&self) -> TSCursor<'_> {
         TSCursor::new(self.tree.walk(), self)
+    }
+
+    /// Re-print this tree, skipping marked nodes
+    #[inline]
+    pub fn display_unmarked(&self) -> DisplayUnmarkedTSTree<'_> {
+        DisplayUnmarkedTSTree(self)
     }
 }
 
@@ -800,5 +808,62 @@ impl<'tree> Iterator for PreorderTraversal<'tree> {
         let item = self.peek();
         self.last_state = self.cursor.goto_preorder(self.last_state);
         Some(item)
+    }
+}
+
+impl<'a> Display for DisplayUnmarkedTSTree<'a> {
+    /// Re-print this tree, skipping marked nodes
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut nodes_with_marked_child = HashSet::new();
+        let mut did_write = false;
+        let mut c = self.0.walk();
+        let mut c2 = self.0.walk();
+        let mut state = TraversalState::Start;
+        loop {
+            let state2 = c.goto_preorder(state);
+            let state3 = c2.goto_preorder(state);
+            debug_assert!(state2 == state3);
+            state = state2;
+            if state.is_end() {
+                break
+            }
+
+            let mut has_marked_child = false;
+            let mut state2 = c2.goto_preorder(state);
+            if matches!(state2, TraversalState::Down) {
+                loop {
+                    if nodes_with_marked_child.contains(&c2.node().id()) {
+                        has_marked_child = true;
+                        break
+                    } else if c2.node().is_marked() {
+                        has_marked_child = true;
+                        nodes_with_marked_child.insert(c2.node().id());
+                        loop {
+                            c2.goto_parent();
+                            nodes_with_marked_child.insert(c2.node().id());
+                            if c2.node() == c.node() {
+                                break
+                            }
+                        }
+                        break
+                    }
+
+                    state2 = c2.goto_preorder(state2);
+                    if c2.node() == c.node() {
+                        debug_assert!(state2.is_up());
+                        break
+                    }
+                }
+            }
+            if !has_marked_child {
+                if did_write {
+                    write!(f, " ")?;
+                } else {
+                    did_write = true;
+                }
+                write!(f, "{}", c.node().text())?;
+            }
+        }
+        Ok(())
     }
 }

@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 
 use crate::analyses::scopes::Scope;
+use crate::ast::tree_sitter::TSNode;
 
 /// Strong and (mutably) dereferencable pointer to a scope.
 ///
@@ -44,8 +45,8 @@ struct ScopePointee<'tree> {
 
 impl<'tree> ActiveScopePtr<'tree> {
     /// Create a new scope and pointer
-    pub(super) fn new(parent: Option<&InactiveScopePtr<'tree>>) -> Self {
-        ActiveScopePtr(Rc::new(ScopePointee::new(Scope::new(parent), true)))
+    pub(super) fn new(node: TSNode<'tree>, parent: Option<&InactiveScopePtr<'tree>>) -> Self {
+        ActiveScopePtr(Rc::new(ScopePointee::new(Scope::new(node, parent), true)))
     }
 
     /// Convert this into an inactive scope pointer. Now you can create another active pointer.
@@ -219,8 +220,8 @@ impl<'a, 'tree> Drop for ActiveScopeRef<'a, 'tree> {
 
 impl<'tree> InactiveScopePtr<'tree> {
     /// Create a new scope and pointer
-    pub(super) fn new(parent: Option<&InactiveScopePtr<'tree>>) -> Self {
-        InactiveScopePtr(Rc::new(ScopePointee::new(Scope::new(parent), false)))
+    pub(super) fn new(node: TSNode<'tree>, parent: Option<&InactiveScopePtr<'tree>>) -> Self {
+        InactiveScopePtr(Rc::new(ScopePointee::new(Scope::new(node, parent), false)))
     }
 
     /// Convert this into an active scope pointer. **Panics** if there is another active pointer.

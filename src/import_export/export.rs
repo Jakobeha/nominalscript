@@ -76,7 +76,7 @@ impl Module {
     pub fn finish(mut self, ctx: &ProjectCtx<'_>) -> TranspiledModule {
         let source_code = self.module_data.with_dependent_mut(|ast, module_ctx| {
             finish_transpile(ast, module_ctx, &ResolveCtx::new(ctx, &self.path));
-            todo!("ast.print()")
+            ast.display_unmarked().to_string()
         });
         TranspiledModule {
             exports: self.exports,
