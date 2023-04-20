@@ -21,6 +21,8 @@ mod rc_unwrap_or_clone;
 /// Lets you safely create an [Iterator] using a [std::cell::RefCell] reference, and the while the
 /// iterator is alive the reference will be borrowed.
 mod ref_iterator;
+/// Filter an error in an empty result, e.g. to remove "already exists" I/O errors
+mod result_filter_err;
 /// `Vec::extend_no_dup`
 mod vec_extend_no_dup;
 /// `Vec::find_remove`
@@ -42,5 +44,6 @@ pub(crate) use once_cell_with_option::OnceCellExt;
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use rc_unwrap_or_clone::rc_unwrap_or_clone;
 pub(crate) use ref_iterator::RefIterator;
+pub(crate) use result_filter_err::ResultFilterErr;
 pub(crate) use vec_extend_no_dup::VecExtendNoDup;
 pub(crate) use vec_find_remove::VecFilter;

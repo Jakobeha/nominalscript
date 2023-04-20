@@ -30,6 +30,7 @@ use derive_more::{Display, Error, From};
 use walkdir::WalkDir;
 pub use project::*;
 use crate::import_export::import_resolver::ImportResolverCreateError;
+use crate::misc::ResultFilterErr;
 
 /// Run the program
 fn main() {
@@ -66,14 +67,14 @@ fn main() {
     }
 }
 
-struct Output {
+pub struct Output {
     num_warnings: usize,
     num_errors: usize
 }
 
 #[derive(Debug, Display, Error, From)]
-enum Error {
-    #[display(fmt = "Directory must be package root AKA have package.json and have at least one of src/, lib/, bin/, or tests/")]
+pub enum FatalError {
+    #[display(fmt = "Directory must be package root AKA have at least one of package.json or out/, and at least one of src/, lib/, bin/, or tests/")]
     InvalidPackageRoot,
     ImportResolverCreateError(ImportResolverCreateError),
     #[display(fmt = "When {}: {}", action, source)]
@@ -85,24 +86,28 @@ enum Error {
 const SRC_DIR_NAMES: [&'static str; 4] = ["src", "lib", "bin", "tests"];
 const TYPESCRIPT_OUT_DIR_NAME: &'static str = "out/typescript";
 
-fn run(package_path: PathBuf) -> Result<Output, Error> {
-    if !package_path.join("package.json").exists() || !SRC_DIR_NAMES.iter().any(|dir_name| package_path.join(dir_name).exists()) {
-        return Err(Error::InvalidPackageRoot);
+pub fn run(package_path: PathBuf) -> Result<Output, FatalError> {
+    if (!package_path.join("out").is_dir() && !package_path.join("package.json").is_dir()) || !SRC_DIR_NAMES.iter().any(|dir_name| package_path.join(dir_name).is_dir()) {
+        return Err(FatalError::InvalidPackageRoot);
     }
 
     let p = Project::regular(package_path.clone(), true)?;
     let out_dir = package_path.join(TYPESCRIPT_OUT_DIR_NAME);
-    create_dir_all(&out_dir).map_err(|source| Error::IoError { action: format!("creating out dir ({})", out_dir.display()), source })?;
+    create_dir_all(&out_dir)
+        .filter_err(|e| !matches!(e.kind(), std::io::ErrorKind::AlreadyExists))
+        .map_err(|source| FatalError::IoError { action: format!("creating out dir ({})", out_dir.display()), source })?;
     for src_dir in SRC_DIR_NAMES.iter()
         .map(|dir_name| package_path.join(dir_name))
         .filter(|path| path.exists()) {
         for path in WalkDir::new(&src_dir).follow_links(true) {
-            let path = path.map_err(|source| Error::WalkDirError { path_desc: format!("{}", src_dir.file_name().unwrap().to_string_lossy()), source })?;
+            let path = path.map_err(|source| FatalError::WalkDirError { path_desc: format!("{}", src_dir.file_name().unwrap().to_string_lossy()), source })?;
             if path.file_type().is_file() {
                 let rel_path = path.path().strip_prefix(&src_dir).unwrap();
                 let out_path = out_dir.join(rel_path);
                 let out_subdir = out_path.parent().unwrap();
-                create_dir(out_subdir).map_err(|source| Error::IoError { action: format!("creating out sub-directory ({})", out_subdir.display()), source })?;
+                create_dir(out_subdir)
+                    .filter_err(|e| !matches!(e.kind(), std::io::ErrorKind::AlreadyExists))
+                    .map_err(|source| FatalError::IoError { action: format!("creating out sub-directory ({})", out_subdir.display()), source })?;
                 let transpiled = match p.transpile_file(path.path()) {
                     Ok(transpiled) => transpiled,
                     Err(TranspileError::AlreadyTranspiled(_)) => {
@@ -115,7 +120,7 @@ fn run(package_path: PathBuf) -> Result<Output, Error> {
                         continue
                     }
                 };
-                std::fs::write(&out_path, transpiled).map_err(|source| Error::IoError { action: format!("writing transpiled file ({})", out_path.display()), source })?;
+                std::fs::write(&out_path, transpiled).map_err(|source| FatalError::IoError { action: format!("writing transpiled file ({})", out_path.display()), source })?;
             }
         }
     }
@@ -123,4 +128,20 @@ fn run(package_path: PathBuf) -> Result<Output, Error> {
         num_errors: p.diagnostics.count_errors(),
         num_warnings: p.diagnostics.count_warnings()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use test_log::test;
+    use crate::run;
+
+    #[test]
+    pub fn test_a_project() {
+        let mut package_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        package_path.push("test-resources/nominalscript-package");
+        let output = run(package_path).expect("Fatal error");
+        assert_eq!(output.num_errors, 0);
+        assert_eq!(output.num_warnings, 0);
+    }
 }

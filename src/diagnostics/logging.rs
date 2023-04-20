@@ -375,7 +375,7 @@ mod tests {
             issue_if!(Some(5), n => "hello {}", n);
             hint!("hello {:?}", "hello");
             hint!("hello" => b_node));
-        let n = Some(n);
+        let n = Some(5);
         warning!(e.file(&p), "hello" => a_node;
             issue_if!(n => "hello {}", n);
             hint!("hello {:?}", "hello");

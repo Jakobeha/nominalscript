@@ -1,0 +1,73 @@
+// Declare a plain type
+type; Foo
+
+// To construct instances of this type, you must explicitly wrap expressions using the syntax ``
+let a = Foo;"string"
+let b = Foo;42
+let c = Foo;xyz
+
+// Declare a type with a supertype
+type Liters; Number
+
+// You must still wrap expressions to cast them
+let d = Liters;42
+// However, this type will generate guards which throw a runtime type error if you try to construct an illegal value
+try {
+    let e = Liters;"foo bar baz"
+} catch (e) {
+    console.log('Exception:', e) // Exception: IllegalCast
+}
+// If you are *sure* the expression is the correct type and don't want to waste resources, you can wrap unchecked like so
+let f = Liters!;45
+
+// You can also declare guards explicitly
+type Natural; Integer guard(x) {
+    return x > 0
+}
+
+let g = Natural;84
+try {
+    let h = Natural;-2
+} catch (e) {
+    console.log('Exception:', e) // Exception: IllegalCast
+}
+
+// Unlike JavaScript, NominalScript can detect Integer literals and properly wrap them
+let i; Integer = 3
+// There are nullable types as well
+let j; Integer? = null
+let k; Foo? = null
+
+// You can declare and use object, function, array, and tuple types
+type Car; { make; String, model; String, year; Integer }
+// These types ARE structural
+function sum(x; Natural[]); Natural {
+    return Natural;sum(...x)
+}
+sum([Natural;1, Natural;2, Natural;3])
+// It's just when you declare new types with identifiers that they are nominal.
+// For example, this still does not type-check
+// let a; Car = { make; "Bugatti", model; "Veyron", year; 2007 }
+// Instead you must do this
+let b; Car = Car;{ make; "Bugatti", model; "Veyron", year; 2007 }
+
+// Also, generics are supported (but not HKTs)
+type Predicate<T>; (T) => Boolean
+
+function allSatisfy<T>(elems; T[], pred; Predicate<T>); Boolean {
+    for (const elem of elems) {
+        // One thing to note is that the structural types can always be used like untyped values, there is no 'unwrapping'
+        if (!pred(elem)) {
+            return false
+        }
+    }
+    return true
+}
+allSatisfy([1, 2, 3], Predicate;(x => x < 2))
+
+// Lastly, NominalScript supports signature overloading and lets you add nominal annotations to existing functions and operators: these create guards for the return value unless you mark otherwise with `!`
+// declare function sum(...Integer[]): Integer
+// declare! function sum(...Natural[]): Natural
+// declare function sum(...Liters[]): Liters
+// declare operator (Liters + Liters): Liters
+// declare! operator (Liters * Number): Liters
