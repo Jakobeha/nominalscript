@@ -148,7 +148,7 @@ pub trait ResolveInto<Fat> {
 }
 
 impl<'a> ResolveCtx<'a> {
-    pub fn new<'b>(project_ctx: &'b ProjectCtx<'a>, importer_path: &'b ModulePath) -> ResolveCtx<'b> {
+    pub fn new<'b>(project_ctx: ProjectCtx<'a>, importer_path: &'b ModulePath) -> ResolveCtx<'b> where 'a: 'b {
         ResolveCtx {
             imports: project_ctx.import_ctx.file(importer_path),
             diagnostics: project_ctx.diagnostics.file(importer_path),

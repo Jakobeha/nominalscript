@@ -327,7 +327,7 @@ mod tests {
         let a_node = tree.root_node().named_child(0).unwrap();
         let b_node = a_node.named_child(1).unwrap();
 
-        let mut diagnostics = ProjectDiagnostics::new();
+        let mut diagnostics = ProjectDiagnostics::new(false);
         let p = ModulePath::ns(PathBuf::from("p.ns"));
         let e = ProjectLogger::new(&mut diagnostics);
         error!(e, "hello");

@@ -12,12 +12,19 @@ use crate::import_export::ModulePath;
 use crate::misc::FrozenMapIter;
 
 pub struct ProjectDiagnostics {
+    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
+    /// duplicates
+    print_globals_immediately: bool,
     global: RefCell<BTreeSet<GlobalDiagnostic>>,
     by_file: FrozenMap<ModulePath, Box<FileDiagnostics>>,
 }
 
 #[derive(Debug)]
 pub struct FileDiagnostics {
+    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
+    /// duplicates
+    print_locals_immediately: bool,
+    path: ModulePath,
     diagnostics: RefCell<BTreeSet<FileDiagnostic>>
 }
 
@@ -65,18 +72,52 @@ pub enum AdditionalInfoType {
     Note,
 }
 
+macro_rules! impl_count_level_shorthands {
+    () => {
+    pub fn count_errors(&self) -> usize {
+        self.count_level(DiagnosticLevel::Error)
+    }
+
+    pub fn count_warnings(&self) -> usize {
+        self.count_level(DiagnosticLevel::Warning)
+    }
+
+    pub fn count_infos(&self) -> usize {
+        self.count_level(DiagnosticLevel::Info)
+    }
+
+    pub fn count_debugs(&self) -> usize {
+        self.count_level(DiagnosticLevel::Debug)
+    }
+    }
+}
+
 impl ProjectDiagnostics {
-    pub fn new() -> Self {
+    pub fn new(print_immediately: bool) -> Self {
         Self {
+            print_globals_immediately: print_immediately,
             global: RefCell::new(BTreeSet::new()),
             by_file: FrozenMap::new(),
         }
     }
 
+    pub fn file(&self, path: &ModulePath) -> &FileDiagnostics {
+        if let Some(file) = self.by_file.get(path) {
+            return file
+        }
+        let print_immediately = self.print_globals_immediately;
+        self.by_file.insert(path.clone(), Box::new(FileDiagnostics::new(path.clone(), print_immediately)))
+    }
+
     pub fn insert_global(&self, diagnostic: GlobalDiagnostic) {
-        if let Some(existing) = self.global.borrow_mut().replace(diagnostic) {
+        let mut global = self.global.borrow_mut();
+        if let Some(existing) = global.get(&diagnostic) {
             debug!("Duplicate diagnostic was replaced: {}", existing);
         }
+        if self.print_globals_immediately {
+            eprintln!("{}", diagnostic);
+        }
+        global.insert(diagnostic);
     }
 
     /// Iterator requires an owned reference because we allow insertion behind shared references
@@ -84,31 +125,54 @@ impl ProjectDiagnostics {
         self.global.get_mut().iter()
     }
 
-    pub fn file(&self, path: &ModulePath) -> &FileDiagnostics {
-        if let Some(file) = self.by_file.get(path) {
-            return file
+    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
+    /// duplicates
+    pub fn set_print_immediately(&mut self, print_immediately: bool) {
+        self.print_globals_immediately = print_immediately;
+        for file in self.by_file.as_mut().values_mut() {
+            file.print_locals_immediately = print_immediately;
         }
-        self.by_file.insert(path.clone(), Box::new(FileDiagnostics::new()))
     }
+
+    pub fn count_level(&self, level: DiagnosticLevel) -> usize {
+        self.global.borrow().iter().filter(|d| d.level == level).count() +
+            FrozenMapIter::new(&self.by_file).map(|(_, fds)| fds.count_level(level)).sum::<usize>()
+    }
+
+    impl_count_level_shorthands!();
 }
 
 impl FileDiagnostics {
-    pub fn new() -> Self {
+    pub fn new(path: ModulePath, print_immediately: bool) -> Self {
         Self {
+            path,
+            print_locals_immediately: print_immediately,
             diagnostics: RefCell::new(BTreeSet::new()),
         }
     }
 
     pub fn insert(&self, diagnostic: FileDiagnostic) {
-        if let Some(existing) = self.diagnostics.borrow_mut().replace(diagnostic) {
+        let mut diagnostics = self.diagnostics.borrow_mut();
+        if let Some(existing) = diagnostics.get(&diagnostic) {
             debug!("Duplicate diagnostic was replaced: {}", existing);
         }
+        if self.print_locals_immediately {
+            eprintln!("{}:{}", self.path.path().display(), diagnostic);
+        }
+        diagnostics.insert(diagnostic);
     }
 
     /// Iterator requires an owned reference because we allow insertion behind shared references
     pub fn iter(&mut self) -> impl Iterator<Item=&FileDiagnostic> {
         self.diagnostics.get_mut().iter()
     }
+
+    pub fn count_level(&self, level: DiagnosticLevel) -> usize {
+        self.diagnostics.borrow().iter().filter(|d| d.level == level).count()
+    }
+
+    impl_count_level_shorthands!();
+
 }
 
 impl<'a> IntoIterator for &'a mut FileDiagnostics {
@@ -148,10 +212,10 @@ impl Display for ProjectDiagnostics {
         for diagnostic in &*global_borrow {
             writeln!(f, "{}", diagnostic)?;
         }
-        for (path, diagnostics) in FrozenMapIter::new(&self.by_file) {
+        for (_, diagnostics) in FrozenMapIter::new(&self.by_file) {
             let diagnostics_borrow = diagnostics.diagnostics.borrow();
             for diagnostic in &*diagnostics_borrow {
-                write!(f, "{}:", path.path().display())?;
+                write!(f, "{}:", diagnostics.path.path().display())?;
                 writeln!(f, "{}", diagnostic)?;
             }
         }

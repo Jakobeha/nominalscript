@@ -30,9 +30,9 @@ pub enum FatalTranspileError {
 ///
 /// If successful, the transpiled file (module) will be cached in `ctx`,
 /// so calling again will just return the same result
-fn begin_transpile_file<'a>(
+pub(super) fn begin_transpile_file<'a>(
     script_path: &Path,
-    ctx: &'a ProjectCtx<'_>
+    ctx: ProjectCtx<'a>
 ) -> Result<&'a Module, Cow<'a, ImportError>> {
     let header = begin_transpile_file_no_log_err(script_path, ctx);
     if let Err(import_error) = header.as_ref() {
@@ -46,7 +46,7 @@ fn begin_transpile_file<'a>(
 /// [begin_transpile_file] but doesn't log the import error
 fn begin_transpile_file_no_log_err<'a>(
     script_path: &Path,
-    ctx: &'a ProjectCtx<'_>
+    ctx: ProjectCtx<'a>
 ) -> Result<&'a Module, Cow<'a, ImportError>> {
     ctx.import_ctx.resolve_auxillary_and_cache_transpile(script_path, |module_path| {
         begin_transpile_file_no_cache(script_path, module_path, ctx.diagnostics.file(module_path)).map_err(ImportError::from)
