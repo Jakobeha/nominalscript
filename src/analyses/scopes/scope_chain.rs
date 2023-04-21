@@ -15,10 +15,8 @@ pub struct ScopeChain<'tree> {
 }
 
 impl<'tree> ScopeChain<'tree> {
-    pub fn at_root(root_scope: ActiveScopePtr<'tree>) -> Self {
-        let mut this = ScopeChain { scopes: Vec::new() };
-        this.push(root_scope);
-        this
+    pub fn new() -> Self {
+        ScopeChain { scopes: Vec::new() }
     }
 
     pub fn push(&mut self, scope: ActiveScopePtr<'tree>) {
@@ -35,6 +33,10 @@ impl<'tree> ScopeChain<'tree> {
 
     fn top_mut(&mut self) -> Option<&mut ActiveScopePtr<'tree>> {
         self.scopes.last_mut()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scopes.is_empty()
     }
 
     pub fn add_sequential(&mut self, decl: AstValueDecl<'tree>, e: &FileLogger<'_>) {

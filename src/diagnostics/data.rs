@@ -235,7 +235,7 @@ impl Display for GlobalDiagnostic {
 
 impl Display for FileDiagnostic {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}-{} {}: {}", self.location.start_point, self.location.end_point, self.level, self.message)?;
+        write!(f, "{} {}: {}", self.location, self.level, self.message)?;
         for info in &self.additional_info {
             write!(f, "\n  {}", info)?;
         }
@@ -247,7 +247,7 @@ impl Display for AdditionalInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.type_)?;
         if let Some(loc) = self.location {
-            write!(f, " (at {}-{})", loc.start_point, loc.end_point)?;
+            write!(f, " (at {})", loc)?;
         }
         write!(f, ": {}", self.message)?;
         Ok(())

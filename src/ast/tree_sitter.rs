@@ -80,15 +80,22 @@ pub struct TSQueryCapture<'query, 'tree> {
     pub name: &'query str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct TSRange(tree_sitter::Range);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct TSPoint(tree_sitter::Point);
+
 pub struct TSParser(tree_sitter::Parser);
 
 pub type TSLanguage = tree_sitter::Language;
 pub type TSLanguageError = tree_sitter::LanguageError;
 pub type TSQuery = tree_sitter::Query;
 pub type TSQueryProperty = tree_sitter::QueryProperty;
-pub type TSRange = tree_sitter::Range;
+
 pub type TSIncludedRangesError = tree_sitter::IncludedRangesError;
-pub type TSPoint = tree_sitter::Point;
 
 #[derive(Debug, Display, From, Error)]
 pub enum TreeCreateError {
@@ -149,7 +156,8 @@ impl TSParser {
 
     #[inline]
     pub fn set_included_ranges(&mut self, ranges: &[TSRange]) -> Result<(), TSIncludedRangesError> {
-        self.0.set_included_ranges(ranges)
+        // SAFETY: Same repr
+        self.0.set_included_ranges(unsafe { std::mem::transmute(ranges) })
     }
 
     #[inline]
@@ -266,12 +274,12 @@ impl<'tree> TSNode<'tree> {
 
     #[inline]
     pub fn start_point(&self) -> TSPoint {
-        self.node.start_position()
+        TSPoint(self.node.start_position())
     }
 
     #[inline]
     pub fn end_point(&self) -> TSPoint {
-        self.node.end_position()
+        TSPoint(self.node.end_position())
     }
 
     #[inline]
@@ -281,7 +289,7 @@ impl<'tree> TSNode<'tree> {
 
     #[inline]
     pub fn range(&self) -> TSRange {
-        self.node.range()
+        TSRange(self.node.range())
     }
 
     #[inline]
@@ -651,7 +659,8 @@ impl TSQueryCursor {
 
     #[inline]
     pub fn set_point_range(&mut self, range: Range<TSPoint>) {
-        self.query_cursor.set_point_range(range);
+        // SAFETY: Same repr
+        self.query_cursor.set_point_range(unsafe { std::mem::transmute(range) });
     }
 }
 
@@ -736,6 +745,28 @@ impl<'query, 'tree> TSQueryCapture<'query, 'tree> {
             node: TSNode::new(query_capture.node, tree),
             name: &query.capture_names()[query_capture.index as usize]
         }
+    }
+}
+
+impl Display for TSPoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.0.row, self.0.column)
+    }
+}
+
+impl TSRange {
+    pub fn start_point(&self) -> TSPoint {
+        TSPoint(self.0.start_point)
+    }
+
+    pub fn end_point(&self) -> TSPoint {
+        TSPoint(self.0.end_point)
+    }
+}
+
+impl Display for TSRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", TSPoint(self.0.start_point), TSPoint(self.0.end_point))
     }
 }
 
@@ -878,10 +909,10 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
         let mut c2 = self.0.walk();
         let mut state = TraversalState::Start;
         loop {
-            let state2 = c.goto_preorder(state);
-            let state3 = c2.goto_preorder(state);
-            debug_assert!(state2 == state3);
-            state = state2;
+            let state0 = c.goto_preorder(state);
+            let state1 = c2.goto_preorder(state);
+            debug_assert_eq!(state0, state1);
+            state = state0;
             if state.is_end() {
                 break
             }
@@ -892,6 +923,7 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
                 loop {
                     if nodes_with_marked_child.contains(&c2.node().id()) {
                         has_marked_child = true;
+                        c2.goto(c.node());
                         break
                     } else if c2.node().is_marked() {
                         has_marked_child = true;
@@ -912,6 +944,8 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
                         break
                     }
                 }
+            } else {
+                c2.goto(c.node());
             }
             if !has_marked_child {
                 if did_write {

@@ -178,16 +178,20 @@ pub(crate) fn finish_transpile<'tree>(
     // Run type analysis (and scope analysis and other dependent analyses)
     // Instead of querying here we do an inorder traversal because we need to do inorder
     // But Queries.SCOPE roughly matches what we're using
-    let mut scopes = ScopeChain::at_root(m.scopes.root().clone().activate());
+    let mut scopes = ScopeChain::new();
     let mut traversal_cursor = ast.walk();
     let mut traversal_state = TraversalState::Start;
-    while !traversal_state.is_end() {
+    loop {
         let node = traversal_cursor.node();
         if let Some(scope) = m.scopes.denoted_by(node, &mut c) {
-            if traversal_state != TraversalState::Up {
+            if !traversal_state.is_up() {
                 scopes.push(scope.clone().activate());
             } else {
                 scopes.pop();
+                if scopes.is_empty() {
+                    debug_assert_eq!(node.kind(), "program");
+                    break
+                }
             }
         }
         let scope = scopes.top().unwrap().inactive_clone();
@@ -252,7 +256,7 @@ pub(crate) fn finish_transpile<'tree>(
                             // Infer return type, and check with the explicit return type if provided.
                             // If expression, also assign inferred func type to the node itself
                             let explicit_return_type_ast = node.field_child("nominal_return_type").map(|x| {
-                                x.mark();
+                                // x.mark();
                                 AstReturnType::new(fun_scope_inactive, x.named_child(0).unwrap())
                             });
                             fn process_inferred_return_types<'tree>(explicit_return_type_ast: Option<AstReturnType<'tree>>, node: TSNode<'tree>, e: &FileLogger<'_>, ctx: &ResolveCtx<'_>, inferred_return_types: impl IntoIterator<Item=DeterminedReturnType<'tree>>) -> Option<RlReturnType> {

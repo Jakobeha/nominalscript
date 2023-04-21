@@ -103,7 +103,8 @@ pub fn run(package_path: PathBuf) -> Result<Output, FatalError> {
             let path = path.map_err(|source| FatalError::WalkDirError { path_desc: format!("{}", src_dir.file_name().unwrap().to_string_lossy()), source })?;
             if path.file_type().is_file() {
                 let rel_path = path.path().strip_prefix(&src_dir).unwrap();
-                let out_path = out_dir.join(rel_path);
+                let mut out_path = out_dir.join(rel_path);
+                out_path.set_extension("ts");
                 let out_subdir = out_path.parent().unwrap();
                 create_dir(out_subdir)
                     .filter_err(|e| !matches!(e.kind(), std::io::ErrorKind::AlreadyExists))

@@ -47,9 +47,9 @@ function sum(x; Natural[]); Natural {
 sum([Natural;1, Natural;2, Natural;3])
 // It's just when you declare new types with identifiers that they are nominal.
 // For example, this still does not type-check
-// let a; Car = { make; "Bugatti", model; "Veyron", year; 2007 }
+// let l; Car = { make; "Bugatti", model; "Veyron", year; 2007 }
 // Instead you must do this
-let b; Car = Car;{ make; "Bugatti", model; "Veyron", year; 2007 }
+let m; Car = Car;{ make; "Bugatti", model; "Veyron", year; 2007 }
 
 // Also, generics are supported (but not HKTs)
 type; Predicate<T> <; (T) => Boolean
