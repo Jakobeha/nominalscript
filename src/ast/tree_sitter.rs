@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::path::Path;
 use std::iter::{once, Once};
 use std::str::Utf8Error;
@@ -20,14 +20,14 @@ pub struct TSTree {
 #[derive(Debug)]
 struct CachedTreeData {}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct TSNode<'tree> {
     node: tree_sitter::Node<'tree>,
     tree: &'tree TSTree,
 }
 
 /// Raw pointer equivalent of [TSNode]
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct TSNodePtr {
     node_data: TSNodeData,
     tree: NonNull<TSTree>
@@ -49,6 +49,7 @@ pub struct TSNodeId(usize);
 pub struct TSCursor<'tree> {
     cursor: tree_sitter::TreeCursor<'tree>,
     tree: &'tree TSTree,
+    child_depth: usize,
 }
 
 pub struct TSQueryCursor {
@@ -61,7 +62,6 @@ pub struct TSQueryMatches<'query, 'tree: 'query> {
     query: &'query TSQuery
 }
 
-#[derive(Debug)]
 pub struct TSQueryMatch<'query, 'tree> {
     query_match: tree_sitter::QueryMatch<'query, 'tree>,
     tree: &'tree TSTree,
@@ -214,7 +214,7 @@ impl TSTree {
 
     #[inline]
     pub fn walk(&self) -> TSCursor<'_> {
-        TSCursor::new(self.tree.walk(), self)
+        TSCursor::new(self.tree.walk(), self, true)
     }
 
     /// Re-print this tree, skipping marked nodes
@@ -395,7 +395,7 @@ impl<'tree> TSNode<'tree> {
 
     #[inline]
     pub fn walk(&self) -> TSCursor<'tree> {
-        TSCursor::new(self.node.walk(), self.tree)
+        TSCursor::new(self.node.walk(), self.tree, false)
     }
 
     #[inline]
@@ -418,8 +418,8 @@ impl<'tree> TSNode<'tree> {
     /// *Panics* if already marked
     #[inline]
     pub fn mark(&self) {
-        let is_marked = self.tree.marked_nodes.borrow_mut().insert(self.id());
-        if is_marked {
+        let newly_marked = self.tree.marked_nodes.borrow_mut().insert(self.id());
+        if !newly_marked {
             panic!("node already marked")
         }
     }
@@ -440,8 +440,8 @@ impl<'tree> TSNode<'tree> {
         let mut marked_nodes = self.tree.marked_nodes.borrow_mut();
         for child in self.all_children(cursor) {
             if child.id() != except.id() {
-                let is_marked = marked_nodes.insert(child.id());
-                if is_marked {
+                let newly_marked = marked_nodes.insert(child.id());
+                if !newly_marked {
                     panic!("node already marked")
                 }
             }
@@ -497,8 +497,14 @@ impl<'tree> From<tree_sitter::Node<'tree>> for TSNodeData {
 
 impl<'tree> TSCursor<'tree> {
     #[inline]
-    fn new(cursor: tree_sitter::TreeCursor<'tree>, tree: &'tree TSTree) -> Self {
-        Self { cursor, tree }
+    fn new(cursor: tree_sitter::TreeCursor<'tree>, tree: &'tree TSTree, is_rooted: bool) -> Self {
+        Self {
+            cursor,
+            tree,
+            child_depth: match is_rooted {
+                false => 0,
+                true => 1
+            } }
     }
 
     #[inline]
@@ -507,30 +513,82 @@ impl<'tree> TSCursor<'tree> {
     }
 
     #[inline]
-    pub fn field_name(&self) -> Option<&'static str> {
-        self.cursor.field_name()
+    pub fn field_name(&mut self) -> Option<&'static str> {
+        self.cursor.field_name().or_else(|| if self.child_depth > 0 {
+            None
+        } else {
+            match self.node().parent() {
+                None => None,
+                Some(parent) => {
+                    let original_node = self.node();
+                    self.goto(parent);
+                    self.goto_first_child();
+                    while self.node() != original_node {
+                        self.goto_next_sibling();
+                    }
+                    self.cursor.field_name()
+                }
+            }
+        })
     }
 
     #[inline]
     pub fn goto(&mut self, node: TSNode<'tree>) {
         if self.cursor.node() != node.node {
-            self.cursor.reset(node.node)
+            self.cursor.reset(node.node);
+            self.child_depth = 0;
         }
     }
 
     #[inline]
     pub fn goto_first_child(&mut self) -> bool {
-        self.cursor.goto_first_child()
+        if self.cursor.goto_first_child() {
+            self.child_depth += 1;
+            true
+        } else {
+            false
+        }
     }
 
     #[inline]
     pub fn goto_next_sibling(&mut self) -> bool {
-        self.cursor.goto_next_sibling()
+        self.cursor.goto_next_sibling() || if self.child_depth > 0 {
+            false
+        } else {
+            match self.node().parent() {
+                None => false,
+                Some(parent) => {
+                    let original_node = self.node();
+                    self.goto(parent);
+                    self.goto_first_child();
+                    while self.node() != original_node {
+                        self.goto_next_sibling();
+                    }
+                    self.goto_next_sibling()
+                }
+            }
+        }
     }
 
     #[inline]
     pub fn goto_parent(&mut self) -> bool {
-        self.cursor.goto_parent()
+        if self.cursor.goto_parent() {
+            debug_assert!(self.child_depth != 0);
+            self.child_depth -= 1;
+            true
+        } else {
+            if self.child_depth > 0 {
+                false
+            } else {
+                match self.node().parent() {
+                    None => false,
+                    Some(parent) => {
+                        self.goto(parent);
+                        true
+                    }
+                }
+            }
+        }
     }
 
     #[inline]
@@ -778,7 +836,7 @@ impl<'tree> PreorderTraversal<'tree> {
     }
 
     #[inline]
-    pub fn peek(&self) -> TraversalItem<'tree> {
+    pub fn peek(&mut self) -> TraversalItem<'tree> {
         TraversalItem {
             node: self.cursor.node(),
             field_name: self.cursor.field_name(),
@@ -865,5 +923,23 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
             }
         }
         Ok(())
+    }
+}
+
+impl<'tree> Debug for TSNode<'tree> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.node)
+    }
+}
+
+impl Debug for TSNodePtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.node_data)
+    }
+}
+
+impl<'query, 'tree> Debug for TSQueryMatch<'query, 'tree> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.query_match)
     }
 }

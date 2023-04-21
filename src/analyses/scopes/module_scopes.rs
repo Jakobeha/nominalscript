@@ -271,7 +271,7 @@ fn is_scope_node<'tree>(node: TSNode<'tree>, c: &mut TSCursor<'tree>) -> bool {
     is_at_scope(c)
 }
 
-fn is_at_scope(c: &TSCursor<'_>) -> bool {
+fn is_at_scope(c: &mut TSCursor<'_>) -> bool {
     match c.node().kind() {
         "program" |
         "statement_block" |

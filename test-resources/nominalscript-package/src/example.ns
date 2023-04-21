@@ -7,7 +7,7 @@ let b = Foo;42
 let c = Foo;xyz
 
 // Declare a type with a supertype
-type Liters; Number
+type; Liters <; Number
 
 // You must still wrap expressions to cast them
 let d = Liters;42
@@ -21,7 +21,7 @@ try {
 let f = Liters!;45
 
 // You can also declare guards explicitly
-type Natural; Integer guard(x) {
+type; Natural <; Integer guard(x) {
     return x > 0
 }
 
@@ -39,7 +39,7 @@ let j; Integer? = null
 let k; Foo? = null
 
 // You can declare and use object, function, array, and tuple types
-type Car; { make; String, model; String, year; Integer }
+type; Car <; { make; String, model; String, year; Integer }
 // These types ARE structural
 function sum(x; Natural[]); Natural {
     return Natural;sum(...x)
@@ -52,7 +52,7 @@ sum([Natural;1, Natural;2, Natural;3])
 let b; Car = Car;{ make; "Bugatti", model; "Veyron", year; 2007 }
 
 // Also, generics are supported (but not HKTs)
-type Predicate<T>; (T) => Boolean
+type; Predicate<T> <; (T) => Boolean
 
 function allSatisfy<T>(elems; T[], pred; Predicate<T>); Boolean {
     for (const elem of elems) {

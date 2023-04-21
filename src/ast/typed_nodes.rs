@@ -387,9 +387,9 @@ impl<'tree> AstType<'tree> {
                 let this_param = parameters.field_child("this_param");
                 let rest_param = parameters.field_child("rest_param");
                 ThinType::func(
-                    node.field_child("nominal_type_parameters").unwrap()
-                        .named_children(&mut node.walk())
-                        .map(AstTypeParameter::parse),
+                    node.field_child("nominal_type_parameters").map(|x| {
+                        x.named_children(&mut node.walk()).map(AstTypeParameter::parse).collect::<Vec<_>>()
+                    }).unwrap_or_default(),
                     this_param.map_or(ThinType::Any, Self::parse),
                     parameters
                         .named_children(&mut node.walk())
@@ -878,8 +878,9 @@ impl<'tree> AstImportStatement<'tree> {
 
 fn ast_nominal_supertypes<'tree>(scope: &InactiveScopePtr<'tree>, node: Option<TSNode<'tree>>) -> Vec<AstType<'tree>> {
     node.map(|x| {
+        x.mark();
         x.named_children(&mut x.walk())
-            .map(|node| AstType::of_annotation(scope, node))
+            .map(|node| AstType::new(scope, node))
             .collect::<Vec<_>>()
     }).unwrap_or_default()
 }
