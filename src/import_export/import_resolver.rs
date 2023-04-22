@@ -221,6 +221,23 @@ impl ImportResolver {
 }
 
 impl GlobPaths {
+    /// Matches nothing (can't import anything)
+    pub fn empty() -> Self {
+        GlobPaths {
+            globs: GlobSet::empty(),
+            glob_paths: Vec::new()
+        }
+    }
+
+    /// Matches local files, no "extras"
+    pub fn local() -> Self {
+        GlobPaths {
+            globs: GlobSetBuilder::new().add(Glob::new("*").unwrap()).build().unwrap(),
+            glob_paths: vec![NonEmpty::new(PathBuf::new())]
+        }
+    }
+
+    /// Match `path` against each glob pattern and return the result with `base_path` prepended.
     pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a str) -> impl Iterator<Item=PathBuf> + 'a {
         self.globs.matches(path).into_iter().flat_map(move |match_idx| {
             self.glob_paths[match_idx].clone().map(|resolved_path| {

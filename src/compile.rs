@@ -7,7 +7,8 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{error, issue};
-use crate::analyses::bindings::{FieldName, FieldNameStr, GlobalTypeBinding, TypeNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::bindings::{FieldName, FieldNameStr, TypeNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::global_bindings::GlobalTypeBinding;
 use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
 use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, TypeStructure, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;

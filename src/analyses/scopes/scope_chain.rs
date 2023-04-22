@@ -2,12 +2,13 @@ use std::borrow::Borrow;
 use std::fmt::Display;
 use std::hash::Hash;
 use indexmap::Equivalent;
-use crate::analyses::bindings::{DynValueBinding, GlobalValueBinding, ValueName};
-use crate::analyses::scopes::{ExprTypeMap, ActiveScopePtr};
+use crate::analyses::bindings::{DynValueBinding, ValueName};
+use crate::analyses::global_bindings::GlobalValueBinding;
+use crate::analyses::scopes::{ActiveScopePtr, ExprTypeMap};
 use crate::analyses::types::{DynRlType, RlType};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueDecl, DynAstValueBinding};
-use crate::diagnostics::{FileLogger};
+use crate::diagnostics::FileLogger;
 use crate::error;
 
 pub struct ScopeChain<'tree> {

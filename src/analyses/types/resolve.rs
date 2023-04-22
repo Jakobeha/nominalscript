@@ -517,6 +517,13 @@ impl RlType {
     }
 }
 
+impl DynRlTypeDecl {
+    /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
+    pub fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> RlTypeDecl {
+        RlTypeDecl::resolved(self.resolve(ctx).clone())
+    }
+}
+
 impl DynRlType {
     /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
     pub fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> RlType {

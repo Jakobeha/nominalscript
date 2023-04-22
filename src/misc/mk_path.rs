@@ -16,6 +16,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use crate::misc::mk_path::mk_path;
 
+    #[test]
     fn test() {
         let a = mk_path!("a", "b", "c");
         println!("{:?}", a);

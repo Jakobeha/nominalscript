@@ -8,7 +8,7 @@ use std::iter::FusedIterator;
 pub struct RefIterator<'a, R: 'a, T, I: Iterator<Item = T>> {
     /// A reference, which must be kept alive so that the borrow is tracked while the iterator is
     /// alive. This makes it safe to hold the iterator, which doesn't have a borrow tracker itself.
-    ref_: Ref<'a, R>,
+    #[allow(unused)] ref_: Ref<'a, R>,
     /// The iterator
     iter: I
 }

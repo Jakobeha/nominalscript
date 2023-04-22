@@ -1,8 +1,11 @@
+use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::Path;
 
 use derive_more::{AsRef, Deref, DerefMut, Display, Error, From, Into};
+use indexmap::Equivalent;
 use self_cell::self_cell;
 
 use crate::analyses::bindings::{TypeName, ValueName};
@@ -95,16 +98,24 @@ impl Exports {
         self.types.insert(alias, decl);
     }
 
-    pub fn value_type(&self, name: &ValueName) -> Option<&DynRlType> {
+    pub fn value_type<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynRlType> where ValueName: Borrow<N> {
         self.values.get(name).map(|x| x.as_ref())
     }
 
-    pub fn type_decl(&self, name: &TypeName) -> Option<&DynRlTypeDecl> {
+    pub fn type_decl<N: Equivalent<TypeName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynRlTypeDecl> where TypeName: Borrow<N> {
         self.types.get(name).map(|x| x.as_ref())
     }
 
     pub fn get<Alias: ScopeImportAlias>(&self, name: &Alias) -> Option<&DynResolvedLazy<Alias::Fat>> {
         name._index_into_exports(self)
+    }
+
+    pub fn iter_value_types(&self) -> impl Iterator<Item = (&ValueName, &DynRlType)> {
+        self.values.iter().map(|(k, v)| (k, v.as_ref()))
+    }
+
+    pub fn iter_type_decls(&self) -> impl Iterator<Item = (&TypeName, &DynRlTypeDecl)> {
+        self.types.iter().map(|(k, v)| (k, v.as_ref()))
     }
 }
 

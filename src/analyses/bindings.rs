@@ -5,7 +5,7 @@ use derive_more::Display;
 use smol_str::SmolStr;
 use crate::analyses::scopes::ExprTypeMap;
 
-use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolveCtx, RlType, RlTypeDecl};
+use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, ResolveCtx};
 use crate::ast::typed_nodes::AstNode;
 
 macro_rules! define_names {
@@ -163,24 +163,6 @@ pub trait LocalTypeBinding<'tree>: AstNode<'tree> + TypeBinding {}
 /// Also, all [TypeBinding]s are hoisted so this kind of trait doesn't make sense for them.
 pub trait HoistedValueBinding<'tree>: ValueBinding<'tree> {}
 
-/// [ValueBinding] which is implicitly available to the file (available and not imported).
-///
-/// There are 3 kinds of bindings: local, imported, and global.
-#[derive(Debug, Clone)]
-pub struct GlobalValueBinding {
-    pub name: ValueName,
-    pub type_: RlType,
-}
-
-/// [TypeBinding] which is implicitly available to the file (available and not imported).
-///
-/// There are 3 kinds of bindings: local, imported, and global.
-#[derive(Debug, Clone)]
-pub struct GlobalTypeBinding {
-    pub name: TypeName,
-    pub decl: RlTypeDecl,
-}
-
 // pub struct LocalUses<'tree> {
 //     uses: RefCell<BTreeSet<Use<'tree>>>
 // }
@@ -197,115 +179,6 @@ TypeName TypeNameStr,
 /// The string type used for all field names
 FieldName FieldNameStr
 );
-
-impl GlobalValueBinding {
-    pub fn new(name: ValueName, type_: FatType) -> Self {
-        Self {
-            name,
-            type_: RlType::resolved(type_),
-        }
-    }
-
-    pub fn has<N: ?Sized>(name: &N) -> bool where ValueName: Borrow<N> {
-        // TODO: something with lazy_static
-        name; false
-    }
-
-    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalValueBinding> where ValueName: Borrow<N> {
-        // TODO: something with lazy_static
-        name; None
-    }
-}
-
-impl<'tree> ValueBinding<'tree> for GlobalValueBinding {
-    fn name(&self) -> &ValueName {
-        &self.name
-    }
-
-    fn value_type(&self) -> &DynRlType {
-        &self.type_
-    }
-
-    fn locality(&self) -> Locality {
-        Locality::Global
-    }
-
-    fn infer_type_det(&self, _typed_exprs: Option<&ExprTypeMap<'tree>>, _ctx: &ResolveCtx<'_>) -> DeterminedType<'tree> {
-        DeterminedType::intrinsic( self.type_.clone())
-    }
-}
-
-impl PartialEq<GlobalValueBinding> for GlobalValueBinding {
-    fn eq(&self, other: &GlobalValueBinding) -> bool {
-        // Name is the only thing that matters:
-        // if 2 different global bindings had the same name, how would we resolve them?
-        self.name == other.name
-    }
-}
-
-impl Eq for GlobalValueBinding {}
-
-impl Hash for GlobalValueBinding {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-impl GlobalTypeBinding {
-    pub fn new(name: TypeName, decl: FatTypeDecl) -> Self {
-        Self {
-            name,
-            decl: RlTypeDecl::resolved(decl),
-        }
-    }
-
-    pub fn has<N: ?Sized>(name: &N) -> bool where TypeName: Borrow<N> {
-        // TODO: something with lazy_static
-        name; false
-    }
-
-    pub fn get<N: ?Sized>(name: &N) -> Option<&'static GlobalTypeBinding> where TypeName: Borrow<N> {
-        // TODO: something with lazy_static
-        name; None
-    }
-
-    /// The declared type as a determined type
-    pub fn type_det<'tree>(&self) -> DeterminedType<'tree> {
-        DeterminedType::intrinsic( self.decl.clone().into_type())
-    }
-}
-
-impl TypeBinding for GlobalTypeBinding {
-    fn name(&self) -> &TypeName {
-        &self.name
-    }
-
-    fn type_decl(&self) -> &DynRlTypeDecl {
-        &self.decl
-    }
-
-    fn locality(&self) -> Locality {
-        Locality::Global
-    }
-}
-
-impl PartialEq<GlobalTypeBinding> for GlobalTypeBinding {
-    fn eq(&self, other: &GlobalTypeBinding) -> bool {
-        // Name is the only thing that matters:
-        // if 2 different global bindings had the same name, how would we resolve them?
-        self.name == other.name
-    }
-}
-
-impl Eq for GlobalTypeBinding {}
-
-impl Hash for GlobalTypeBinding {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-impl<'tree> HoistedValueBinding<'tree> for GlobalValueBinding {}
 
 impl TypeNameStr {
     /// Gets the type of a number literal, if it is a valid number literal.

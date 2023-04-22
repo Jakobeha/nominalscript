@@ -2,5 +2,7 @@
 pub mod types;
 /// Scopes and contexts + scope analysis
 pub mod scopes;
-/// Datatypes for bindings and the global bindings database (honestly idk where to put this)
+/// Datatypes for bindings
 pub mod bindings;
+/// Global bindings, and loads the global bindings script
+pub mod global_bindings;
