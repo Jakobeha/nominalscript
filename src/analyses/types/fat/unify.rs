@@ -1,11 +1,12 @@
 use std::collections::{HashSet, VecDeque};
 use std::iter::zip;
+use log::warn;
 
 use replace_with::{replace_with, replace_with_or_default};
 
 use crate::{error, note};
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, HasNullability, Nullability, Optionality, OptionalType, ReturnType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, HasNullability, Nullability, Optionality, OptionalType, ReturnType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
 use crate::analyses::types::fat::occurrences::FatIdentIndexStepInFn;
 use crate::diagnostics::TypeLogger;
 use crate::misc::{iter_eq, rc_unwrap_or_clone, VecExtendNoDup, VecFilter};
@@ -211,9 +212,23 @@ impl FatType {
     }
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
+    pub fn unify_generic_arg(
+        this: &mut FatTypeArg,
+        other: FatTypeArg,
+        bias: Variance,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        if this.variance_bound != other.variance_bound {
+            warn!("different variance bounds for same identifier: {} and {}", this.variance_bound, other.variance_bound);
+        }
+        let inner_bias = bias.bounded(this.variance_bound);
+        Self::unify(&mut this.type_, other.type_, inner_bias, e);
+    }
+
+    /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     pub fn unify_generic_args(
-        this: &mut Vec<Self>,
-        other: Vec<Self>,
+        this: &mut Vec<FatTypeArg>,
+        other: Vec<FatTypeArg>,
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -222,7 +237,7 @@ impl FatType {
             return;
         }
         for (index, (this, other)) in zip(this, other).enumerate() {
-            Self::unify(this, other, bias, e.with_context(TypeLoc::TypeArgument { index }));
+            Self::unify_generic_arg(this, other, bias, e.with_context(TypeLoc::TypeArgument { index }));
         }
     }
 
@@ -1001,4 +1016,3 @@ impl FatTypeInherited {
         }
     }
 }
-

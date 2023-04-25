@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
+use std::iter::{repeat, zip};
 use std::ops::Deref;
 
 use elsa::FrozenMap;
@@ -8,7 +9,7 @@ use once_cell::unsync::OnceCell;
 
 use crate::{error, issue, ProjectCtx};
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, RawScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{FatType, FatTypeDecl, FatTypeInherited, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure};
+use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, Nullability, OptionalType, ReturnType, ThinType, ThinTypeDecl, TypeIdent, TypeParam, TypeStructure, Variance};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};
@@ -340,6 +341,31 @@ impl ResolveInto<FatType> for ThinType {
     }
 }
 
+impl ResolveInto<TypeIdent<FatType>> for TypeIdent<ThinType> {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> TypeIdent<FatType> {
+        // We will report missing type identifiers and bad # of generic args in another place
+        let variances = scope.and_then(|scope| {
+            scope.types.get(&self.name)
+        }).map(|type_binding| {
+            // TODO: Is the scope correct? (I assume so because the decl is from scope.types
+            //    but also it may not actually be changed from the original)
+            let type_decl = type_binding.type_decl().resolve(ctx);
+            &type_decl.type_params
+        }).into_iter().flatten().map(|type_param| type_param.variance_bound)
+        // pad with default variance (bivariant) in case we fail to reoslve or there are extra type args
+            .chain(repeat(Variance::Bivariant));
+        TypeIdent {
+            name: self.name.clone(),
+            generic_args: zip(variances, &self.generic_args).map(|(variance_bound, generic_arg)| {
+                FatTypeArg {
+                    variance_bound,
+                    type_: generic_arg.resolve(scope, ctx)
+                }
+            }).collect()
+        }
+    }
+}
+
 impl ResolveInto<FatTypeDecl> for TypeParam<ThinType> {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatTypeDecl {
         let fat_param = <TypeParam<ThinType> as ResolveInto<TypeParam<FatType>>>::resolve(self, scope, ctx);
@@ -399,7 +425,7 @@ impl<Alias: ScopeImportAlias> ResolveInto<Alias::Fat> for ScopeImportIdx<Alias> 
 impl_by_map!(
     <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ResolveInto (
         fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) by map_ref
-    ) for TypeStructure, TypeIdent, TypeParam, OptionalType, ReturnType
+    ) for TypeStructure, TypeParam, OptionalType, ReturnType
 );
 
 impl RlType {

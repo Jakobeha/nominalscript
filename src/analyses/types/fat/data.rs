@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{NominalGuard, Nullability, TypeIdent, TypeParam, TypeStructure};
+use crate::analyses::types::{NominalGuard, Nullability, TypeIdent, TypeParam, TypeStructure, Variance};
 use crate::ast::tree_sitter::SubTree;
 
 /// Type declaration after we've resolved the supertypes
@@ -69,6 +69,13 @@ pub struct FatTypeInherited {
     pub typescript_types: Vec<SubTree>,
     pub guards: Vec<NominalGuard>,
     pub is_never: bool,
+}
+
+/// Fat type argument: has the type identifier's variance as well as the actual argument
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FatTypeArg {
+    pub variance_bound: Variance,
+    pub type_: FatType,
 }
 
 /// Possible rest argument in a fat function type

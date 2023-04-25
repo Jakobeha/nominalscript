@@ -179,7 +179,7 @@ impl FatType {
             FatType::Never { nullability } => FatType::Never { nullability: *nullability },
             FatType::Structural { .. } | FatType::Nominal { .. } => self.with_idents(|ids| match ids.into_iter().flatten().find(|id| &id.name == TypeNameStr::of("Promise")) {
                 Some(promise) => {
-                    let mut awaited_type = promise.generic_args.get(0).cloned().unwrap_or(FatType::Any);
+                    let mut awaited_type = promise.generic_args.get(0).map(|arg| &arg.type_).cloned().unwrap_or(FatType::Any);
                     awaited_type.make_nullable_if(matches!(self.nullability(), Nullability::Nullable));
                     awaited_type
                 }

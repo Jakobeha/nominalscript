@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::iter::{empty, zip};
+use log::warn;
 use replace_with::replace_with_or_default;
 use smallvec::SmallVec;
 
 use crate::analyses::bindings::{FieldName, TypeName};
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeLoc, TypeParam, TypeStructure};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeLoc, TypeParam, TypeStructure};
 use crate::diagnostics::TypeLogger;
 use crate::{error, issue};
 use crate::misc::{iter_if, once_if, RefIterator};
@@ -25,7 +26,7 @@ macro_rules! impl_subst_parameters {
     pub fn subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         e: $($ref_)? TypeLogger<'_, '_, '_>
     ) {
         check_num_arguments!(self, parameters, arguments, e);
@@ -176,7 +177,7 @@ impl FatType {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -257,7 +258,7 @@ impl FatTypeInherited {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: &TypeLogger<'_, '_, '_>
     ) {
@@ -313,7 +314,7 @@ impl FatTypeHole {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -373,7 +374,7 @@ impl TypeIdent<FatType> {
     pub fn subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         e: &TypeLogger<'_, '_, '_>
     ) -> Option<FatType> {
         check_num_arguments!(self, parameters, arguments, e);
@@ -384,7 +385,7 @@ impl TypeIdent<FatType> {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: &TypeLogger<'_, '_, '_>
     ) -> Option<FatType> {
@@ -402,7 +403,11 @@ impl TypeIdent<FatType> {
                     // errors as well)
                     error!(e, "Higher-kinded types are not supported")
                 }
-                arguments[index].clone()
+                let argument = &arguments[index];
+                if argument.variance_bound != parameters[index].variance_bound {
+                    warn!("arg/param variance mismatch for ident named {}", self.name);
+                }
+                argument.type_.clone()
             })
     }
 }
@@ -484,7 +489,7 @@ impl TypeStructure<FatType> {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -579,7 +584,7 @@ impl FnType<FatType> {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -648,7 +653,7 @@ impl OptionalType<FatType> {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -698,7 +703,7 @@ impl ReturnType<FatType> {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -706,6 +711,47 @@ impl ReturnType<FatType> {
             ReturnType::Void => {}
             ReturnType::Type(type_) => type_._subst_parameters(parameters, arguments, shadows, e)
         }
+    }
+}
+
+impl FatTypeArg {
+    /// Paths to occurrences of the name
+    ///
+    /// Function types which declare a parameter shadowing the old name don't have occurrences
+    /// (this includes this type itself).
+    ///
+    /// **Panics** if you are iterating within a type hole and then mutate the type hole in another
+    /// instance (edge case which is very unlikely but still maybe possible to trigger in
+    /// well-crafted source...)
+    pub fn occurrence_paths_of<'a>(&'a self, name: &'a TypeName) -> impl Iterator<Item=FatIdentIndexPath> + 'a {
+        self.type_.occurrence_paths_of(name)
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the new name.
+    ///
+    /// Type params of those identifiers are preserved (subst occurs in them as well).
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name(&mut self, old_name: &TypeName, new_name: &TypeName) {
+        self.type_.subst_name(old_name, new_name)
+    }
+
+    /// Replace all occurrences of `name` in this type (identifiers) with the never type.
+    ///
+    /// Type params of those identifiers are deleted.
+    /// Function types which declare a parameter shadowing the old name aren't affected.
+    pub fn subst_name_with_never(&mut self, name: &TypeName) {
+        self.type_.subst_name_with_never(name)
+    }
+
+    impl_subst_parameters!();
+    fn _subst_parameters(
+        &mut self,
+        parameters: &[TypeParam<FatType>],
+        arguments: &[FatTypeArg],
+        shadows: &mut HashSet<usize>,
+        e: TypeLogger<'_, '_, '_>
+    ) {
+        self.type_._subst_parameters(parameters, arguments, shadows, e)
     }
 }
 
@@ -754,7 +800,7 @@ impl FatRestArgType {
     fn _subst_parameters(
         &mut self,
         parameters: &[TypeParam<FatType>],
-        arguments: &[FatType],
+        arguments: &[FatTypeArg],
         shadows: &mut HashSet<usize>,
         e: TypeLogger<'_, '_, '_>
     ) {
@@ -768,7 +814,7 @@ impl FatRestArgType {
 
 fn _check_num_arguments(
     parameters: &[TypeParam<FatType>],
-    arguments: &[FatType],
+    arguments: &[FatTypeArg],
     e: &TypeLogger<'_, '_, '_>
 ) -> bool {
     if parameters.len() == arguments.len() {

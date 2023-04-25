@@ -48,10 +48,10 @@ pub enum ThinType {
 
 /// An identifier and its generic args
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeIdent<Type> {
+pub struct TypeIdent<Type: TypeTrait> {
     pub name: TypeName,
     // Remember: these don't need to be boxed because they are in a vec
-    pub generic_args: Vec<Type>,
+    pub generic_args: Vec<Type::TypeArg>,
 }
 
 /// A generic parameter (generic def)
@@ -123,7 +123,7 @@ pub struct FnType<Type: TypeTrait> {
     /// The types of the arguments
     pub arg_types: Vec<OptionalType<Type>>,
     /// The type of the rest argument, pass `[]` for no rest argument
-    pub rest_arg_type: Type::RestArgType,
+    pub rest_arg_type: Type::RestArg,
     /// The type of the return value
     pub return_type: ReturnType<Type>,
 }
@@ -197,9 +197,10 @@ pub trait HasNullability: Debug {
 
 /// Base type of [ThinType] and [FatType] which contains associated types that are different
 /// between the 2.
-pub trait TypeTrait: HasNullability + Clone + PartialEq + Eq {
+pub trait TypeTrait: HasNullability + Default + Clone + PartialEq + Eq {
     type Inherited: InheritedTrait;
-    type RestArgType: RestArgTrait;
+    type TypeArg: TypeArgTrait<Type = Self>;
+    type RestArg: RestArgTrait;
 
     /// Is 'Any' AKA top
     fn is_any(&self) -> bool;
@@ -207,15 +208,34 @@ pub trait TypeTrait: HasNullability + Clone + PartialEq + Eq {
     fn is_never(&self) -> bool;
     fn map_inherited(inherited: Self::Inherited, f: impl FnMut(Self) -> Self) -> Self::Inherited where Self: Sized;
     fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited;
-    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType where Self: Sized;
-    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType;
+    fn map_type_arg(mut type_arg: Self::TypeArg, f: impl FnMut(Self) -> Self) -> Self::TypeArg where Self: Sized {
+        replace_with_or_default(type_arg.type_mut(), f);
+        type_arg
+    }
+    fn map_ref_type_arg(type_arg: &Self::TypeArg, f: impl FnMut(&Self) -> Self) -> Self::TypeArg;
+    fn map_rest_arg_type(rest_arg_type: Self::RestArg, f: impl FnMut(Self) -> Self) -> Self::RestArg where Self: Sized;
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArg, f: impl FnMut(&Self) -> Self) -> Self::RestArg;
 }
 
-pub trait InheritedTrait: Debug + Clone + PartialEq + Eq {
+/// Inherited (supertypes) of a type
+pub trait InheritedTrait: Debug + Default + Clone + PartialEq + Eq {
     /// Is this empty inherited (AKA Any, AKA inherits nothing)
     fn is_empty_inherited(&self) -> bool;
 }
 
+/// A type argument AKA instantiated type parameter
+pub trait TypeArgTrait: Debug + Default + Clone + PartialEq + Eq {
+    type Type: TypeTrait + ?Sized;
+
+    /// Reference to the type this argument is instantiated with (what this wraps with extra info)
+    fn type_(&self) -> &Self::Type;
+    /// Mutable reference to the type this argument is instantiated with (what this wraps with extra info)
+    fn type_mut(&mut self) -> &mut Self::Type;
+    /// Destruct into the type this argument is instantiated with (what this wraps with extra info)
+    fn into_type(self) -> Self::Type where Self::Type: Sized;
+}
+
+/// The "rest arg" of a function type
 pub trait RestArgTrait: Debug + Clone + PartialEq + Eq {
     /// Is the empty rest arg (AKA no arguments after the explicit ones)
     fn is_empty_rest_arg(&self) -> bool;
@@ -229,11 +249,13 @@ pub trait RestArgTrait: Debug + Clone + PartialEq + Eq {
 pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
     fn map_inherited(inherited: OldType::Inherited, f: impl FnMut(OldType) -> Self) -> Self::Inherited;
     fn map_ref_inherited(inherited: &OldType::Inherited, f: impl FnMut(Cow<'_, OldType>) -> Self) -> Self::Inherited;
+    fn map_type_arg(type_arg: OldType::TypeArg, f: impl FnMut(OldType) -> Self) -> Self::TypeArg;
+    fn map_ref_type_arg(type_arg: &OldType::TypeArg, f: impl FnMut(&OldType) -> Self) -> Self::TypeArg;
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: OldType::RestArgType,
+        rest_arg_type: OldType::RestArg,
         return_type: ReturnType<Self>,
         f: impl FnMut(OldType) -> Self
     ) -> FnType<Self> where Self: Sized;
@@ -241,7 +263,7 @@ pub trait TypeTraitMapsFrom<OldType: TypeTrait>: TypeTrait {
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: &OldType::RestArgType,
+        rest_arg_type: &OldType::RestArg,
         return_type: ReturnType<Self>,
         f: impl FnMut(Cow<'_, OldType>) -> Self
     ) -> FnType<Self> where Self: Sized;
@@ -290,7 +312,7 @@ macro_rules! impl_structural_type_constructors {
         type_params: impl IntoIterator<Item=$crate::analyses::types::TypeParam<Self>>,
         this_type: Self,
         arg_types: impl IntoIterator<Item=$crate::analyses::types::OptionalType<Self>>,
-        rest_arg_type: <Self as $crate::analyses::types::TypeTrait>::RestArgType,
+        rest_arg_type: <Self as $crate::analyses::types::TypeTrait>::RestArg,
         return_type: $crate::analyses::types::ReturnType<Self>
     ) -> Self {
         Self::Structural {
@@ -352,11 +374,19 @@ impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
         Self::map_ref_inherited(inherited, |x| f(Cow::Borrowed(x)))
     }
 
+    fn map_type_arg(type_arg: T::TypeArg, f: impl FnMut(T) -> Self) -> Self::TypeArg {
+        Self::map_type_arg(type_arg, f)
+    }
+
+    fn map_ref_type_arg(type_arg: &T::TypeArg, f: impl FnMut(&T) -> Self) -> Self::TypeArg {
+        Self::map_ref_type_arg(type_arg, f)
+    }
+
     fn map_rest_arg_type_in_fn(
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: T::RestArgType,
+        rest_arg_type: T::RestArg,
         return_type: ReturnType<Self>,
         f: impl FnMut(T) -> Self
     ) -> FnType<Self> {
@@ -373,7 +403,7 @@ impl<T: TypeTrait> TypeTraitMapsFrom<T> for T {
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: &T::RestArgType,
+        rest_arg_type: &T::RestArg,
         return_type: ReturnType<Self>,
         mut f: impl FnMut(Cow<'_, T>) -> Self
     ) -> FnType<Self> {
@@ -476,7 +506,8 @@ impl HasNullability for ThinType {
 
 impl TypeTrait for ThinType {
     type Inherited = Vec<ThinType>;
-    type RestArgType = ThinType;
+    type TypeArg = ThinType;
+    type RestArg = ThinType;
 
     fn is_any(&self) -> bool {
         matches!(self, Self::Any)
@@ -486,22 +517,36 @@ impl TypeTrait for ThinType {
         matches!(self, Self::Never { nullability: Nullability::NonNullable })
     }
 
-    fn map_inherited(mut inherited: Self::Inherited, mut f: impl FnMut(Self) -> Self) -> Self::Inherited {
+    fn map_inherited(
+        mut inherited: Self::Inherited,
+        mut f: impl FnMut(Self) -> Self
+    ) -> Self::Inherited {
         for inherited in inherited.iter_mut() {
             replace_with_or_default(inherited, &mut f);
         }
         inherited
     }
 
-    fn map_ref_inherited(inherited: &Self::Inherited, f: impl FnMut(&Self) -> Self) -> Self::Inherited {
+    fn map_ref_inherited(
+        inherited: &Self::Inherited,
+        f: impl FnMut(&Self) -> Self,
+    ) -> Self::Inherited {
         inherited.iter().map(f).collect()
     }
 
-    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, mut f: impl FnMut(Self) -> Self) -> Self::RestArgType {
+    fn map_type_arg(type_arg: Self::TypeArg, mut f: impl FnMut(Self) -> Self) -> Self::TypeArg where Self: Sized {
+        f(type_arg)
+    }
+
+    fn map_ref_type_arg(type_arg: &Self::TypeArg, mut f: impl FnMut(&Self) -> Self) -> Self::TypeArg {
+        f(type_arg)
+    }
+
+    fn map_rest_arg_type(rest_arg_type: Self::RestArg, mut f: impl FnMut(Self) -> Self) -> Self::RestArg {
         f(rest_arg_type)
     }
 
-    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, mut f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArg, mut f: impl FnMut(&Self) -> Self) -> Self::RestArg {
         f(rest_arg_type)
     }
 }
@@ -509,6 +554,22 @@ impl TypeTrait for ThinType {
 impl InheritedTrait for Vec<ThinType> {
     fn is_empty_inherited(&self) -> bool {
         self.is_empty()
+    }
+}
+
+impl TypeArgTrait for ThinType {
+    type Type = ThinType;
+
+    fn type_(&self) -> &Self::Type {
+        self
+    }
+
+    fn type_mut(&mut self) -> &mut Self::Type {
+        self
+    }
+
+    fn into_type(self) -> Self::Type where Self::Type: Sized {
+        self
     }
 }
 
@@ -536,18 +597,18 @@ impl TypeParam<ThinType> {
     }
 }
 
-impl<Type> TypeIdent<Type> {
-    pub fn map<NewType>(self, f: impl FnMut(Type) -> NewType) -> TypeIdent<NewType> {
+impl<Type: TypeTrait> TypeIdent<Type> {
+    pub fn map<NewType: TypeTraitMapsFrom<Type>>(self, mut f: impl FnMut(Type) -> NewType) -> TypeIdent<NewType> {
         TypeIdent {
             name: self.name,
-            generic_args: self.generic_args.into_iter().map(f).collect(),
+            generic_args: self.generic_args.into_iter().map(|arg| <NewType as TypeTraitMapsFrom<Type>>::map_type_arg(arg, &mut f)).collect()
         }
     }
 
-    pub fn map_ref<NewType>(&self, f: impl FnMut(&Type) -> NewType) -> TypeIdent<NewType> {
+    pub fn map_ref<NewType: TypeTraitMapsFrom<Type>>(&self, mut f: impl FnMut(&Type) -> NewType) -> TypeIdent<NewType> {
         TypeIdent {
             name: self.name.clone(),
-            generic_args: self.generic_args.iter().map(f).collect(),
+            generic_args: self.generic_args.iter().map(|arg| <NewType as TypeTraitMapsFrom<Type>>::map_ref_type_arg(arg, &mut f)).collect(),
         }
     }
 }
@@ -642,7 +703,7 @@ impl<Type: TypeTrait> TypeStructure<Type> {
     }
 }
 
-impl<Type: TypeTrait + Hash> Hash for TypeStructure<Type> where Type::RestArgType: Hash {
+impl<Type: TypeTrait + Hash> Hash for TypeStructure<Type> where Type::RestArg: Hash {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             TypeStructure::Fn { fn_type } => {
@@ -670,7 +731,7 @@ impl<Type: TypeTrait> FnType<Type> {
         type_params: impl IntoIterator<Item=TypeParam<Type>>,
         this_type: Type,
         arg_types: impl IntoIterator<Item=OptionalType<Type>>,
-        rest_arg_type: Type::RestArgType,
+        rest_arg_type: Type::RestArg,
         return_type: ReturnType<Type>
     ) -> Self {
         FnType {
@@ -723,7 +784,7 @@ impl<Type: TypeTrait> FnType<Type> {
     }
 }
 
-impl<Type: TypeTrait + Hash> Hash for FnType<Type> where Type::RestArgType: Hash {
+impl<Type: TypeTrait + Hash> Hash for FnType<Type> where Type::RestArg: Hash {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Don't need to hash everything, and 2 functions will rarely differ in only type-params
         // (also requires more boilerplate...).
@@ -897,6 +958,18 @@ impl Variance {
 
     pub fn do_union(self) -> bool {
         self.is_covariant()
+    }
+
+    /// Applies variance bound `bound` onto `self`.
+    /// TODO: Also check for variance bounds which are less restricted than the actual inferred
+    ///   variance, but in another place
+    pub fn bounded(self, bound: Variance) -> Self {
+        match bound {
+            Variance::Bivariant => Variance::Bivariant,
+            Variance::Covariant => self,
+            Variance::Contravariant => self.reversed(),
+            Variance::Invariant => Variance::Invariant
+        }
     }
 }
 

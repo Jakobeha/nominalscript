@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 use join_lazy_fmt::Join;
-use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, ThinType, TypeIdent, TypeStructure, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType, ReturnType, RestArgTrait};
+use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, ThinType, TypeIdent, TypeStructure, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType, ReturnType, RestArgTrait, TypeArgTrait, FatTypeArg};
 use crate::misc::DisplayWithCtx;
 
 /// Context which affects how a type is formatted when printed. This includes rules like
@@ -148,6 +148,12 @@ impl Display for NominalGuard {
     }
 }
 
+impl Display for FatTypeArg {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{{}}} {}", self.variance_bound, self.type_)
+    }
+}
+
 impl Display for FatRestArgType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -182,7 +188,7 @@ impl Display for Optionality {
     }
 }
 
-impl<Type: Display> Display for TypeIdent<Type> {
+impl<Type: TypeTrait<TypeArg=TypeArg> + Display, TypeArg: TypeArgTrait + Display> Display for TypeIdent<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if !self.generic_args.is_empty() {
@@ -192,13 +198,13 @@ impl<Type: Display> Display for TypeIdent<Type> {
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> Display for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> Display for TypeStructure<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.with_ctx(&TypeDisplayCtx::default()))
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for TypeStructure<Type> {
     fn fmt(&self, f: &mut Formatter<'_>, ctx: &TypeDisplayCtx) -> std::fmt::Result {
         match self {
             TypeStructure::Fn { fn_type } => write!(f, "{}", fn_type.with_ctx(ctx)),
@@ -213,7 +219,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + DisplayWith
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for FnType<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, RestArgType: RestArgTrait + Display, TypeArg: TypeArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for FnType<Type> {
     fn fmt(&self, f: &mut Formatter<'_>, ctx: &TypeDisplayCtx) -> std::fmt::Result {
         if ctx.must_paren_fn {
             write!(f, "(")?;
@@ -249,7 +255,7 @@ impl<Type: TypeTrait<Inherited=Inherited, RestArgType=RestArgType> + Display, In
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>> Display for TypeParam<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display> Display for TypeParam<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.variance_bound != Variance::default() {
             write!(f, "{} ", self.variance_bound)?;

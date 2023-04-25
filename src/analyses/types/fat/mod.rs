@@ -8,7 +8,7 @@ use std::rc::Rc;
 pub use data::*;
 
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom};
+use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeArgTrait, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
 use crate::diagnostics::TypeLogger;
 use crate::misc::{once_if, rc_unwrap_or_clone};
 
@@ -199,7 +199,8 @@ impl HasNullability for FatType {
 
 impl TypeTrait for FatType {
     type Inherited = Box<FatTypeInherited>;
-    type RestArgType = FatRestArgType;
+    type TypeArg = FatTypeArg;
+    type RestArg = FatRestArgType;
 
     fn is_any(&self) -> bool {
         matches!(self, FatType::Any)
@@ -217,15 +218,30 @@ impl TypeTrait for FatType {
         Box::new(inherited.map_ref(f))
     }
 
-    fn map_rest_arg_type(rest_arg_type: Self::RestArgType, f: impl FnMut(Self) -> Self) -> Self::RestArgType {
+    fn map_type_arg(type_arg: Self::TypeArg, mut f: impl FnMut(Self) -> Self) -> Self::TypeArg where Self: Sized {
+        FatTypeArg {
+            variance_bound: type_arg.variance_bound,
+            type_: f(type_arg.type_)
+        }
+    }
+
+    fn map_ref_type_arg(type_arg: &Self::TypeArg, mut f: impl FnMut(&Self) -> Self) -> Self::TypeArg {
+        FatTypeArg {
+            variance_bound: type_arg.variance_bound,
+            type_: f(&type_arg.type_)
+        }
+    }
+
+    fn map_rest_arg_type(rest_arg_type: Self::RestArg, f: impl FnMut(Self) -> Self) -> Self::RestArg {
         rest_arg_type.map(f)
     }
 
-    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArgType, f: impl FnMut(&Self) -> Self) -> Self::RestArgType {
+    fn map_ref_rest_arg_type(rest_arg_type: &Self::RestArg, f: impl FnMut(&Self) -> Self) -> Self::RestArg {
         rest_arg_type.map_ref(f)
     }
 }
 
+// TODO: Don't implement this trait at all, instead implement it on a wrapper since it's a shallow conversion
 impl TypeTraitMapsFrom<ThinType> for FatType {
     fn map_inherited(inherited: <ThinType as TypeTrait>::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
         let inherited = inherited.into_iter().map(f).collect::<Vec<_>>();
@@ -235,6 +251,26 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     fn map_ref_inherited(inherited: &<ThinType as TypeTrait>::Inherited, mut f: impl FnMut(Cow<'_, ThinType>) -> Self) -> Self::Inherited {
         let inherited = inherited.iter().map(|x| f(Cow::Borrowed(x))).collect::<Vec<_>>();
         Box::new(Self::unify_all_supers(inherited, TypeLogger::ignore()))
+    }
+
+    fn map_type_arg(
+        type_arg: <ThinType as TypeTrait>::TypeArg,
+        mut f: impl FnMut(ThinType) -> Self
+    ) -> Self::TypeArg {
+        FatTypeArg {
+            variance_bound: Variance::default(),
+            type_: f(type_arg)
+        }
+    }
+
+    fn map_ref_type_arg(
+        type_arg: &<ThinType as TypeTrait>::TypeArg,
+        mut f: impl FnMut(&ThinType) -> Self
+    ) -> Self::TypeArg {
+        FatTypeArg {
+            variance_bound: Variance::default(),
+            type_: f(type_arg)
+        }
     }
 
     fn map_rest_arg_type_in_fn(
@@ -283,6 +319,20 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
 
     fn map_ref_inherited(inherited: &<FatType as TypeTrait>::Inherited, mut f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
         inherited.clone().into_bare_fat_types().map(|x| f(Cow::Owned(x))).collect()
+    }
+
+    fn map_type_arg(
+        type_arg: <FatType as TypeTrait>::TypeArg,
+        mut f: impl FnMut(FatType) -> Self
+    ) -> Self::TypeArg {
+        f(type_arg.type_)
+    }
+
+    fn map_ref_type_arg(
+        type_arg: &<FatType as TypeTrait>::TypeArg,
+        mut f: impl FnMut(&FatType) -> Self
+    ) -> Self::TypeArg {
+        f(&type_arg.type_)
     }
 
     fn map_rest_arg_type_in_fn(
@@ -344,17 +394,20 @@ impl TypeParam<FatType> {
         }
     }
 
-    /// Converts this into the nominal type it declares: for [FatType], just a nominal type with
-    /// the name and inherited
-    pub fn into_type(self) -> FatType {
-        FatType::Nominal {
-            nullability: Nullability::NonNullable,
-            id: TypeIdent {
-                name: self.name,
-                // No HKTs
-                generic_args: Vec::new()
-            },
-            inherited: self.supers
+    /// Converts this into the nominal type it declares: for [FatType], just a nominal type with the
+    /// name, inherited, and variance bound
+    pub fn into_type(self) -> FatTypeArg {
+        FatTypeArg {
+            variance_bound: self.variance_bound,
+            type_: FatType::Nominal {
+                nullability: Nullability::NonNullable,
+                id: TypeIdent {
+                    name: self.name,
+                    // No HKTs
+                    generic_args: Vec::new()
+                },
+                inherited: self.supers
+            }
         }
     }
 }
@@ -448,6 +501,22 @@ impl InheritedTrait for FatTypeInherited {
             self.structure.is_none() &&
             self.typescript_types.is_empty() &&
             self.guards.is_empty()
+    }
+}
+
+impl TypeArgTrait for FatTypeArg {
+    type Type = FatType;
+
+    fn type_(&self) -> &Self::Type {
+        &self.type_
+    }
+
+    fn type_mut(&mut self) -> &mut Self::Type {
+        &mut self.type_
+    }
+
+    fn into_type(self) -> Self::Type {
+        self.type_
     }
 }
 
