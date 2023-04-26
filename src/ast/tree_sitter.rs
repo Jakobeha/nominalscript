@@ -33,7 +33,7 @@ pub struct TSNodePtr {
     tree: NonNull<TSTree>
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 /// Taken straight from [tree_sitter::ffi::TSNode], they must both have the same size
 struct TSNodeData {
@@ -481,6 +481,22 @@ impl TSNodePtr {
             node: self.node_data.to_node(),
             tree: self.tree.as_ref(),
         }
+    }
+}
+
+impl PartialEq<TSNodePtr> for TSNodePtr {
+    #[inline]
+    fn eq(&self, other: &TSNodePtr) -> bool {
+        self.node_data == other.node_data
+    }
+}
+
+impl Eq for TSNodePtr {}
+
+impl Hash for TSNodePtr {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node_data.hash(state)
     }
 }
 

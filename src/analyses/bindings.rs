@@ -23,7 +23,7 @@ pub struct $NameStr(str);
 impl $Name {
     pub fn new(name: impl Into<SmolStr>) -> Self {
         let name = name.into();
-        assert!(!Self::RESERVED.contains(&name.as_str()));
+        assert!(!Self::RESERVED.contains(&name.as_str()), "Reserved {}: {}", stringify!($Name), name);
         Self(name.into())
     }
 

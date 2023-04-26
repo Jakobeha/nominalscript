@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -102,10 +103,18 @@ pub(crate) struct ResolveCache {
 struct RecursiveResolution;
 
 /// Trait implemented by [ResolvedLazy] which lets you use `DynResolvedLazy` values with arbitrary thin versions.
-pub trait ResolvedLazyTrait<Fat>: Debug {
+pub trait ResolvedLazyTrait<Fat: FatTrait>: Debug {
     fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat;
 
     fn box_clone(&self) -> Box<dyn ResolvedLazyTrait<Fat>>;
+    /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
+    fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> ResolvedLazy<Fat::NormalThin, Fat>;
+}
+
+/// Trait implemented by the fat version of a [ResolvedLazy] ADT
+pub trait FatTrait: Debug + Clone {
+    /// Thin version which can be constructed from this
+    type NormalThin: FromFat<Self>;
 }
 
 /// Resolved lazy value where you don't know/care about the thin version (dynamically-sized)
@@ -138,6 +147,12 @@ pub trait ToThin<Thin> {
     fn thin(&self) -> Thin;
 }
 
+/// The dual of [ToThin], auto-implemented like [Into] is auto-implemented for [From]
+pub trait FromFat<Fat: ?Sized> {
+    /// Same as [ToThin::thin]. When possible, please use that instead
+    fn from_fat(fat: &Fat) -> Self;
+}
+
 /// A thin (without resolved context) version of data which can be resolved into the fat version
 /// with [ResolveCtx].
 pub trait ResolveInto<Fat> {
@@ -146,6 +161,12 @@ pub trait ResolveInto<Fat> {
     /// Therefore `resolve` should have no side-effects except for ones that would be redundant
     /// (e.g. logging diagnostics and going through imports is ok).
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> Fat;
+}
+
+impl<Fat: ToThin<Thin> + ?Sized, Thin> FromFat<Fat> for Thin {
+    fn from_fat(fat: &Fat) -> Self {
+        fat.thin()
+    }
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -189,11 +210,11 @@ impl ResolveCache {
     }
 }
 
-impl<Thin, Fat: ToThin<Thin>> ResolvedLazy<Thin, Fat> {
+impl<Thin: FromFat<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     pub fn resolved(fat: Fat) -> Self {
         Self {
             scope_origin: None,
-            thin: fat.thin(),
+            thin: Thin::from_fat(&fat),
             fat: OnceCell::with_value(fat)
         }
     }
@@ -230,13 +251,24 @@ impl<Thin: ResolveInto<Fat>, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
-impl<Thin: ResolveInto<Fat> + Debug + Clone + 'static, Fat: Debug + Clone + 'static> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> {
+impl<Thin: ResolveInto<Fat> + Debug + Clone + 'static, Fat: FatTrait + 'static> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> where Fat::NormalThin: Clone {
     fn resolve(&self, ctx: &ResolveCtx<'_>) -> &Fat {
         self.resolve(ctx)
     }
 
     fn box_clone(&self) -> Box<dyn ResolvedLazyTrait<Fat>> {
         Box::new(self.clone())
+    }
+
+    fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> ResolvedLazy<Fat::NormalThin, Fat> {
+        match (&self.thin as &dyn Any).downcast_ref::<Fat::NormalThin>() {
+            None => ResolvedLazy::resolved(self.resolve(ctx).clone()),
+            Some(thin) => ResolvedLazy {
+                scope_origin: self.scope_origin,
+                thin: thin.clone(),
+                fat: self.fat.clone()
+            }
+        }
     }
 }
 
@@ -272,6 +304,10 @@ impl<Thin, Fat> ResolvedLazy<Thin, Fat> {
     }
 }
 
+impl FatTrait for FatType {
+    type NormalThin = ThinType;
+}
+
 impl ToThin<ThinType> for FatType {
     fn thin(&self) -> ThinType {
         match self {
@@ -286,6 +322,10 @@ impl ToThin<ThinType> for FatType {
             FatType::Hole { nullability, hole: _ } => ThinType::dummy_for_hole(*nullability),
         }
     }
+}
+
+impl FatTrait for FatTypeDecl {
+    type NormalThin = ThinTypeDecl;
 }
 
 impl ToThin<ThinTypeDecl> for FatTypeDecl {
@@ -314,9 +354,16 @@ impl ToThin<ThinTypeDecl> for FatTypeDecl {
 }
 
 impl_by_map!(
+    <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: ToThin<Lhs> | crate::analyses::types::TypeTrait> FatTrait (
+        type NormalThin
+    ) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType
+);
+
+impl_by_map!(
     <Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: crate::analyses::types::TypeTrait> ToThin (
         fn thin(&self) by map_ref
-    ) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType);
+    ) for TypeIdent, TypeStructure, TypeParam, OptionalType, ReturnType
+);
 
 impl ResolveInto<FatType> for ThinType {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'_>>, ctx: &ResolveCtx<'_>) -> FatType {
@@ -336,6 +383,13 @@ impl ResolveInto<FatType> for ThinType {
                     })
                 }).unwrap_or_else(FatTypeInherited::empty);
                 FatType::Nominal { nullability: *nullability, id, inherited: Box::new(inherited) }
+            }
+            ThinType::IllegalVoid { loc } => {
+                // SAFETY: Currently types always point to in-scope nodes (not deserialized),
+                //    though we should definitely make this more stable or it will break later
+                let loc = unsafe { loc.to_node() };
+                error!(e, "Void is not allowed here" => loc);
+                FatType::NULL.clone()
             }
         }
     }
@@ -540,20 +594,6 @@ impl RlType {
                 }
             )
         }
-    }
-}
-
-impl DynRlTypeDecl {
-    /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
-    pub fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> RlTypeDecl {
-        RlTypeDecl::resolved(self.resolve(ctx).clone())
-    }
-}
-
-impl DynRlType {
-    /// Resolve, then clone this as an [RlType] (we must resolve to get enough info)
-    pub fn normalize_clone(&self, ctx: &ResolveCtx<'_>) -> RlType {
-        RlType::resolved(self.resolve(ctx).clone())
     }
 }
 

@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 use replace_with::replace_with_or_default;
 use crate::analyses::bindings::{FieldName, TypeName, ValueName};
-use crate::ast::tree_sitter::SubTree;
+use crate::ast::tree_sitter::{SubTree, TSNodePtr};
 
 /// Type declaration before we've resolved the supertypes
 #[derive(Debug, Clone)]
@@ -43,6 +43,9 @@ pub enum ThinType {
     Nominal {
         nullability: Nullability,
         id: TypeIdent<ThinType>
+    },
+    IllegalVoid {
+        loc: TSNodePtr,
     }
 }
 
@@ -473,8 +476,15 @@ impl ThinType {
             }
         }
     }
-    pub fn ident2(name: &str) -> Self {
-        Self::ident(TypeName::new(name))
+
+    pub fn ident2(name: &str, loc: TSNodePtr) -> Self {
+        match name {
+            "Any" => Self::Any,
+            "Never" => Self::NEVER,
+            "Null" => Self::NULL,
+            "Void" => Self::IllegalVoid { loc },
+            _ => Self::ident(TypeName::new(name))
+        }
     }
 
     pub fn generic2(name: &str, generic_args: impl Iterator<Item=Self>) -> Self {
@@ -491,6 +501,7 @@ impl HasNullability for ThinType {
             Self::Never { nullability } => *nullability,
             Self::Structural { nullability, .. } => *nullability,
             Self::Nominal { nullability, .. } => *nullability,
+            Self::IllegalVoid { loc: _ } => Nullability::Nullable,
         }
     }
 
@@ -500,6 +511,7 @@ impl HasNullability for ThinType {
             Self::Never { nullability } => *nullability = Nullability::Nullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
+            Self::IllegalVoid { loc: _ } => {},
         }
     }
 }

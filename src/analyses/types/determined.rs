@@ -2,12 +2,13 @@ use std::borrow::Borrow;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::ops::Range;
+use either::Either;
 use indexmap::Equivalent;
 use crate::analyses::types::{FatType, HasNullability, Nullability, OptionalType, ResolveCtx, ReturnType, RlReturnType, RlType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::{AstReturnType, AstType};
 use crate::diagnostics::{FileLogger, TypeCheckInfo, TypeInfo};
-use crate::{error, issue, hint, hint_if};
+use crate::{error, issue, hint, hint_if, debug};
 use crate::analyses::bindings::FieldName;
 
 /// Required or assigned type with information on what node it was determined from,
@@ -56,6 +57,10 @@ impl<'tree> DeterminedType<'tree> {
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) {
+        debug!(e,"type check {} <: {}",
+            assigned.as_ref().map(|assigned| &assigned.type_.thin).map_or(Either::Left("{Any}"), Either::Right),
+            required.as_ref().map(|required| &required.type_.thin).map_or(Either::Left("{Any}"), Either::Right)
+        => loc_node);
         let Some(
             DeterminedType {
                 type_: required_type,
@@ -156,6 +161,10 @@ impl<'tree> DeterminedType<'tree> {
         e: &FileLogger<'_>,
         ctx: &ResolveCtx<'_>
     ) -> Option<FatType> {
+        debug!(e,"type check {} <:> {}",
+            assigned.as_ref().map(|assigned| &assigned.type_.thin).map_or(Either::Left("{Any}"), Either::Right),
+            required.as_ref().map(|required| &required.type_.thin).map_or(Either::Left("{Any}"), Either::Right)
+        => loc_node);
         let DeterminedType {
             type_: required_type,
             defined_value: required_defined_value,

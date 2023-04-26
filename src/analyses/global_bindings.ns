@@ -1,62 +1,62 @@
-type; Number
-type; Integer <; Number
-type; Natural <; Integer
-type; Boolean
-type; String
-type; Symbol
-type; Object
-type; Function
-type; Bigint
+export type; Number
+export type; Integer <; Number
+export type; Natural <; Integer
+export type; Boolean
+export type; String
+export type; Symbol
+export type; Object
+export type; Function
+export type; Bigint
 // TODO: Specify functions on these
-type; Array<T> <; Object
-type; Set<T> <; Object
-type; Map<K, V> <; Object
-type; Promise<T> <; Object
-type; Generator<T> <; Object
-type; GeneratorFunction <; Function
-type; AsyncFunction <; Function
-type; AsyncGenerator<T> <; Object
-type; AsyncGeneratorFunction <; Function
-type; Iterable<T> <; Object
-type; Iterator<T> <; Object
-type; IterableIterator<T> <; Object
-type; AsyncIterable<T> <; Object
-type; AsyncIterator<T> <; Object
-type; AsyncIterableIterator<T> <; Object
-type; RegExp <; Object
-type; Date <; Object
-type; Error <; Object
-type; EvalError <; Error
-type; RangeError <; Error
-type; ReferenceError <; Error
-type; SyntaxError <; Error
-type; TypeError <; Error
-type; URIError <; Error
-type; ArrayBuffer <; Object
-type; SharedArrayBuffer <; Object
-type; DataView <; Object
-type; Int8Array <; Object
-type; Uint8Array <; Object
-type; Uint8ClampedArray <; Object
-type; Int16Array <; Object
-type; Uint16Array <; Object
-type; Int32Array <; Object
-type; Uint32Array <; Object
-type; Float32Array <; Object
-type; Float64Array <; Object
-type; BigInt64Array <; Object
-type; BigUint64Array <; Object
-type; Atomics <; Object
-type; JSON <; Object
-type; Math <; Object
-type; Reflect <; Object
-type; Intl <; Object
-type; WebAssembly <; Object
+export type; Array<T> <; Object
+export type; Set<T> <; Object
+export type; Map<K, V> <; Object
+export type; Promise<T> <; Object
+export type; Generator<T> <; Object
+export type; GeneratorFunction <; Function
+export type; AsyncFunction <; Function
+export type; AsyncGenerator<T> <; Object
+export type; AsyncGeneratorFunction <; Function
+export type; Iterable<T> <; Object
+export type; Iterator<T> <; Object
+export type; IterableIterator<T> <; Object
+export type; AsyncIterable<T> <; Object
+export type; AsyncIterator<T> <; Object
+export type; AsyncIterableIterator<T> <; Object
+export type; RegExp <; Object
+export type; Date <; Object
+export type; Error <; Object
+export type; EvalError <; Error
+export type; RangeError <; Error
+export type; ReferenceError <; Error
+export type; SyntaxError <; Error
+export type; TypeError <; Error
+export type; URIError <; Error
+export type; ArrayBuffer <; Object
+export type; SharedArrayBuffer <; Object
+export type; DataView <; Object
+export type; Int8Array <; Object
+export type; Uint8Array <; Object
+export type; Uint8ClampedArray <; Object
+export type; Int16Array <; Object
+export type; Uint16Array <; Object
+export type; Int32Array <; Object
+export type; Uint32Array <; Object
+export type; Float32Array <; Object
+export type; Float64Array <; Object
+export type; BigInt64Array <; Object
+export type; BigUint64Array <; Object
+export type; Atomics <; Object
+export type; JSON <; Object
+export type; Math <; Object
+export type; Reflect <; Object
+export type; Intl <; Object
+export type; WebAssembly <; Object
 
-type; Console <; {
+export type; Console <; {
     log; (...Any) => Void
     warn; (...Any) => Void
     error; (...Any) => Void
 }
 
-declare const console; Console
+declare export const console; Console

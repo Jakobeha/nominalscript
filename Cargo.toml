@@ -39,6 +39,7 @@ indexmap = "1.9.2"
 elsa = "1.8.0"
 stable_deref_trait = "1.2.0"
 walkdir = "2.3.3"
+either = "1.8.1"
 
 [dev-dependencies]
 tree-sitter-typescript = "0.20.2"

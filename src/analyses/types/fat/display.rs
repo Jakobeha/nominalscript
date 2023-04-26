@@ -50,6 +50,7 @@ impl DisplayWithCtx<TypeDisplayCtx> for ThinType {
                 nullability,
                 id
             } => write!(f, "{}{}", id, nullability),
+            ThinType::IllegalVoid { loc: _ } => write!(f, "Void"),
         }
     }
 }

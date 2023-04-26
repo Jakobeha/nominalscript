@@ -1016,3 +1016,11 @@ impl FatTypeInherited {
         }
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    #[test]
+    pub fn test_unifys() {
+
+    }
+}

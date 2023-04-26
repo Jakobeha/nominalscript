@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::analyses::scopes::Scope;
-use crate::analyses::types::{DynResolvedLazy, FatType, FatTypeDecl};
+use crate::analyses::types::{DynResolvedLazy, FatTrait, FatType, FatTypeDecl};
 use crate::ast::tree_sitter::TSNode;
 use crate::ast::typed_nodes::AstImportPath;
 use crate::import_export::export::Exports;
@@ -22,7 +22,7 @@ pub type ScopeTypeImportIdx = ScopeImportIdx<TypeName>;
 
 /// Name which is used to import data into the scope
 pub trait ScopeImportAlias: Display {
-    type Fat: Debug + Clone + Default;
+    type Fat: FatTrait + Default;
 
     /// [Scope::import]
     fn _index_into_scope<'a, 'tree>(this: &ScopeImportIdx<Self>, scope: &'a Scope<'tree>) -> (&'a AstImportPath<'tree>, TSNode<'tree>) where Self: Sized;

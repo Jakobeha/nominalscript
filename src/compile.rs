@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use derive_more::{Display, Error, From};
 
-use crate::{error, issue};
+use crate::{debug, error, issue};
 use crate::analyses::bindings::{FieldName, FieldNameStr, TypeNameStr, ValueBinding, ValueNameStr};
 use crate::analyses::global_bindings::GlobalTypeBinding;
 use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
@@ -162,6 +162,7 @@ fn begin_transpile_ast<'tree>(
             }
         }
     }
+    debug!(e, "** begin_transpile_ast done" => ast.root_node());
 }
 
 /// Finish transpiling an ast
@@ -203,6 +204,7 @@ pub(crate) fn finish_transpile<'tree>(
         if skip_nodes.remove(&node) || node.is_marked() {
             skip_children = true
         } else if node.is_named() {
+            debug!(e, "Visiting {:?}:\n  {:.40}", traversal_state, str::escape_debug(node.text()) => node);
             'outer: {
                 match node.kind() {
                     "function_declaration" |
@@ -319,15 +321,11 @@ pub(crate) fn finish_transpile<'tree>(
                     "variable_declarator" => {
                         let name_node = node.field_child("name").unwrap();
                         let name = ValueNameStr::of(name_node.text());
-                        let nominal_type = node.field_child("nominal_type")
-                            .map(|x| AstType::of_annotation(&scope, x));
-                        let value = node.field_child("value");
                         let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
-                        assert_eq!(decl.type_.as_ref().map(|x| x.node), nominal_type.as_ref().map(|x| x.node));
                         if !traversal_state.is_up() {
-                            if let (Some(value), Some(nominal_type)) = (value, nominal_type) {
+                            if let (Some(value), Some(type_)) = (decl.value, decl.type_.as_ref()) {
                                 // Require value to be nominal type
-                                m.typed_exprs.require(value, nominal_type)
+                                m.typed_exprs.require(value, type_.clone())
                             }
                             // Don't traverse binding ids
                             skip_nodes.insert(name_node);
@@ -482,7 +480,7 @@ pub(crate) fn finish_transpile<'tree>(
                     "this" |
                     "identifier" |
                     "shorthand_property_identifier" => {
-                        // No children
+                        skip_children = true;
                         let ident = ValueNameStr::of(node.text());
                         let def = scopes.at_pos(ident, node);
                         let Some(def) = def else {
@@ -493,28 +491,28 @@ pub(crate) fn finish_transpile<'tree>(
                         m.typed_exprs.assign(node, def_type);
                     }
                     "true" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("True")).expect("builtin True type should exist").type_det());
                     }
                     "false" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("False")).expect("builtin False type should exist").type_det());
                     }
                     "null" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, DeterminedType::intrinsic(RlType::NULL.clone()));
                     }
                     "number" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of_number_literal(node.text())).expect("builtin number literal type should exist").type_det());
                     }
                     "string" |
                     "template_string" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("String")).expect("builtin String type should exist").type_det());
                     }
                     "regex" => {
-                        // No children
+                        skip_children = true;
                         m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("Regex")).expect("builtin Regex type should exist").type_det());
                     }
                     "object" => {
@@ -699,8 +697,9 @@ pub(crate) fn finish_transpile<'tree>(
             // made more clear and something besides lastMove should be used instead...
             traversal_state = TraversalState::Up;
         }
-        traversal_cursor.goto_preorder(traversal_state);
+        traversal_state = traversal_cursor.goto_preorder(traversal_state);
     };
+    debug!(e, "** finish_transpile traversal done" => ast.root_node());
 
     // Type analysis (and scope analysis etc.) are done.
     // But not we need to throw errors for bad types
@@ -726,4 +725,5 @@ pub(crate) fn finish_transpile<'tree>(
     // - FunctionDecl and ValueDecl nominal-type annotations
     // - Query nominal imports any exports (we already handle them and warn for child scopes)
     // and then log errors for anything we don't remove
+    debug!(e, "** finish_transpile done" => ast.root_node());
 }

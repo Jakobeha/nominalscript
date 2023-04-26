@@ -376,7 +376,7 @@ impl<'tree> AstType<'tree> {
 
     fn parse(node: TSNode<'tree>) -> ThinType {
         match node.kind() {
-            "nominal_type_identifier" => ThinType::ident2(node.text()),
+            "nominal_type_identifier" => ThinType::ident2(node.text(), node.to_ptr()),
             "parenthesized_nominal_type" => Self::parse(node.named_child(0).unwrap()),
             "generic_nominal_type" => ThinType::generic2(
                 node.named_child(0).unwrap().text(),
