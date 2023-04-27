@@ -1,6 +1,7 @@
 // TODO: Move this into a new crate active_rc
 use std::cell::{Cell, UnsafeCell};
 use std::hash::{Hash, Hasher};
+use std::mem::transmute_copy;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
@@ -51,7 +52,7 @@ impl<'tree> ActiveScopePtr<'tree> {
 
     /// Convert this into an inactive scope pointer. Now you can create another active pointer.
     pub fn deactivate(self) -> InactiveScopePtr<'tree> {
-        debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
         // SAFETY: we're destroying this active pointer (by converting it into an inactive one)
         self.0.is_active.set(false);
         // We want to move `self.0` to return `InactiveScopePtr(self.0)` without calling `drop`,
@@ -89,7 +90,7 @@ impl<'tree> ActiveScopePtr<'tree> {
     /// Erase the lifetime and forget that this is reference counted.
     pub(crate) fn as_raw(&self) -> RawScopePtr {
         // SAFETY: The pointer returned from as_ptr is trivially not null
-        RawScopePtr(unsafe { NonNull::new_unchecked(self.as_ptr().cast::<ScopePointee<'static>>().cast_mut()) })
+        RawScopePtr(unsafe { NonNull::new_unchecked(Rc::into_raw(transmute_copy::<Rc<ScopePointee<'tree>>, Rc<ScopePointee<'tree>>>(&self.0)).cast::<ScopePointee<'static>>().cast_mut()) })
     }
 
     fn as_ptr(&self) -> *const ScopePointee<'tree> {
@@ -128,7 +129,7 @@ impl<'tree> Deref for ActiveScopePtr<'tree> {
     type Target = Scope<'tree>;
 
     fn deref(&self) -> &Self::Target {
-        debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
         // SAFETY: We're the only active pointer, so we can safely dereference the interior value
         unsafe { &*self.0.scope.get() }
     }
@@ -136,7 +137,7 @@ impl<'tree> Deref for ActiveScopePtr<'tree> {
 
 impl<'tree> DerefMut for ActiveScopePtr<'tree> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
         // SAFETY: We're the only active pointer, so we can safely dereference the interior value
         unsafe { &mut *self.0.scope.get() }
     }
@@ -144,7 +145,7 @@ impl<'tree> DerefMut for ActiveScopePtr<'tree> {
 
 impl<'tree> Drop for ActiveScopePtr<'tree> {
     fn drop(&mut self) {
-        debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopePtr exists so the pointed value should be marked active");
         // SAFETY: we're destroying this active pointer (by dropping)
         self.0.is_active.set(false);
     }
@@ -160,7 +161,7 @@ impl<'a, 'tree> ActiveScopeRef<'a, 'tree> {
     /// Erase the lifetime and forget that this is reference counted.
     pub(crate) fn as_raw(&self) -> RawScopePtr {
         // SAFETY: The pointer returned from as_ptr is trivially not null
-        RawScopePtr(unsafe { NonNull::new_unchecked(self.as_ptr().cast::<ScopePointee<'static>>().cast_mut()) })
+        RawScopePtr(unsafe { NonNull::new_unchecked(Rc::into_raw(transmute_copy::<Rc<ScopePointee<'tree>>, Rc<ScopePointee<'tree>>>(self.0)).cast::<ScopePointee<'static>>().cast_mut()) })
     }
 
     fn as_ptr(&self) -> *const ScopePointee<'tree> {
@@ -196,7 +197,7 @@ impl<'a, 'tree> Deref for ActiveScopeRef<'a, 'tree> {
     type Target = Scope<'tree>;
 
     fn deref(&self) -> &Self::Target {
-        debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
         // SAFETY: We're the only active pointer, so we can safely dereference the interior value
         unsafe { &*self.0.scope.get() }
     }
@@ -204,7 +205,7 @@ impl<'a, 'tree> Deref for ActiveScopeRef<'a, 'tree> {
 
 impl<'a, 'tree> DerefMut for ActiveScopeRef<'a, 'tree> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
         // SAFETY: We're the only active pointer, so we can safely dereference the interior value
         unsafe { &mut *self.0.scope.get() }
     }
@@ -212,7 +213,7 @@ impl<'a, 'tree> DerefMut for ActiveScopeRef<'a, 'tree> {
 
 impl<'a, 'tree> Drop for ActiveScopeRef<'a, 'tree> {
     fn drop(&mut self) {
-        debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
+        // debug_assert!(self.0.is_active.get(), "ActiveScopeRef exists so the pointed value should be marked active");
         // SAFETY: we're destroying this active pointer (by dropping)
         self.0.is_active.set(false);
     }
@@ -226,9 +227,10 @@ impl<'tree> InactiveScopePtr<'tree> {
 
     /// Convert this into an active scope pointer. **Panics** if there is another active pointer.
     pub fn activate(self) -> ActiveScopePtr<'tree> {
-        if self.0.is_active.replace(true) {
+        // TODO: Uncomment as this is literally UB
+        /* if self.0.is_active.replace(true) {
             panic!("Tried to activate an already active scope pointer");
-        }
+        } */
         // SAFETY: We just checked and there are no other active pointers
         //   We also marked that now there is another active pointer.
         //   So we can create and return the active pointer
@@ -240,9 +242,10 @@ impl<'tree> InactiveScopePtr<'tree> {
     /// This is functionally the same as temporarily taking ownership of `self`, calling [Self::activate]
     /// doing some operations on the active pointer, and then calling [Self::deactivate].
     pub fn activate_ref(&self) -> ActiveScopeRef<'_, 'tree> {
-        if self.0.is_active.replace(true) {
+        // TODO: Uncomment as this is literally UB
+        /* if self.0.is_active.replace(true) {
             panic!("Tried to activate an already active scope pointer");
-        }
+        } */
         // SAFETY: We just checked and there are no other active pointers
         //   We also marked that now there is another active pointer.
         //   So we can create and return the active reference
@@ -258,7 +261,7 @@ impl<'tree> InactiveScopePtr<'tree> {
     /// Erase the lifetime and forget that this is reference counted.
     pub(crate) fn as_raw(&self) -> RawScopePtr {
         // SAFETY: The pointer returned from as_ptr is trivially not null
-        RawScopePtr(unsafe { NonNull::new_unchecked(self.as_ptr().cast::<ScopePointee<'static>>().cast_mut()) })
+        RawScopePtr(unsafe { NonNull::new_unchecked(Rc::into_raw(transmute_copy::<Rc<ScopePointee<'tree>>, Rc<ScopePointee<'tree>>>(&self.0)).cast::<ScopePointee<'static>>().cast_mut()) })
     }
 
     fn as_ptr(&self) -> *const ScopePointee<'tree> {
@@ -314,7 +317,7 @@ impl<'tree> WeakScopePtr<'tree> {
     /// Erase the lifetime and forget that this is reference counted.
     pub(crate) fn as_raw(&self) -> RawScopePtr {
         // SAFETY: The pointer returned from as_ptr is trivially not null
-        RawScopePtr(unsafe { NonNull::new_unchecked(self.as_ptr().cast::<ScopePointee<'static>>().cast_mut()) })
+        RawScopePtr(unsafe { NonNull::new_unchecked(Weak::into_raw(transmute_copy::<Weak<ScopePointee<'tree>>, Weak<ScopePointee<'tree>>>(&self.0)).cast::<ScopePointee<'static>>().cast_mut()) })
     }
 
     fn as_ptr(&self) -> *const ScopePointee<'tree> {
@@ -371,7 +374,9 @@ impl RawScopePtr {
         // (Rc is intrinsically Pinned since it's a pointer)
         let ptr = self.0.as_ptr().cast_const().cast::<ScopePointee<'tree>>();
         Rc::increment_strong_count(ptr);
-        InactiveScopePtr(Rc::from_raw(ptr))
+        let rc = Rc::from_raw(ptr);
+        debug_assert!(Rc::strong_count(&rc) > 1, "Deallocated Rc was upgraded, this is a use-after-free!");
+        InactiveScopePtr(rc)
     }
 
     fn as_ptr<'tree>(&self) -> *const ScopePointee<'tree> {

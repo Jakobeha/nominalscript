@@ -5,6 +5,7 @@ use std::marker::PhantomPinned;
 use std::rc::Rc;
 
 use indexmap::{Equivalent, IndexMap};
+use once_cell::unsync::OnceCell;
 
 use crate::{error, hint, issue};
 use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
@@ -12,7 +13,7 @@ use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, WeakScopePtr};
 use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, TypeIdent};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
+use crate::ast::typed_nodes::{AstCatchParameter, AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
 use crate::diagnostics::{FileLogger, TypeLogger};
 
 /// A local scope: contains all of the bindings in a scope node
@@ -38,6 +39,7 @@ pub struct Scope<'tree> {
 #[derive(Debug)]
 pub struct ValueScope<'tree> {
     params: IndexMap<ValueName, Rc<AstParameter<'tree>>>,
+    catch_param: OnceCell<Rc<AstCatchParameter<'tree>>>,
     hoisted: HashMap<ValueName, Box<DynAstValueBinding<'tree>>>,
     sequential: HashMap<ValueName, Vec<Box<AstValueDecl<'tree>>>>,
     exported: HashMap<ValueName, ExportedId<'tree, ValueName>>,
@@ -124,6 +126,7 @@ impl<'tree> ValueScope<'tree> {
     fn new() -> ValueScope<'tree> {
         ValueScope {
             params: IndexMap::new(),
+            catch_param: OnceCell::new(),
             hoisted: HashMap::new(),
             sequential: HashMap::new(),
             exported: HashMap::new(),
@@ -146,8 +149,12 @@ impl<'tree> ValueScope<'tree> {
     }
 
     pub fn set_params(&mut self, params: impl Iterator<Item=Rc<AstParameter<'tree>>>) {
-        debug_assert!(self.params.is_empty());
+        debug_assert!(self.params.is_empty(), "set_params() can only be called once per scope");
         self.params.extend(params.map(|param| (param.name().clone(), param)));
+    }
+
+    pub fn set_catch_param(&mut self, catch_param: Rc<AstCatchParameter<'tree>>) {
+        self.catch_param.set(catch_param).expect("set_catch_param() can only be called once per scope");
     }
 
     pub fn add_hoisted(&mut self, decl: impl AstValueBinding<'tree> + 'tree, e: &FileLogger<'_>) {
@@ -232,13 +239,21 @@ impl<'tree> ValueScope<'tree> {
         self.params.values().map(|param| param.as_ref())
     }
 
+    pub fn catch_param(&self) -> Option<&AstCatchParameter<'tree>> {
+        self.catch_param.get().map(|param| param.as_ref())
+    }
+
     pub fn hoisted<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {
         self.hoisted.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>)
+            .or_else(|| self.catch_param().filter(|x| name.equivalent(x.name())).map(|x| x as &DynAstValueBinding<'tree>))
             .or_else(|| self.params.get(name).map(|x| x.as_ref() as &DynAstValueBinding<'tree>))
     }
 
     pub fn has_any<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> bool where ValueName: Borrow<N> {
-        self.sequential.contains_key(name) || self.hoisted.contains_key(name) || self.params.contains_key(name)
+        self.sequential.contains_key(name) ||
+            self.hoisted.contains_key(name) ||
+            matches!(self.catch_param(), Some(param) if name.equivalent(param.name())) ||
+            self.params.contains_key(name)
     }
 
     pub fn last<N: Equivalent<ValueName> + Eq + Hash + ?Sized>(&self, name: &N) -> Option<&DynAstValueBinding<'tree>> where ValueName: Borrow<N> {

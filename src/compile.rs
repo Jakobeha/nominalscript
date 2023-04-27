@@ -14,7 +14,7 @@ use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Fiel
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSCursor, TSNode, TSQueryCursor, TSTree};
-use crate::ast::typed_nodes::{AstFunctionDecl, AstImportStatement, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::ast::typed_nodes::{AstCatchParameter, AstFunctionDecl, AstImportStatement, AstNode, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger, TypeLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;
@@ -204,7 +204,7 @@ pub(crate) fn finish_transpile<'tree>(
         if skip_nodes.remove(&node) || node.is_marked() {
             skip_children = true
         } else if node.is_named() {
-            debug!(e, "Visiting {:?}:\n  {:.40}", traversal_state, str::escape_debug(node.text()) => node);
+            debug!(e, "Visiting {:?} {}:\n  {:.40}", traversal_state, node.kind(), str::escape_debug(node.text()) => node);
             'outer: {
                 match node.kind() {
                     "function_declaration" |
@@ -316,6 +316,19 @@ pub(crate) fn finish_transpile<'tree>(
                                     }
                                 }
                             }
+                        }
+                    }
+                    "catch_clause" => {
+                        if !traversal_state.is_up() {
+                            let catch_param = AstCatchParameter::new(node.field_child("parameter").unwrap());
+                            let body = node.field_child("body").unwrap();
+                            let mut body_scope = m.scopes.denoted_by(body, &mut c)
+                                .expect("scope body is a statement_block, which should have a scope")
+                                .activate_ref();
+
+                            // Don't traverse binding ids
+                            skip_nodes.insert(catch_param.node());
+                            body_scope.values.set_catch_param(Rc::new(catch_param));
                         }
                     }
                     "variable_declarator" => {
@@ -484,7 +497,7 @@ pub(crate) fn finish_transpile<'tree>(
                         let ident = ValueNameStr::of(node.text());
                         let def = scopes.at_pos(ident, node);
                         let Some(def) = def else {
-                            error!(e, "Unresolved identifier" => node);
+                            error!(e, "Unresolved identifier: {}", ident => node);
                             break 'outer
                         };
                         let def_type = def.infer_type_det(Some(&m.typed_exprs), ctx);

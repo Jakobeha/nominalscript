@@ -4,7 +4,7 @@ type; Foo
 // To construct instances of this type, you must explicitly wrap expressions using the syntax ``
 let a = Foo;"string"
 let b = Foo;42
-let c = Foo;xyz
+let c = Foo;globalThis
 
 // Declare a type with a supertype
 type; Liters <; Number
@@ -27,7 +27,7 @@ type; Natural <; Integer guard(x) {
 
 let g = Natural;84
 try {
-    let h = Natural;-2
+    let h = Natural;(-2)
 } catch (e) {
     console.log('Exception:', e) // Exception: IllegalCast
 }
@@ -49,7 +49,7 @@ sum([Natural;1, Natural;2, Natural;3])
 // For example, this still does not type-check
 // let l; Car = { make; "Bugatti", model; "Veyron", year; 2007 }
 // Instead you must do this
-let m; Car = Car;{ make; "Bugatti", model; "Veyron", year; 2007 }
+let m; Car = Car;{ make: "Bugatti", model: "Veyron", year: 2007 }
 
 // Also, generics are supported (but not HKTs)
 type; Predicate<T> <; (T) => Boolean

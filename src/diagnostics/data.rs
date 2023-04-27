@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 use std::collections::{btree_set, BTreeSet};
+use std::env::VarError;
 use std::fmt::{Debug, Display, Formatter};
 
 use derive_more::Display;
+use join_lazy_fmt::Join;
 use elsa::FrozenMap;
-use log::debug;
+use lazy_static::lazy_static;
+use log::{debug, error};
 use smallvec::SmallVec;
 
 use crate::ast::tree_sitter::TSRange;
@@ -53,6 +56,12 @@ pub enum DiagnosticLevel {
     Info,
     #[display(fmt = "debug")]
     Debug
+}
+
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LoggerLevel {
+    DontLog,
+    DoLog { level: DiagnosticLevel }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +123,7 @@ impl ProjectDiagnostics {
         if let Some(existing) = global.get(&diagnostic) {
             debug!("Duplicate diagnostic was replaced: {}", existing);
         }
-        if self.print_globals_immediately {
+        if self.print_globals_immediately && RUST_LOG.logs(diagnostic.level) {
             eprintln!("{}", diagnostic);
         }
         global.insert(diagnostic);
@@ -156,7 +165,7 @@ impl FileDiagnostics {
         if let Some(existing) = diagnostics.get(&diagnostic) {
             debug!("Duplicate diagnostic was replaced: {}", existing);
         }
-        if self.print_locals_immediately {
+        if self.print_locals_immediately && RUST_LOG.logs(diagnostic.level) {
             eprintln!("{}:{}", self.path.path().display(), diagnostic);
         }
         diagnostics.insert(diagnostic);
@@ -202,6 +211,68 @@ impl FileDiagnostic {
 impl GlobalDiagnostic {
     pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo>) {
         self.additional_info.extend(info);
+    }
+}
+
+lazy_static! {
+    pub static ref RUST_LOG: LoggerLevel = LoggerLevel::get_rust_log();
+}
+
+impl LoggerLevel {
+    pub fn logs(&self, level: DiagnosticLevel) -> bool {
+        match self {
+            LoggerLevel::DontLog => false,
+            LoggerLevel::DoLog { level: log_level } => *log_level >= level
+        }
+    }
+
+    const VALID_RUST_LOG_VALUES: [(&'static str, LoggerLevel); 17] = [
+        ("off", LoggerLevel::DontLog),
+        ("none", LoggerLevel::DontLog),
+        ("error", LoggerLevel::DoLog { level: DiagnosticLevel::Error }),
+        ("warn", LoggerLevel::DoLog { level: DiagnosticLevel::Warning }),
+        ("info", LoggerLevel::DoLog { level: DiagnosticLevel::Info }),
+        ("debug", LoggerLevel::DoLog { level: DiagnosticLevel::Debug }),
+        ("Off", LoggerLevel::DontLog),
+        ("None", LoggerLevel::DontLog),
+        ("Error", LoggerLevel::DoLog { level: DiagnosticLevel::Error }),
+        ("Warn", LoggerLevel::DoLog { level: DiagnosticLevel::Warning }),
+        ("Info", LoggerLevel::DoLog { level: DiagnosticLevel::Info }),
+        ("Debug", LoggerLevel::DoLog { level: DiagnosticLevel::Debug }),
+        ("0", LoggerLevel::DontLog),
+        ("1", LoggerLevel::DoLog { level: DiagnosticLevel::Error }),
+        ("2", LoggerLevel::DoLog { level: DiagnosticLevel::Warning }),
+        ("3", LoggerLevel::DoLog { level: DiagnosticLevel::Info }),
+        ("4", LoggerLevel::DoLog { level: DiagnosticLevel::Debug }),
+    ];
+
+    fn get_rust_log() -> LoggerLevel {
+        match std::env::var("RUST_LOG") {
+            Ok(level) => {
+                match Self::VALID_RUST_LOG_VALUES.iter().find(|(str, _)| level.as_str() == *str) {
+                    None => {
+                        error!(
+                        "Invalid RUST_LOG value: {}.\nValid ones are: [{}]",
+                        level,
+                        ", ".join(Self::VALID_RUST_LOG_VALUES.iter().map(|(str, _)| str))
+                    );
+                        LoggerLevel::default()
+                    }
+                    Some((_, level)) => *level
+                }
+            },
+            Err(VarError::NotPresent) => LoggerLevel::default(),
+            Err(VarError::NotUnicode(str)) => {
+                error!("Invalid RUST_LOG value: not unicode ({})", str.to_string_lossy());
+                LoggerLevel::default()
+            }
+        }
+    }
+}
+
+impl Default for LoggerLevel {
+    fn default() -> Self {
+        LoggerLevel::DoLog { level: DiagnosticLevel::Info }
     }
 }
 

@@ -73,6 +73,12 @@ pub struct AstParameter<'tree> {
     // pub local_uses: LocalUses<'tree>,
 }
 
+#[derive(Debug)]
+pub struct AstCatchParameter<'tree> {
+    pub name: AstValueIdent<'tree>,
+    // pub local_uses: LocalUses<'tree>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AstReturn<'tree> {
     pub node: TSNode<'tree>,
@@ -156,14 +162,27 @@ pub struct AstImportStatement<'tree> {
     pub(crate) import_path_idx: usize
 }
 
+macro_rules! impl_ast1 {
+    (AstCatchParameter) => {
+impl<'tree> AstNode<'tree> for AstCatchParameter<'tree> {
+    fn node(&self) -> TSNode<'tree> {
+        self.name.node()
+    }
+}
+    };
+    ($Type:ident) => {
+impl<'tree> AstNode<'tree> for $Type<'tree> {
+    fn node(&self) -> TSNode<'tree> {
+        self.node
+    }
+}
+    }
+}
+
 macro_rules! impl_ast {
     ($($Type:ident),+) => {
         $(
-            impl<'tree> AstNode<'tree> for $Type<'tree> {
-                fn node(&self) -> TSNode<'tree> {
-                    self.node
-                }
-            }
+            impl_ast1!($Type);
         )+
     }
 }
@@ -583,6 +602,26 @@ impl<'tree> TypedAstNode<'tree> for AstParameter<'tree> {
 
 impl<'tree> HoistedValueBinding<'tree> for AstParameter<'tree> {}
 
+impl_ast_local_value_binding!(AstCatchParameter);
+impl<'tree> AstCatchParameter<'tree> {
+    pub fn new(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["identifier"]);
+        Self {
+            name: AstValueIdent::new(node)
+        }
+    }
+}
+
+impl<'tree> TypedAstNode<'tree> for AstCatchParameter<'tree> {
+    fn type_annotation(&self) -> Option<&AstType<'tree>> {
+        None
+    }
+
+    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
+        RlType::any_ref()
+    }
+}
+
 impl_ast!(AstReturn);
 impl<'tree> AstReturn<'tree> {
     pub fn new(node: TSNode<'tree>) -> Self {
@@ -667,10 +706,13 @@ impl<'tree> AstFunctionDecl<'tree> {
         node: TSNode<'tree>
     ) -> (Vec<AstTypeParameter<'tree>>, Vec<Rc<AstParameter<'tree>>>, Option<AstReturnType<'tree>>, RlType) {
         let nominal_params = Self::nominal_params_of(scope, node);
-        let formal_params = node.field_child("parameters").unwrap()
-            .named_children(&mut node.walk())
-            .map(|node| Rc::new(AstParameter::formal(scope, node, false)))
-            .collect::<Vec<_>>();
+        let formal_params = match node.field_child("parameters") {
+            None => vec![Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))],
+            Some(parameters) => parameters
+                .named_children(&mut node.walk())
+                .map(|node| Rc::new(AstParameter::formal(scope, node, false)))
+                .collect::<Vec<_>>()
+        };
         let return_type = node.field_child("nominal_return_type")
             .map(|node| AstReturnType::of_annotation(scope, node));
         let fn_type = ResolvedLazy::new(scope, ThinType::func(

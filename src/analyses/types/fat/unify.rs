@@ -500,13 +500,13 @@ impl FatType {
         // Check for subtype/supertype issues from names. Subtype = more fields
         let iter_this_field_names = || this.iter().map(|field| &field.name);
         let iter_other_field_names = || other.iter().map(|field| &field.name);
-        if !bias.is_covariant() {
+        if !bias.is_contravariant() {
             let this_field_names = iter_this_field_names().collect::<HashSet<_>>();
             for other_field_name in iter_other_field_names().filter(|other_field_name| !this_field_names.contains(other_field_name)) {
                 error!(e, "missing field `{}`", other_field_name)
             }
         }
-        if !bias.is_contravariant() {
+        if !bias.is_covariant() {
             let other_field_names = iter_other_field_names().collect::<HashSet<_>>();
             for this_field_name in iter_this_field_names().filter(|this_field_name| !other_field_names.contains(this_field_name)) {
                 error!(e, "extra field `{}`", this_field_name)
@@ -545,9 +545,9 @@ impl FatType {
 
     /// [Unifies](FatType::unify) `this` with `other` and logs subtype/disjoint errors based on `bias`.
     ///
-    /// Note that the unify "intersection" contains *all* super-ids, which is actually a union
-    /// (inherit intersection = inherit all - remember that the more types are inherited, the less
-    /// instances exist, and a type union has more instances).
+    /// Note that the unify "intersection" contains *all* super-ids, while a "union" contains *only
+    /// common* super-ids (inherit intersection = inherit all - remember that the more types are
+    /// inherited, the less instances exist, and a type union has more instances).
     // This function is essentially exact same as unify_fields...is there a good way to abstract?
     pub fn unify_super_ids(
         this: &mut VecDeque<TypeIdent<FatType>>,
@@ -558,13 +558,13 @@ impl FatType {
         // Check for subtype/supertype issues from names. Subtype = more identifiers
         let iter_this_super_ids = || this.iter().map(|id| &id.name);
         let iter_other_super_ids = || other.iter().map(|id| &id.name);
-        if !bias.is_covariant() {
+        if !bias.is_contravariant() {
             let this_super_ids = iter_this_super_ids().collect::<HashSet<_>>();
             for other_super_id in iter_other_super_ids().filter(|other_super_id| !this_super_ids.contains(other_super_id)) {
                 error!(e, "missing supertype `{}`", other_super_id)
             }
         }
-        if !bias.is_contravariant() {
+        if !bias.is_covariant() {
             let other_super_ids = iter_other_super_ids().collect::<HashSet<_>>();
             for this_super_id in iter_this_super_ids().filter(|this_super_id| !other_super_ids.contains(this_super_id)) {
                 error!(e, "extra supertype `{}`", this_super_id)

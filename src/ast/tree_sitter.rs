@@ -766,7 +766,7 @@ impl<'query, 'tree> TSQueryCapture<'query, 'tree> {
 
 impl Display for TSPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.0.row, self.0.column)
+        write!(f, "{}:{}", self.0.row + 1, self.0.column + 1)
     }
 }
 

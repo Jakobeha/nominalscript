@@ -2,6 +2,8 @@ export type; Number
 export type; Integer <; Number
 export type; Natural <; Integer
 export type; Boolean
+export type; True <; Boolean
+export type; False <; Boolean
 export type; String
 export type; Symbol
 export type; Object
@@ -53,10 +55,12 @@ export type; Reflect <; Object
 export type; Intl <; Object
 export type; WebAssembly <; Object
 
+export type; GlobalThis
 export type; Console <; {
     log; (...Any) => Void
     warn; (...Any) => Void
     error; (...Any) => Void
 }
 
+declare export const globalThis; GlobalThis
 declare export const console; Console
