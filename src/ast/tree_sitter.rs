@@ -8,12 +8,12 @@ use derive_more::{Display, From, Error};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::ptr::NonNull;
+use crate::misc::Utf8ErrorOffsetBy;
 
 #[derive(Debug)]
 pub struct TSTree {
-    byte_text: Vec<u8>,
     tree: tree_sitter::Tree,
-    cached_data: CachedTreeData,
+    byte_text: Vec<u8>,
     marked_nodes: RefCell<HashSet<TSNodeId>>
 }
 
@@ -43,6 +43,7 @@ struct TSNodeData {
 }
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct TSNodeId(usize);
 
 #[derive(Clone)]
@@ -88,25 +89,24 @@ pub struct TSRange(tree_sitter::Range);
 #[repr(transparent)]
 pub struct TSPoint(tree_sitter::Point);
 
+#[repr(transparent)]
 pub struct TSParser(tree_sitter::Parser);
 
 pub type TSLanguage = tree_sitter::Language;
 pub type TSLanguageError = tree_sitter::LanguageError;
 pub type TSQuery = tree_sitter::Query;
 pub type TSQueryProperty = tree_sitter::QueryProperty;
-
 pub type TSIncludedRangesError = tree_sitter::IncludedRangesError;
 
 #[derive(Debug, Display, From, Error)]
-pub enum TreeCreateError {
+pub enum TreeParseError {
     IO(std::io::Error),
-    LoadLanguage(tree_sitter::LanguageError),
     ParsingFailed,
-    #[display(fmt = "Invalid UTF-8 at byte index {}-{}", actual_index, "error.error_len().unwrap_or(0)")]
-    NotUtf8 { actual_index: usize, error: Utf8Error }
+    NotUtf8(Utf8Error)
 }
 
-/// Allows you to store TSNode separately from the tree
+/// General-purpose way to store TSNode separately from the tree, e.g. if you need to serialize it.
+/// Unfortunately this is just done by storing the text and range, there's not much else we can do
 #[derive(Debug, Clone)]
 pub struct SubTree {
     pub text: String,
@@ -161,37 +161,31 @@ impl TSParser {
     }
 
     #[inline]
-    pub fn parse_file(&mut self, path: &Path) -> Result<TSTree, TreeCreateError> {
+    pub fn parse_file(&mut self, path: &Path) -> Result<TSTree, TreeParseError> {
         self.parse_bytes(std::fs::read(path)?)
     }
 
     #[inline]
-    pub fn parse_string(&mut self, text: String) -> Result<TSTree, TreeCreateError> {
+    pub fn parse_string(&mut self, text: String) -> Result<TSTree, TreeParseError> {
         self.parse_bytes(text.into_bytes())
     }
 
     #[inline]
-    pub fn parse_bytes(&mut self, byte_text: Vec<u8>) -> Result<TSTree, TreeCreateError> {
-        let tree = self.0.parse(&byte_text, None).ok_or(TreeCreateError::ParsingFailed)?;
-        TSTree::new(tree, byte_text)
+    pub fn parse_bytes(&mut self, byte_text: Vec<u8>) -> Result<TSTree, TreeParseError> {
+        let tree = self.0.parse(&byte_text, None).ok_or(TreeParseError::ParsingFailed)?;
+        Ok(TSTree::new(tree, byte_text)?)
     }
 }
 
 impl TSTree {
     #[inline]
-    fn new(tree: tree_sitter::Tree, byte_text: Vec<u8>) -> Result<Self, TreeCreateError> {
+    fn new(tree: tree_sitter::Tree, byte_text: Vec<u8>) -> Result<Self, Utf8Error> {
         Self::validate_utf8(&tree, &byte_text)?;
-        let cached_data = CachedTreeData::new(&tree);
-        Ok(Self { byte_text, tree, cached_data, marked_nodes: RefCell::new(HashSet::new()) })
+        Ok(Self { tree, byte_text, marked_nodes: RefCell::default() })
     }
 
-    fn validate_utf8(tree: &tree_sitter::Tree, byte_text: &[u8]) -> Result<(), TreeCreateError> {
-        if let Err(error) = std::str::from_utf8(byte_text) {
-            return Err(TreeCreateError::NotUtf8 {
-                actual_index: error.valid_up_to(),
-                error
-            })
-        }
+    fn validate_utf8(tree: &tree_sitter::Tree, byte_text: &[u8]) -> Result<(), Utf8Error> {
+        let _ = std::str::from_utf8(byte_text)?;
         let mut cursor = tree.walk();
         let mut went_up = false;
         while (!went_up && cursor.goto_first_child()) ||
@@ -199,12 +193,9 @@ impl TSTree {
             { went_up = true; cursor.goto_parent() } {
             let node = cursor.node();
             let range = node.byte_range();
-            if let Err(error) = std::str::from_utf8(&byte_text[range]) {
-                return Err(TreeCreateError::NotUtf8 {
-                    actual_index: node.start_byte() + error.valid_up_to(),
-                    error
-                })
-            }
+            let _ = std::str::from_utf8(&byte_text[range]).map_err(|e| {
+                e.offset_by(node.start_byte())
+            })?;
         }
         Ok(())
     }
@@ -528,7 +519,8 @@ impl<'tree> TSCursor<'tree> {
             child_depth: match is_rooted {
                 false => 0,
                 true => 1
-            } }
+            }
+        }
     }
 
     #[inline]
@@ -816,15 +808,13 @@ impl CachedTreeData {
     }
 }
 
-impl Clone for TreeCreateError {
+impl Clone for TreeParseError {
     #[inline]
     fn clone(&self) -> Self {
         match self {
-            TreeCreateError::IO(e) => TreeCreateError::IO(std::io::Error::from(e.kind())),
-            // SAFETY: Relies on LanguageError being POD, so it could technically break in a future version but very unlikely
-            TreeCreateError::LoadLanguage(e) => TreeCreateError::LoadLanguage(unsafe { std::mem::transmute_copy(e) }),
-            TreeCreateError::ParsingFailed => TreeCreateError::ParsingFailed,
-            TreeCreateError::NotUtf8 { actual_index, error } => TreeCreateError::NotUtf8 { actual_index: *actual_index, error: error.clone() }
+            TreeParseError::IO(e) => TreeParseError::IO(std::io::Error::from(e.kind())),
+            TreeParseError::ParsingFailed => TreeParseError::ParsingFailed,
+            TreeParseError::NotUtf8(e) => TreeParseError::NotUtf8(*e)
         }
     }
 }
@@ -924,44 +914,42 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
         let mut c = self.0.walk();
         let mut c2 = self.0.walk();
         let mut state = TraversalState::Start;
+        let mut state2 = c2.goto_preorder(TraversalState::Start);
         loop {
-            let state0 = c.goto_preorder(state);
-            let state1 = c2.goto_preorder(state);
-            debug_assert_eq!(state0, state1);
-            state = state0;
+            state = c.goto_preorder(state);
+            debug_assert_eq!(state, state2);
             if state.is_end() {
                 break
             }
 
             let mut has_marked_child = false;
-            let mut state2 = c2.goto_preorder(state);
+            let mut state2 = c2.goto_preorder(state2);
             if matches!(state2, TraversalState::Down) {
-                loop {
+                let mut depth = 1;
+                while depth > 0 {
                     if nodes_with_marked_child.contains(&c2.node().id()) {
                         has_marked_child = true;
-                        c2.goto(c.node());
-                        break
+                        while depth > 0 {
+                            c2.goto_parent();
+                            depth -= 1;
+                        }
                     } else if c2.node().is_marked() {
                         has_marked_child = true;
                         nodes_with_marked_child.insert(c2.node().id());
-                        loop {
+                        while depth > 0 {
                             c2.goto_parent();
                             nodes_with_marked_child.insert(c2.node().id());
-                            if c2.node() == c.node() {
-                                break
-                            }
+                            depth -= 1;
                         }
-                        break
-                    }
-
-                    state2 = c2.goto_preorder(state2);
-                    if c2.node() == c.node() {
-                        debug_assert!(state2.is_up());
-                        break
+                    } else {
+                        state2 = c2.goto_preorder(state2);
+                        match state2 {
+                            TraversalState::Down => depth += 1,
+                            TraversalState::Up => depth -= 1,
+                            _ => {}
+                        }
                     }
                 }
-            } else {
-                c2.goto(c.node());
             }
             if !has_marked_child {
                 if did_write {
@@ -970,6 +958,12 @@ impl<'a> Display for DisplayUnmarkedTSTree<'a> {
                     did_write = true;
                 }
                 write!(f, "{}", c.node().text())?;
+
+                // Skip children
+                if matches!(state2, TraversalState::Down) {
+                    state = TraversalState::Up;
+                    state2 = TraversalState::Up;
+                }
             }
         }
         Ok(())

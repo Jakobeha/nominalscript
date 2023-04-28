@@ -27,6 +27,8 @@ mod result_filter_err;
 mod vec_extend_no_dup;
 /// `Vec::find_remove`
 mod vec_find_remove;
+/// Offset a utf-8 error
+mod utf8_error_offset_by;
 
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use chain::chain;
@@ -47,3 +49,4 @@ pub(crate) use ref_iterator::RefIterator;
 pub(crate) use result_filter_err::ResultFilterErr;
 pub(crate) use vec_extend_no_dup::VecExtendNoDup;
 pub(crate) use vec_find_remove::VecFilter;
+pub(crate) use utf8_error_offset_by::Utf8ErrorOffsetBy;
