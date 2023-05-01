@@ -1,13 +1,12 @@
-use std::rc::Rc;
 use enquote::unquote;
-use once_cell::unsync::{Lazy, OnceCell};
+use once_cell::unsync::OnceCell;
 
+use crate::{impl_has_ann_record_struct, impl_has_ann_wrapper_struct};
 use crate::analyses::bindings::{DynValueBinding, FieldIdent, FieldNameStr, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeIdent, TypeNameStr, ValueBinding, ValueIdent, ValueNameStr};
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, Field, HasNullability, InferrableThinType, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ResolveInto, ReturnType, RlInferrableType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, StatementBlock, ThinType, ThinTypeDecl, TypeParam, TypescriptType, Variance};
 use crate::ast::ann::{Ann, HasAnn};
 use crate::ast::tree_sitter::TSNode;
-use crate::{impl_has_ann_record_struct, impl_has_ann_wrapper_struct};
 use crate::import_export::export::ImportPath;
 
 pub trait AstNode<'tree> {
@@ -42,19 +41,10 @@ pub struct ValueParameter<'tree> {
     pub is_this_param: bool,
     pub is_rest_param: bool,
     pub is_optional: bool,
-    pub type_: Option<ValueParameterType<'tree>>,
+    pub type_: Option<RlInferrableType<'tree>>,
     pub value: Option<ValueExpr<'tree>>,
 }
 impl_has_ann_record_struct!(ValueParameter);
-
-/// Formal parameter's type, which is different from [RlType] because it sometimes it's inferred
-#[derive(Debug)]
-pub enum ValueParameterType<'tree> {
-    /// Explicitly provided type
-    Explicit { type_: RlType<'tree> },
-    /// Backwards-inferred hole
-    Hole { hole: Lazy<RlType<'tree>> }
-}
 
 /// "Parameter" bound in a `catch` clause
 #[derive(Debug)]
@@ -94,7 +84,7 @@ pub struct FunctionDecl<'tree> {
     pub ann: Ann<'tree>,
     pub name: ValueIdent<'tree>,
     pub nominal_params: Vec<RlTypeParameter<'tree>>,
-    pub formal_params: Vec<Rc<ValueParameter<'tree>>>,
+    pub formal_params: Vec<ValueParameter<'tree>>,
     pub return_type: Option<RlReturnType<'tree>>,
     fn_type: RlType<'tree>,
     custom_inferred_fn_type: OnceCell<RlType<'tree>>,
@@ -106,18 +96,16 @@ pub struct FunctionDecl<'tree> {
 #[derive(Debug)]
 pub struct ValueImportSpecifier<'tree> {
     pub ann: Ann<'tree>,
-    pub original_name: ValueIdent<'tree>,
+    pub idx: ScopeValueImportIdx<'tree>,
     pub alias: ValueIdent<'tree>,
-    pub shape: RlImportedValueType<'tree>,
 }
 
 /// Type import specifier (`Bar as Baz` in `import {bar as baz, ;Bar as Baz} from 'foo'`)
 #[derive(Debug)]
 pub struct TypeImportSpecifier<'tree> {
     pub ann: Ann<'tree>,
-    pub original_name: TypeIdent<'tree>,
+    pub idx: ScopeTypeImportIdx<'tree>,
     pub alias: TypeIdent<'tree>,
-    pub shape: RlImportedTypeDecl<'tree>,
 }
 
 /// Import path (`'foo'` in `import {bar as baz, ;Bar as Baz} from 'foo'`)
@@ -209,8 +197,13 @@ impl<'tree> _TypeBinding<'tree> for RlTypeParam<'tree> {
 }
 
 impl_ast_value_binding!(ValueParameter name Local);
-impl<'tree> _ValueBinding<'tree> for ValueParameter<'tree> {
 
+pub trait ParseableWithScope<'tree> {
+    fn parse(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self;
+}
+
+pub trait ParseableAnnotationWithScope<'tree> {
+    fn parse_annotation(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self;
 }
 
 pub trait Parseable<'tree> {
@@ -222,6 +215,18 @@ pub trait ParseableAnnotation<'tree>: Parseable<'tree> {
         assert_kind!(node, ["nominal_type_annotation"]);
         node.mark();
         Self::parse(node.named_child(0).unwrap())
+    }
+}
+
+impl<'tree, Thin: Parseable<'tree> + ResolveInto<'tree, Fat>, Fat> ParseableWithScope<'tree> for ResolvedLazy<Thin, Fat> {
+    fn parse(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        ResolvedLazy::new(scope, Thin::parse(node))
+    }
+}
+
+impl<'tree, Thin: ParseableAnnotation<'tree> + ResolveInto<'tree, Fat>, Fat> ParseableAnnotationWithScope<'tree> for ResolvedLazy<Thin, Fat> {
+    fn parse_annotation(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+        ResolvedLazy::new(scope, Thin::parse_annotation(node))
     }
 }
 
@@ -245,6 +250,36 @@ impl<'tree> Parseable<'tree> for TypeIdent<'tree> {
     }
 }
 
+impl<'tree> Parseable<'tree> for NominalGuard<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["nominal_type_guard"]);
+        Self {
+            ann: Ann::DirectSource { loc: node },
+            param: ValueIdent::parse(node.named_child(0).unwrap()),
+            body: StatementBlock::parse(node.named_child(1).unwrap()),
+        }
+    }
+}
+
+impl<'tree> Parseable<'tree> for StatementBlock<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
+        assert_kind!(node, ["statement_block"]);
+        Self(node)
+    }
+}
+
+impl<'tree> Parseable<'tree> for TypescriptType<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
+        TypescriptType(node)
+    }
+}
+
+impl<'tree> Parseable<'tree> for ValueExpr<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
+        ValueExpr(node)
+    }
+}
+
 impl<'tree> Parseable<'tree> for FieldIdent<'tree> {
     fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["identifier"]);
@@ -258,20 +293,13 @@ impl<'tree> Parseable<'tree> for FieldIdent<'tree> {
 impl<'tree> Parseable<'tree> for TypeParam<'tree, ThinType<'tree>> {
     fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_parameter"]);
-        let name = TypeIdent::parse(node.named_child(0).unwrap());
-        let variance_bound = node.field_child("variance")
-            .map(Variance::parse)
-            .unwrap_or_default();
-        let supers = node.named_child(1).map(|node| {
-            node.named_children(&mut node.walk())
-                .map(ThinType::parse)
-                .collect::<Vec<_>>()
-        }).unwrap_or_default();
         TypeParam {
             ann: Ann::DirectSource { loc: node },
-            variance_bound,
-            name,
-            supers,
+            variance_bound: node.field_child("variance")
+                .map(Variance::parse)
+                .unwrap_or_default(),
+            name: TypeIdent::parse(node.named_child(0).unwrap()),
+            supers: parse_nominal_supertypes(node.named_child(1)),
         }
     }
 }
@@ -341,6 +369,14 @@ impl<'tree> Parseable<'tree> for ThinType<'tree> {
 }
 impl<'tree> ParseableAnnotation<'tree> for ThinType<'tree> {}
 
+impl<'tree> Parseable<'tree> for InferrableThinType<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
+        InferrableThinType::Explicit(ThinType::parse(node))
+    }
+}
+
+impl<'tree> ParseableAnnotation<'tree> for InferrableThinType<'tree> {}
+
 impl<'tree> Parseable<'tree> for Field<'tree, OptionalType<'tree, ThinType<'tree>>> {
     fn parse(node: TSNode<'tree>) -> Self {
         let ann = Ann::DirectSource { loc: node };
@@ -407,190 +443,112 @@ impl<'tree> Parseable<'tree> for ReturnType<'tree, ThinType<'tree>> {
 }
 impl<'tree> ParseableAnnotation<'tree> for ReturnType<'tree, ThinType<'tree>> {}
 
-impl_ast!(AstReturnType);
-impl<'tree> AstReturnType<'tree> {
-    //noinspection DuplicatedCode
-    pub fn parse_annotation(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
-        assert_kind!(node, ["nominal_type_annotation"]);
-        node.mark();
-        Self::new(scope, node.named_child(0).unwrap())
-    }
-
-    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
-        assert_kind!(node, [
-            "nominal_type_identifier",
-            "parenthesized_nominal_type",
-            "generic_nominal_type",
-            "object_nominal_type",
-            "array_nominal_type",
-            "tuple_nominal_type",
-            "function_nominal_type",
-            "nullable_nominal_type",
-        ]);
-        let thin = AstType::parse_return(node);
-        Self {
-            node,
-            shape: RlReturnType::new(scope, thin),
-        }
-    }
-}
-impl<'tree> AstParameter<'tree> {
-    pub fn formal(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>, is_arrow: bool) -> Self {
+impl<'tree> ValueParameter<'tree> {
+    pub fn parse_formal(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>, is_arrow: bool) -> Self {
         assert_kind!(node, ["required_parameter", "optional_parameter"]);
+        let ann = Ann::DirectSource { loc: node };
         let name_node = node.named_child(0).unwrap();
         let type_ = node.field_child("nominal_type")
-            .map(|node| AstType::parse_annotation(scope, node));
+            .map(|node| ResolvedLazy::parse_annotation(scope, node))
+            .or_else(|| match is_arrow {
+                false => None,
+                true => Some(ResolvedLazy::new(scope, InferrableThinType::Hole { ann }))
+            });
         Self {
-            node,
-            name: AstValueIdent::new(name_node),
+            ann,
+            name: ValueIdent::parse(name_node),
             is_this_param: name_node.kind() == "this",
             is_rest_param: name_node.kind() == "rest_pattern",
             is_optional: node.field_child("is_optional").is_some(),
             type_,
-            value: node.field_child("value"),
-            backwards_hole: if is_arrow {
-                Some(Lazy::new(|| ResolvedLazy::resolved(FatType::hole())))
-            } else {
-                None
-            },
+            value: node.field_child("value").map(ValueExpr::parse),
         }
     }
 
-    pub fn single_arrow(node: TSNode<'tree>) -> Self {
+    pub fn parse_single_arrow(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["identifier"]);
+        let ann = Ann::DirectSource { loc: node };
         Self {
-            node,
+            ann,
             name: AstValueIdent::new(node),
             is_this_param: false,
             is_rest_param: false,
             is_optional: false,
-            type_: None,
+            type_: Some(ResolvedLazy::new(scope, InferrableThinType::Hole { ann })),
             value: None,
-            backwards_hole: Some(Lazy::new(|| ResolvedLazy::resolved(FatType::hole()))),
         }
     }
 
     /// Whether this is a parameter of an arrow function. Arrow functions use backwards inference
     /// if the parameter type is not specified, whereas other functions assign `Any` type.
     pub fn is_arrow(&self) -> bool {
-        self.backwards_hole.is_some()
+        matches!(self.type_, Some(type_) if type_.thin.is_hole());
     }
 
     /// Gets the actual thin type, which does not lookup the default value or assign a hole.
-    ///
-    /// **Important:** this returns `ThinType::NEVER` if the parameter is not typed,
-    /// since parameters are contravariant, unless it's a declaration, in which case no
-    /// explicit annotation implies `Any`.
-    pub fn thin(&self) -> ThinType {
-        self.type_.as_ref().map(|param_type| param_type.shape.thin.clone())
-            .unwrap_or(if self.is_arrow() { ThinType::NEVER } else { ThinType::Any })
+    pub fn thin(&self) -> InferrableThinType<'tree> {
+        self.type_.as_ref().map_or(
+            InferrableThinType::Explicit(ThinType::Any { ann: self.ann }),
+            |param_type| param_type.thin.clone()
+        )
     }
 
     /// Like [AstParameter::thin] but returns an optional type (using `is_optional`)
-    pub fn optional_thin(&self) -> OptionalType<ThinType> {
+    pub fn optional_thin(&self) -> OptionalType<'tree, InferrableThinType<'tree>> {
         OptionalType {
+            ann: self.ann,
             optionality: Optionality::from(self.is_optional),
             type_: self.thin(),
         }
     }
 }
 
-impl<'tree> TypedAstNode<'tree> for AstParameter<'tree> {
-    fn type_annotation(&self) -> Option<&AstType<'tree>> {
-        self.type_.as_ref()
-    }
-    
-    fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        match (&self.type_, self.value, typed_exprs) {
-            (Some(type_), _, _) => &type_.shape,
-            (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
-                .map(|determined_type| &determined_type.type_)
-                .unwrap_or(RlType::any_ref()),
-            (None, _, _) => self.backwards_hole.as_ref()
-                .map(|hole| Lazy::force(hole))
-                .unwrap_or(RlType::any_ref()),
-        }
-    }
-}
-
-impl<'tree> HoistedValueBinding<'tree> for AstParameter<'tree> {}
-
-impl_ast_local_value_binding!(AstCatchParameter);
-impl<'tree> AstCatchParameter<'tree> {
-    pub fn new(node: TSNode<'tree>) -> Self {
+impl_ast_value_binding!(CatchParameter name Local);
+impl<'tree> Parseable<'tree> for CatchParameter<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["identifier"]);
-        Self {
-            name: AstValueIdent::new(node)
-        }
+        Self { name: ValueIdent::parse(node) }
     }
 }
 
-impl<'tree> TypedAstNode<'tree> for AstCatchParameter<'tree> {
-    fn type_annotation(&self) -> Option<&AstType<'tree>> {
-        None
-    }
-
-    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        RlType::any_ref()
-    }
-}
-
-impl_ast!(AstReturn);
-impl<'tree> AstReturn<'tree> {
-    pub fn new(node: TSNode<'tree>) -> Self {
+impl<'tree> Parseable<'tree> for Return<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["return_statement"]);
         Self {
-            node,
-            returned_value: node.last_named_child(),
+            ann: Ann::DirectSource { loc: node },
+            returned_value: node.last_named_child().map(ValueExpr::parse),
         }
     }
 }
 
-impl_ast!(AstThrow);
-impl<'tree> AstThrow<'tree> {
-    pub fn new(node: TSNode<'tree>) -> Self {
+impl<'tree> Parseable<'tree> for Throw<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["throw_statement"]);
         Self {
-            node,
-            thrown_value: node.last_named_child(),
+            ann: Ann::DirectSource { loc: node },
+            thrown_value: node.last_named_child().map(ValueExpr::parse),
         }
     }
 }
 
-impl_ast_local_value_binding!(AstValueDecl);
-impl<'tree> AstValueDecl<'tree> {
-    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+impl_ast_value_binding!(ValueDecl name Local);
+impl<'tree> ParseableWithScope<'tree> for ValueDecl<'tree> {
+    fn parse(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["variable_declarator"]);
         let type_ = node.field_child("nominal_type")
-            .map(|node| AstType::parse_annotation(scope, node));
+            .map(|node| RlType::parse_annotation(scope, node));
         Self {
-            node,
-            name: AstValueIdent::new(node.named_child(0).unwrap()),
+            ann: Ann::DirectSource { loc: node },
+            name: ValueIdent::parse(node.named_child(0).unwrap()),
             type_,
-            value: node.field_child("value"),
+            value: node.field_child("value").map(ValueExpr::parse),
         }
     }
 }
 
-impl<'tree> TypedAstNode<'tree> for AstValueDecl<'tree> {
-    fn type_annotation(&self) -> Option<&AstType<'tree>> {
-        self.type_.as_ref()
-    }
-    
-    fn infer_type<'a>(&'a self, typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        match (&self.type_, self.value, typed_exprs) {
-            (Some(type_), _, _) => &type_.shape,
-            (None, Some(value), Some(typed_exprs)) => typed_exprs.get(value)
-                .map(|determined_type| &determined_type.type_)
-                .unwrap_or(RlType::any_ref()),
-            (None, _, _) => RlType::any_ref()
-        }
-    }
-}
-
-impl_ast_local_value_binding!(AstFunctionDecl);
-impl<'tree> AstFunctionDecl<'tree> {
-    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+impl_ast_value_binding!(FunctionDecl name Local);
+impl<'tree> ParseableWithScope<'tree> for FunctionDecl<'tree> {
+    fn parse(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
         assert_kind!(node, [
             "function_declaration",
             "generator_function_declaration",
@@ -603,8 +561,8 @@ impl<'tree> AstFunctionDecl<'tree> {
             fn_type
         ) = Self::parse_common(scope, node);
         Self {
-            node,
-            name: AstValueIdent::new(node.named_child(0).unwrap()),
+            ann: Ann::DirectSource { loc: node },
+            name: ValueIdent::parse(node.named_child(0).unwrap()),
             nominal_params,
             formal_params,
             return_type,
@@ -612,209 +570,152 @@ impl<'tree> AstFunctionDecl<'tree> {
             custom_inferred_fn_type: OnceCell::new()
         }
     }
+}
 
+impl<'tree> FunctionDecl<'tree> {
     /// Extract common information within both function declarations *and* function expressions
     pub fn parse_common(
         scope: &InactiveScopePtr<'tree>,
         node: TSNode<'tree>
-    ) -> (Vec<AstTypeParameter<'tree>>, Vec<Rc<AstParameter<'tree>>>, Option<AstReturnType<'tree>>, RlType) {
-        let nominal_params = Self::nominal_params_of(scope, node);
+    ) -> (Vec<RlTypeParam<'tree>>, Vec<ValueParameter<'tree>>, Option<RlReturnType<'tree>>, RlType) {
+        let ann = Ann::DirectSource { loc: node };
+        let nominal_params = Self::parse_nominal_params_of(node);
         let formal_params = match node.field_child("parameters") {
-            None => vec![Rc::new(AstParameter::single_arrow(node.field_child("parameter").unwrap()))],
+            None => vec![ValueParameter::parse_single_arrow(scope, node.field_child("parameter").unwrap())],
             Some(parameters) => parameters
                 .named_children(&mut node.walk())
-                .map(|node| Rc::new(AstParameter::formal(scope, node, false)))
+                .map(|node| ValueParameter::parse_formal(scope, node, false))
                 .collect::<Vec<_>>()
         };
         let return_type = node.field_child("nominal_return_type")
-            .map(|node| AstReturnType::parse_annotation(scope, node));
+            .map(ReturnType::<ThinType<'tree>>::parse_annotation);
         let fn_type = ResolvedLazy::new(scope, ThinType::func(
-            nominal_params.iter().map(|param| param.shape.thin.clone()),
+            ann,
+            nominal_params.iter().map(|param| param.clone()),
             formal_params.iter().find(|param| param.is_this_param)
-                .map(|p| p.thin())
+                .map(|p| p.thin().collapse_contravariant())
                 .unwrap_or_default(),
             formal_params.iter().filter(|param| !param.is_this_param && !param.is_rest_param)
-                .map(|p| p.optional_thin()),
+                .map(|p| p.optional_thin().map(|t| t.collapse_contravariant())),
             formal_params.iter().find(|param| param.is_rest_param)
-                .map(|p| p.thin())
+                .map(|p| p.thin().collapse_contravariant())
                 .unwrap_or(ThinType::EMPTY_REST_ARG),
-            return_type.as_ref().map(|return_type| return_type.shape.thin.clone())
+            return_type.as_ref().map(|return_type| return_type.clone())
                 .unwrap_or_default()
         ));
         (nominal_params, formal_params, return_type, fn_type)
     }
 
-    fn nominal_params_of(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Vec<AstTypeParameter<'tree>> {
+    fn parse_nominal_params_of(node: TSNode<'tree>) -> Vec<TypeParam<'tree, ThinType<'tree>>> {
         node.field_child("type_parameters").map(|node| {
             node.named_children(&mut node.walk())
                 .filter(|node| node.kind() == "nominal_type_parameter")
-                .map(|node| AstTypeParameter::new(scope, node))
+                .map(TypeParam::parse)
                 .collect()
         }).unwrap_or_default()
     }
 
-    pub fn set_custom_inferred_return_type(&self, return_type: RlReturnType, ctx: &ResolveCtx<'_>) {
+    pub fn set_custom_inferred_return_type(&self, return_type: RlReturnType<'tree>, ctx: &ResolveCtx<'_, 'tree>) {
         self.custom_inferred_fn_type.set(self.fn_type.clone().with_return_type(return_type, ctx)).expect("custom_infer_return_type called twice");
     }
 }
 
-impl<'tree> TypedAstNode<'tree> for AstFunctionDecl<'tree> {
-    fn type_annotation(&self) -> Option<&AstType<'tree>> {
-        None
-    }
-    
-    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        self.custom_inferred_fn_type.get().unwrap_or(&self.fn_type)
-    }
-}
-
-impl_ast!(AstNominalGuard);
-impl<'tree> AstNominalGuard<'tree> {
-    pub fn new(node: TSNode<'tree>) -> Self {
-        assert_kind!(node, ["nominal_type_guard"]);
-        let parameter = AstValueIdent::new(node.named_child(0).unwrap());
-        let body = node.named_child(1).unwrap();
-        let shape = NominalGuard {
-            param: parameter.name.clone(),
-            body: body.to_subtree(),
-        };
-        Self {
-            node,
-            parameter,
-            body,
-            shape
-        }
-    }
-}
-
-impl_ast_type_binding!(AstTypeDecl name Local);
-impl<'tree> AstTypeDecl<'tree> {
-    pub fn new(scope: &InactiveScopePtr<'tree>, node: TSNode<'tree>) -> Self {
+impl_ast_type_binding!(RlTypeDecl name Local);
+impl<'tree> Parseable<'tree> for ThinTypeDecl<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["nominal_type_declaration"]);
         node.mark();
-        let name = TypeIdent::parse(node.named_child(0).unwrap());
-        let nominal_params = node.field_child("nominal_type_parameters").map(|x| {
-            x.named_children(&mut node.walk())
-                .map(|node| AstTypeParameter::new(scope, node))
-                .collect::<Vec<_>>()
-        }).unwrap_or_default();
-        //noinspection DuplicatedCode
-        let nominal_supertypes = parse_nominal_supertypes(scope, node.field_child("nominal_supertypes"));
-        let typescript_supertype = node.field_child("type");
-        let guard = node.field_child("guard").map(AstNominalGuard::new);
-        let thin = ThinTypeDecl {
-            name: name.name.clone(),
-            type_params: nominal_params.iter().map(|x| x.shape.thin.clone()).collect(),
-            supertypes: vec![],
-            typescript_supertype: None,
-            guard: None,
-        };
         Self {
-            node,
-            name,
-            nominal_params,
-            nominal_supertypes,
-            typescript_supertype,
-            guard,
-            shape: RlTypeDecl::new(scope, thin),
+            ann: Ann::DirectSource { loc: node },
+            name: TypeIdent::parse(node.named_child(0).unwrap()),
+            type_params: node.field_child("nominal_type_parameters").map(|x| {
+                x.named_children(&mut node.walk())
+                    .map(TypeParam::<'tree, ThinType<'tree>>::parse)
+                    .collect::<Vec<_>>()
+            }).unwrap_or_default(),
+            supertypes: parse_nominal_supertypes(node.field_child("nominal_supertypes")),
+            typescript_supertype: node.field_child("type").map(TypescriptType::parse).into_iter().collect::<Vec<_>>(),
+            guard: node.field_child("guard").map(NominalGuard::parse).into_iter().collect::<Vec<_>>(),
         }
     }
 }
 
-impl_ast_value_binding!(AstValueImportSpecifier alias Imported);
-impl<'tree> AstValueImportSpecifier<'tree> {
-    pub fn new(
-        scope: &InactiveScopePtr,
+impl_ast_value_binding!(ValueImportSpecifier alias Imported);
+impl<'tree> ValueImportSpecifier<'tree> {
+    pub fn parse(
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
-        let original_name = AstValueIdent::new(node.named_child(0).unwrap());
+        let imported_name = ValueIdent::parse(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
-            || original_name.clone(),
-            AstValueIdent::new
+            || imported_name.clone(),
+            ValueIdent::parse
         );
-        let thin = ScopeValueImportIdx {
+        let idx = ScopeValueImportIdx {
             import_path_idx,
-            imported_name: original_name.name.clone()
+            imported_name,
         };
         Self {
-            node,
-            original_name,
+            ann: Ann::DirectSource { loc: node },
+            idx,
             alias,
-            shape: RlImportedValueType::new(scope, thin),
         }
     }
 }
 
-impl<'tree> TypedAstNode<'tree> for AstValueImportSpecifier<'tree> {
-    fn type_annotation(&self) -> Option<&AstType<'tree>> {
-        None
-    }
-    
-    fn infer_type<'a>(&'a self, _typed_exprs: Option<&'a ExprTypeMap<'tree>>) -> &'a DynRlType {
-        &self.shape
-    }
-}
-
-impl_ast_type_binding!(AstTypeImportSpecifier alias Imported);
-impl<'tree> AstTypeImportSpecifier<'tree> {
-    pub fn new(
-        scope: &InactiveScopePtr,
+impl_ast_type_binding!(TypeImportSpecifier alias Imported);
+impl<'tree> TypeImportSpecifier<'tree> {
+    pub fn parse(
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_specifier"]);
         node.mark();
-        let original_name = TypeIdent::parse(node.named_child(0).unwrap());
+        let imported_name = TypeIdent::parse(node.named_child(0).unwrap());
         let alias = node.named_child(1).map_or_else(
-            || original_name.clone(),
+            || imported_name.clone(),
             TypeIdent::parse
         );
-        let thin = ScopeTypeImportIdx {
+        let idx = ScopeTypeImportIdx {
             import_path_idx,
-            imported_name: original_name.name.clone()
+            imported_name,
         };
         Self {
-            node,
-            original_name,
+            ann: Ann::DirectSource { loc: node },
+            idx,
             alias,
-            shape: RlImportedTypeDecl::new(scope, thin),
         }
     }
 }
 
-impl_ast!(ImportPathAst);
-impl<'tree> ImportPathAst<'tree> {
-    pub fn new(node: TSNode<'tree>) -> Self {
+impl<'tree> Parseable<'tree> for ImportPathAst<'tree> {
+    fn parse(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["string"]);
-        let module_path = ImportPath::from(unquote(node.text()).expect("import path is not a well-formed string literal"));
         Self {
-            node,
-            module_path,
+            ann: Ann::DirectSource { loc: node },
+            module_path: ImportPath::from(unquote(node.text()).expect("import path is not a well-formed string literal")),
         }
     }
 }
 
-impl_ast!(AstImportStatement);
-impl<'tree> AstImportStatement<'tree> {
-    pub fn new(
-        scope: &InactiveScopePtr,
+impl<'tree> ImportStatement<'tree> {
+    pub fn parse(
         import_path_idx: usize,
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_statement"]);
-        let path = ImportPathAst::new(node.named_child(1).unwrap());
+        let path = ImportPathAst::parse(node.named_child(1).unwrap());
         let import_container = node.named_child(0).unwrap();
         let imported_values = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "identifier")
-            .map(|node| AstValueImportSpecifier::new(scope, import_path_idx, node))
+            .map(|node| ValueImportSpecifier::parse(import_path_idx, node))
             .collect();
         let imported_types = import_container
             .named_children(&mut node.walk())
             .filter(|node| node.named_child(0).unwrap().kind() == "nominal_type_identifier")
-            .map(|node| AstTypeImportSpecifier::new(scope, import_path_idx, node))
+            .map(|node| TypeImportSpecifier::parse(import_path_idx, node))
             .collect();
         if let Some(invalid_specifier) = import_container
             .named_children(&mut node.walk())
@@ -822,7 +723,7 @@ impl<'tree> AstImportStatement<'tree> {
             panic!("import statement contains an invalid import specifier {:?} of kind {:?}", invalid_specifier, invalid_specifier.kind());
         }
         Self {
-            node,
+            ann: Ann::DirectSource { loc: node },
             path,
             imported_values,
             imported_types,
@@ -831,11 +732,11 @@ impl<'tree> AstImportStatement<'tree> {
     }
 }
 
-fn parse_nominal_supertypes<'tree>(scope: &InactiveScopePtr<'tree>, node: Option<TSNode<'tree>>) -> Vec<AstType<'tree>> {
+fn parse_nominal_supertypes(node: Option<TSNode<'_>>) -> Vec<ThinType<'_>> {
     node.map(|x| {
         x.mark();
         x.named_children(&mut x.walk())
-            .map(|node| AstType::new(scope, node))
+            .map(ThinType::parse)
             .collect::<Vec<_>>()
     }).unwrap_or_default()
 }

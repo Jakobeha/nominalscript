@@ -9,7 +9,7 @@ macro_rules! downcast_ref_with_lifetime {
         unsafe {
             let e = std::mem::transmute::<&$T<$a>, &$T<'static>>($e);
             let e = (e as &dyn std::any::Any).downcast_ref::<$U<'static>>();
-            e.map(|e| std::mem::transmite<&$U<'static>, &$U<$a>>(e))
+            e.map(|e| std::mem::transmute::<&$U<'static>, &$U<$a>>(e))
         }
     }
     (($a:lifetime, $T:ident<$A0:ty> => $U:ident) $e:expr) => {
@@ -18,7 +18,7 @@ macro_rules! downcast_ref_with_lifetime {
         unsafe {
             let e = std::mem::transmute::<&$T<$a, $A0>, &$T<'static, $A0>>($e);
             let e = (e as &dyn std::any::Any).downcast_ref::<$U<'static>>();
-            e.map(|e| std::mem::transmite<&$U<'static>, &$U<$a>>(e))
+            e.map(|e| std::mem::transmute::<&$U<'static>, &$U<$a>>(e))
         }
     }
 }

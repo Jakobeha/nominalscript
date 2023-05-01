@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::fmt::Debug;
@@ -12,8 +11,7 @@ use once_cell::unsync::OnceCell;
 use crate::{debug, error, issue, ProjectCtx};
 use crate::analyses::bindings::TypeNameStr;
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx, WeakScopePtr};
-use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, IdentType, Nullability, OptionalType, ReturnType, StructureType, ThinType, ThinTypeDecl, TypeParam, Variance};
-use crate::analyses::types::generic::{IdentType, Nullability, OptionalType, ReturnType, StructureType, TypeParam, Variance};
+use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, IdentType, InferrableThinType, Nullability, OptionalType, ReturnType, StructureType, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::ast::ann::{Ann, HasAnn};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
@@ -117,6 +115,8 @@ pub type DynResolvedLazy<'tree, Fat> = dyn ResolvedLazyTrait<'tree, Fat>;
 
 /// A resolved type. See [ResolvedLazy]
 pub type RlType<'tree> = ResolvedLazy<'tree, ThinType<'tree>, FatType<'tree>>;
+/// A resolved inferrable type. See [ResolvedLazy]
+pub type RlInferrableType<'tree> = ResolvedLazy<'tree, InferrableThinType<'tree>, FatType<'tree>>;
 /// A resolved optional type. See [ResolvedLazy]
 pub type RlOptionalType<'tree> = ResolvedLazy<'tree, OptionalType<'tree, ThinType<'tree>>, OptionalType<'tree, FatType<'tree>>>;
 /// A resolved type parameter. "fat" value is `TypeParam::into_decl` because that's all we care
@@ -302,36 +302,6 @@ impl<'tree, Thin, Fat> ResolvedLazy<'tree, Thin, Fat> {
     }
 }
 
-impl<'tree> FatTrait<'tree> for FatType<'tree> {
-    type NormalThin = ThinType<'tree>;
-
-    fn downcast_thin(thin: &DynResolveInto<'tree, Self>) -> Option<&Self::NormalThin> {
-        downcast_ref_with_lifetime!(('tree, DynResolveInto<Self> => ThinType) thin)
-    }
-}
-
-impl<'tree> ToThin<ThinType<'tree>> for FatType<'tree> {
-    fn thin(&self) -> ThinType {
-        match self {
-            FatType::Any { ann } => {
-                ThinType::Any { ann: *ann }
-            },
-            FatType::Never { ann, nullability } => {
-                ThinType::Never { ann: *ann, nullability: *nullability }
-            },
-            FatType::Structural { ann, nullability, structure } => {
-                ThinType::Structural { ann: *ann, nullability: *nullability, structure: structure.thin() }
-            },
-            FatType::Nominal { ann, nullability, id, inherited: _ } => {
-                ThinType::Nominal { ann: *ann, nullability: *nullability, id: id.thin() }
-            }
-            FatType::Hole { ann, nullability, hole: _ } => {
-                ThinType::dummy_for_hole(*ann, *nullability)
-            },
-        }
-    }
-}
-
 impl<'tree> FatTrait<'tree> for FatTypeDecl<'tree> {
     type NormalThin = ThinTypeDecl<'tree>;
 
@@ -366,6 +336,45 @@ impl<'tree> ToThin<ThinTypeDecl<'tree>> for FatTypeDecl<'tree> {
     }
 }
 
+impl<'tree> FatTrait<'tree> for FatType<'tree> {
+    type NormalThin = ThinType<'tree>;
+
+    fn downcast_thin(thin: &DynResolveInto<'tree, Self>) -> Option<&Self::NormalThin> {
+        downcast_ref_with_lifetime!(('tree, DynResolveInto<Self> => ThinType) thin)
+    }
+}
+
+impl<'tree> ToThin<InferrableThinType<'tree>> for FatType<'tree> {
+    fn thin(&self) -> InferrableThinType<'tree> {
+        match self {
+            FatType::Hole { ann, .. } => InferrableThinType::Hole { ann: *ann },
+            _ => InferrableThinType::Explicit(self.thin())
+        }
+    }
+}
+
+impl<'tree> ToThin<ThinType<'tree>> for FatType<'tree> {
+    fn thin(&self) -> ThinType {
+        match self {
+            FatType::Any { ann } => {
+                ThinType::Any { ann: *ann }
+            },
+            FatType::Never { ann, nullability } => {
+                ThinType::Never { ann: *ann, nullability: *nullability }
+            },
+            FatType::Structural { ann, nullability, structure } => {
+                ThinType::Structural { ann: *ann, nullability: *nullability, structure: structure.thin() }
+            },
+            FatType::Nominal { ann, nullability, id, inherited: _ } => {
+                ThinType::Nominal { ann: *ann, nullability: *nullability, id: id.thin() }
+            }
+            FatType::Hole { ann, nullability, hole: _ } => {
+                ThinType::dummy_for_hole(*ann, *nullability)
+            },
+        }
+    }
+}
+
 impl_by_map!(
     <'tree, Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: ToThin<Lhs> | crate::analyses::types::TypeTrait<'tree>> FatTrait<'tree> (
         type NormalThin
@@ -377,6 +386,37 @@ impl_by_map!(
         fn thin(&self) by map_ref
     ) for IdentType, StructureType, TypeParam, OptionalType, ReturnType
 );
+
+impl<'tree> ResolveInto<FatTypeDecl<'tree>> for ThinTypeDecl<'tree> {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> FatTypeDecl<'tree> {
+        let supers = self.supertypes.iter().map(|t| t.resolve(scope, ctx));
+        let mut inherited = FatTypeInherited {
+            super_ids: VecDeque::new(),
+            structure: None,
+            typescript_types: self.typescript_supertype.iter().cloned().collect(),
+            guards: self.guard.iter().cloned().collect(),
+            is_never: false,
+        };
+        for super_ in supers {
+            inherited.unify_with_super(super_, TypeLogger::ignore());
+        }
+        FatTypeDecl {
+            ann: *self.ann,
+            name: self.name.clone(),
+            type_params: self.type_params.iter().map(|p| p.resolve(scope, ctx)).collect(),
+            inherited: Box::new(inherited),
+        }
+    }
+}
+
+impl<'tree> ResolveInto<FatType<'tree>> for InferrableThinType<'tree> {
+    fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> FatType<'tree> {
+        match self {
+            InferrableThinType::Explicit(thin) => thin.resolve(scope, ctx),
+            InferrableThinType::Hole { ann } => FatType::hole(*ann)
+        }
+    }
+}
 
 impl<'tree> ResolveInto<FatType<'tree>> for ThinType<'tree> {
     fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> FatType {
@@ -446,28 +486,6 @@ impl<'tree> ResolveInto<FatTypeDecl<'tree>> for TypeParam<'tree, ThinType<'tree>
     fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> FatTypeDecl<'tree> {
         let fat_param = <TypeParam<'tree, ThinType<'tree>> as ResolveInto<TypeParam<'tree, FatType<'tree>>>>::resolve(self, scope, ctx);
         fat_param.into_decl()
-    }
-}
-
-impl<'tree> ResolveInto<FatTypeDecl<'tree>> for ThinTypeDecl<'tree> {
-    fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> FatTypeDecl<'tree> {
-        let supers = self.supertypes.iter().map(|t| t.resolve(scope, ctx));
-        let mut inherited = FatTypeInherited {
-            super_ids: VecDeque::new(),
-            structure: None,
-            typescript_types: self.typescript_supertype.iter().cloned().collect(),
-            guards: self.guard.iter().cloned().collect(),
-            is_never: false,
-        };
-        for super_ in supers {
-            inherited.unify_with_super(super_, TypeLogger::ignore());
-        }
-        FatTypeDecl {
-            ann: *self.ann,
-            name: self.name.clone(),
-            type_params: self.type_params.iter().map(|p| p.resolve(scope, ctx)).collect(),
-            inherited: Box::new(inherited),
-        }
     }
 }
 

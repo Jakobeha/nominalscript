@@ -117,7 +117,7 @@ macro_rules! impl_has_ann_record_struct {
 
 #[macro_export]
 macro_rules! impl_has_ann_enum_body {
-    ($tree:lifetime $(($StructCase:ident))? $({ $($RecordCase:ident),* })?) => {
+    ($tree:lifetime $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
         fn ann(&self) -> &$crate::ast::ann::Ann<$tree> {
             match self {
                 $($(Self::$StructCase(x) => x.ann(),)*)?
@@ -135,19 +135,19 @@ macro_rules! impl_has_ann_enum_body {
 
 #[macro_export]
 macro_rules! impl_has_ann_enum {
-    ($Name:ident $(($StructCase:ident))? $({ $($RecordCase:ident),* })?) => {
+    ($Name:ident $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
         impl<'tree> $crate::ast::ann::HasAnn<'tree> for $Name<'tree> {
-            $crate::impl_has_ann_enum_body!('tree $(($StructCase))? $({ $($RecordCase),* })?);
+            $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
-    ($Name:ident<$T:ident> $(($StructCase:ident))? $({ $($RecordCase:ident),* })?) => {
+    ($Name:ident<$T:ident> $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
         impl<'tree, $T> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
-            $crate::impl_has_ann_enum_body!('tree $(($StructCase))? $({ $($RecordCase),* })?);
+            $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
-    ($Name:ident<$T:ident: $Bound:ident> $(($StructCase:ident))? $({ $($RecordCase:ident),* })?) => {
+    ($Name:ident<$T:ident: $Bound:ident> $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
         impl<'tree, $T: $Bound<'tree>> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
-            $crate::impl_has_ann_enum_body!('tree $(($StructCase))? $({ $($RecordCase),* })?);
+            $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
 }
