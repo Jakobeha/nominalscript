@@ -10,7 +10,7 @@ use crate::{debug, error, issue};
 use crate::analyses::bindings::{FieldName, FieldNameStr, TypeNameStr, ValueBinding, ValueNameStr};
 use crate::analyses::global_bindings::GlobalTypeBinding;
 use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
-use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, TypeStructure, Variance};
+use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, StructureType, Variance};
 use crate::ast::NOMINALSCRIPT_PARSER;
 use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
 use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSCursor, TSNode, TSQueryCursor, TSTree};
@@ -575,7 +575,7 @@ pub(crate) fn finish_transpile<'tree>(
                                             _ => {}
                                         }
                                         match spread_type.into_structure() {
-                                            Some(TypeStructure::Object { field_types }) => {
+                                            Some(StructureType::Object { field_types }) => {
                                                 // spread_field_arena.extend(field_types.len());
                                                 fields.extend(field_types.into_iter().map(|Field { name, mut type_ }| {
                                                     type_.make_optional_if(spread_is_nullable);
@@ -634,10 +634,10 @@ pub(crate) fn finish_transpile<'tree>(
                                             _ => {}
                                         }
                                         match spread_type.into_structure() {
-                                            Some(TypeStructure::Tuple { element_types }) => {
+                                            Some(StructureType::Tuple { element_types }) => {
                                                 elems.extend(element_types);
                                             }
-                                            Some(TypeStructure::Array { element_type }) => {
+                                            Some(StructureType::Array { element_type }) => {
                                                 is_array = true;
                                                 elems.push(OptionalType::optional(*element_type));
                                             }

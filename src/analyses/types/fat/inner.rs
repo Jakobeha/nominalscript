@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::fmt::Display;
 use crate::analyses::bindings::{FieldName, TypeNameStr};
-use crate::analyses::types::{FatType, HasNullability, Nullability, ThinType, TypeStructure, Variance};
+use crate::analyses::types::{FatType, HasNullability, Nullability, ThinType, StructureType, Variance};
 use crate::ast::tree_sitter::TSNode;
 use crate::diagnostics::{FileLogger, TypeLogger};
 use crate::{error, issue, hint_if};
@@ -30,7 +30,7 @@ impl FatType {
             FatType::Any => FatType::Any,
             FatType::Never { nullability } => FatType::Never { nullability: *nullability },
             FatType::Structural { .. } | FatType::Nominal { .. } => self.with_structure(|structure| match structure {
-                Some(TypeStructure::Object { field_types }) => {
+                Some(StructureType::Object { field_types }) => {
                     let member_type = field_types.iter()
                         .find(|f| f.name.borrow() == field_name)
                         .map(|f| f.type_.clone().collapse_optionality_into_nullability());
@@ -99,7 +99,7 @@ impl FatType {
             FatType::Any => FatType::Any,
             FatType::Never { nullability } => FatType::Never { nullability: *nullability },
             FatType::Structural { .. } | FatType::Nominal { .. } => self.with_structure(|structure| match structure {
-                Some(TypeStructure::Tuple { element_types }) => {
+                Some(StructureType::Tuple { element_types }) => {
                     let subscript_type = match index {
                         None => {
                             Some(FatType::unify_all(
@@ -130,7 +130,7 @@ impl FatType {
                         }
                     }
                 }
-                Some(TypeStructure::Array { element_type }) => {
+                Some(StructureType::Array { element_type }) => {
                     let mut subscript_type = element_type.as_ref().clone();
                     subscript_type.make_nullable_if(is_nullable_access || matches!(self.nullability(), Nullability::Nullable));
                     subscript_type

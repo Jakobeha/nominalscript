@@ -8,7 +8,9 @@ use std::rc::Rc;
 pub use data::*;
 
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FnType, HasNullability, impl_structural_type_constructors, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeArgTrait, TypeIdent, TypeParam, TypeStructure, TypeTrait, TypeTraitMapsFrom, Variance};
+use crate::analyses::types::{FnType, HasNullability, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeArgTrait, IdentType, TypeParam, StructureType, TypeTrait, TypeTraitMapsFrom, Variance};
+use crate::analyses::types::generic::{FnType, HasNullability, IdentType, impl_structural_type_constructors, InheritedTrait, Nullability, OptionalType, RestArgTrait, ReturnType, StructureKind, StructureType, TypeArgTrait, TypeParam, TypeTrait, TypeTraitMapsFrom, Variance};
+use crate::ast::ann::{Ann, HasAnn};
 use crate::diagnostics::TypeLogger;
 use crate::misc::{once_if, rc_unwrap_or_clone};
 
@@ -21,9 +23,10 @@ mod inner;
 /// We try to make [FatType] canonical so normalization usually shouldn't be necessary / do much
 mod normalize;
 
-impl FatTypeDecl {
-    pub fn missing() -> Self {
+impl<'tree> FatTypeDecl<'tree> {
+    pub fn missing(ann: Ann<'tree>) -> Self {
         Self {
+            ann,
             name: TypeName::MISSING,
             type_params: Vec::new(),
             inherited: Box::new(FatTypeInherited::empty())
@@ -32,10 +35,12 @@ impl FatTypeDecl {
 
     /// Converts this into the nominal type it declares: for [FatType], a nominal type with
     /// the name, type parameters, and inherited
-    pub fn into_type(self) -> FatType {
+    pub fn into_type(self) -> FatType<'tree> {
         FatType::Nominal {
+            ann: self.ann,
             nullability: Nullability::NonNullable,
-            id: TypeIdent {
+            id: IdentType {
+                ann: self.name.ann,
                 name: self.name,
                 generic_args: self.type_params.into_iter().map(|x| x.into_type()).collect(),
             },
@@ -44,34 +49,43 @@ impl FatTypeDecl {
     }
 }
 
-impl Default for FatTypeDecl {
+impl<'tree> Default for FatTypeDecl {
     fn default() -> Self {
-        Self::missing()
+        Self::missing(Ann::INHERITED)
     }
 }
 
-impl FatType {
-    pub const NEVER: Self = Self::Never { nullability: Nullability::NonNullable };
+impl<'tree> FatType<'tree> {
+    pub const NEVER: Self = Self::never(Ann::INHERITED);
 
-    pub const NULL: Self = Self::Never { nullability: Nullability::Nullable };
+    pub const NULL: Self = Self::null(Ann::INHERITED);
 
-    impl_structural_type_constructors!();
+    pub fn never(ann: Ann<'tree>) -> Self {
+        Self::Never { ann, nullability: Nullability::NonNullable }
+    }
 
-    pub fn hole() -> Self {
+    pub fn null(ann: Ann<'tree>) -> Self {
+        Self::Never { ann, nullability: Nullability::Nullable }
+    }
+
+    impl_structural_type_constructors!('tree);
+
+    pub fn hole(ann: Ann<'tree>) -> Self {
         Self::Hole {
+            ann,
             nullability: Nullability::NonNullable,
-            hole: FatTypeHole::new()
+            hole: FatTypeHole::new(ann)
         }
     }
 
     /// Make nullable. Makes type holes' upper bound nullable, but not outer nullable.
     pub fn make_nullable_intrinsically(&mut self) {
         match self {
-            Self::Any => {},
-            Self::Never { nullability } => *nullability = Nullability::Nullable,
+            Self::Any { .. } => {},
+            Self::Never { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
-            Self::Hole { nullability: _, hole } => {
+            Self::Hole { nullability: _, hole, .. } => {
                 hole.upper_bound.borrow_mut().make_nullable_intrinsically();
             },
         }
@@ -80,11 +94,11 @@ impl FatType {
     /// Make non-nullable. Make type holes' upper bound non-nullable *and* outer non-nullable
     pub fn make_non_nullable_intrinsically(&mut self) {
         match self {
-            Self::Any => {},
-            Self::Never { nullability } => *nullability = Nullability::NonNullable,
+            Self::Any { .. } => {},
+            Self::Never { nullability, .. } => *nullability = Nullability::NonNullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::NonNullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::NonNullable,
-            Self::Hole { nullability, hole } => {
+            Self::Hole { nullability, hole, .. } => {
                 *nullability = Nullability::NonNullable;
                 hole.upper_bound.borrow_mut().make_non_nullable_intrinsically();
             },
@@ -94,11 +108,11 @@ impl FatType {
     /// Structure kind, if there is a structure, otherwise `None`
     pub fn structure_kind(&self) -> Option<StructureKind> {
         match self {
-            Self::Any => None,
-            Self::Never { nullability: _ } => None,
-            Self::Structural { nullability: _, structure } => Some(structure.kind()),
-            Self::Nominal { nullability: _, id: _, inherited } => inherited.structure.as_ref().map(|s| s.kind()),
-            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().structure_kind()
+            Self::Any { .. } => None,
+            Self::Never { .. } => None,
+            Self::Structural { structure, .. } => Some(structure.kind()),
+            Self::Nominal { inherited, .. } => inherited.structure.as_ref().map(|s| s.kind()),
+            Self::Hole { hole, .. } => hole.upper_bound.borrow().structure_kind()
         }
     }
 
@@ -108,14 +122,14 @@ impl FatType {
     /// to modify will **panic**.
     pub fn with_idents<R>(
         &self,
-        fun: impl FnOnce(Option<std::iter::Chain<std::iter::Once<&TypeIdent<FatType>>, std::collections::vec_deque::Iter<'_, TypeIdent<FatType>>>>) -> R
+        fun: impl FnOnce(Option<std::iter::Chain<std::iter::Once<&IdentType<'tree, FatType<'tree>>>, std::collections::vec_deque::Iter<'_, IdentType<'tree, FatType<'tree>>>>>) -> R
     ) -> R {
         match self {
-            Self::Any => fun(None),
-            Self::Never { nullability: _ } => fun(None),
-            Self::Structural { nullability: _, structure: _ } => fun(None),
-            Self::Nominal { nullability: _, id, inherited } => fun(Some(once(id).chain(&inherited.super_ids))),
-            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_idents(fun)
+            Self::Any { .. } => fun(None),
+            Self::Never { .. } => fun(None),
+            Self::Structural { .. } => fun(None),
+            Self::Nominal { id, inherited, ..  } => fun(Some(once(id).chain(&inherited.super_ids))),
+            Self::Hole { hole, .. } => hole.upper_bound.borrow().with_idents(fun)
         }
     }
 
@@ -123,13 +137,13 @@ impl FatType {
     ///
     /// If this is a type hole, it must borrow the structure for the duration, so attempting to
     /// modify will **panic**.
-    pub fn with_structure<R>(&self, fun: impl FnOnce(Option<&TypeStructure<FatType>>) -> R) -> R {
+    pub fn with_structure<R>(&self, fun: impl FnOnce(Option<&StructureType<FatType<'tree>>>) -> R) -> R {
         match self {
-            Self::Any => fun(None),
-            Self::Never { nullability: _ } => fun(None),
-            Self::Structural { nullability: _, structure } => fun(Some(structure)),
-            Self::Nominal { nullability: _, id: _, inherited } => fun(inherited.structure.as_ref()),
-            Self::Hole { nullability: _, hole } => hole.upper_bound.borrow().with_structure(fun)
+            Self::Any { .. } => fun(None),
+            Self::Never { .. } => fun(None),
+            Self::Structural { structure, .. } => fun(Some(structure)),
+            Self::Nominal { inherited, .. } => fun(inherited.structure.as_ref()),
+            Self::Hole { hole, .. } => hole.upper_bound.borrow().with_structure(fun)
         }
     }
 
@@ -137,70 +151,76 @@ impl FatType {
     ///
     /// If this is a type hole, it must borrow the structure for the duration, so attempting to
     /// modify will **panic**.
-    pub fn with_function_structure<R>(&self, fun: impl FnOnce(Option<&FnType<FatType>>) -> R) -> R {
+    pub fn with_function_structure<R>(&self, fun: impl FnOnce(Option<&FnType<'tree, FatType<'tree>>>) -> R) -> R {
         self.with_structure(|structure| fun(match structure {
-            Some(TypeStructure::Fn { fn_type }) => Some(fn_type),
+            Some(StructureType::Fn(fn_type)) => Some(fn_type),
             _ => None
         }))
     }
 
-    /// Destructs this and returns its nullability, ids and structure
-    pub fn into_nullability_ids_and_structure(self) -> (Nullability, Vec<TypeIdent<FatType>>, Option<TypeStructure<FatType>>) {
+    /// Destructs this and returns its annotation, nullability, ids and structure
+    pub fn into_ann_nullability_ids_and_structure(self) -> (Ann<'tree>, Nullability, Vec<IdentType<'tree, FatType<'tree>>>, Option<StructureType<FatType<'tree>>>) {
         match self {
-            Self::Any => (Nullability::Nullable, Vec::new(), None),
-            Self::Never { nullability } => (nullability, Vec::new(), None),
-            Self::Structural { nullability, structure } => (nullability, Vec::new(), Some(structure)),
-            Self::Nominal { nullability, id, inherited } => {
+            Self::Any { ann } => {
+                (ann, Nullability::Nullable, Vec::new(), None)
+            },
+            Self::Never { ann, nullability } => {
+                (ann, nullability, Vec::new(), None)
+            },
+            Self::Structural { ann, nullability, structure } => {
+                (ann, nullability, Vec::new(), Some(structure))
+            },
+            Self::Nominal { ann, nullability, id, inherited } => {
                 let mut ids = vec![id];
                 ids.extend(inherited.super_ids.into_iter());
-                (nullability, ids, inherited.structure)
+                (ann, nullability, ids, inherited.structure)
             },
-            Self::Hole { nullability, hole } => {
+            Self::Hole { ann, nullability, hole } => {
                 let (inner_nullability, ids, structure) = rc_unwrap_or_clone(hole.upper_bound).into_inner().into_nullability_ids_and_structure();
-                (nullability | inner_nullability, ids, structure)
+                (ann, nullability | inner_nullability, ids, structure)
             }
         }
     }
 
     /// Destructs this and returns its ids
-    pub fn into_ids(self) -> Vec<TypeIdent<FatType>> {
-        let (_, ids, _) = self.into_nullability_ids_and_structure();
+    pub fn into_ids(self) -> Vec<IdentType<'tree, FatType<'tree>>> {
+        let (_, _, ids, _) = self.into_ann_nullability_ids_and_structure();
         ids
     }
 
     /// Destructs this and returns its structure
-    pub fn into_structure(self) -> Option<TypeStructure<FatType>> {
-        let (_, _, structure) = self.into_nullability_ids_and_structure();
+    pub fn into_structure(self) -> Option<StructureType<FatType<'tree>>> {
+        let (_, _, _, structure) = self.into_ann_nullability_ids_and_structure();
         structure
     }
 }
 
-impl HasNullability for FatType {
+impl<'tree> HasNullability for FatType<'tree> {
     fn nullability(&self) -> Nullability {
         match self {
-            Self::Any => Nullability::Nullable,
-            Self::Never { nullability } => *nullability,
+            Self::Any { .. } => Nullability::Nullable,
+            Self::Never { nullability, .. } => *nullability,
             Self::Structural { nullability, .. } => *nullability,
             Self::Nominal { nullability, .. } => *nullability,
-            Self::Hole { nullability, hole } => *nullability | || hole.upper_bound.borrow().nullability()
+            Self::Hole { nullability, hole, .. } => *nullability | || hole.upper_bound.borrow().nullability()
         }
     }
 
     fn make_nullable(&mut self) {
         match self {
-            Self::Any => {},
-            Self::Never { nullability } => *nullability = Nullability::Nullable,
+            Self::Any { .. } => {},
+            Self::Never { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Structural { nullability, .. } => *nullability = Nullability::Nullable,
             Self::Nominal { nullability, .. } => *nullability = Nullability::Nullable,
-            Self::Hole { nullability, hole: _ } => *nullability = Nullability::Nullable,
+            Self::Hole { nullability, .. } => *nullability = Nullability::Nullable,
         }
     }
 }
 
-impl TypeTrait for FatType {
-    type Inherited = Box<FatTypeInherited>;
-    type TypeArg = FatTypeArg;
-    type RestArg = FatRestArgType;
+impl<'tree> TypeTrait<'tree> for FatType<'tree> {
+    type Inherited = Box<FatTypeInherited<'tree>>;
+    type TypeArg = FatTypeArg<'tree>;
+    type RestArg = FatRestArgType<'tree>;
 
     fn is_any(&self) -> bool {
         matches!(self, FatType::Any)
@@ -242,20 +262,26 @@ impl TypeTrait for FatType {
 }
 
 // TODO: Don't implement this trait at all, instead implement it on a wrapper since it's a shallow conversion
-impl TypeTraitMapsFrom<ThinType> for FatType {
-    fn map_inherited(inherited: <ThinType as TypeTrait>::Inherited, f: impl FnMut(ThinType) -> Self) -> Self::Inherited {
+impl<'tree> TypeTraitMapsFrom<ThinType<'tree>> for FatType<'tree> {
+    fn map_inherited(
+        inherited: <ThinType<'tree> as TypeTrait<'tree>>::Inherited,
+        f: impl FnMut(ThinType<'tree>) -> Self
+    ) -> Self::Inherited {
         let inherited = inherited.into_iter().map(f).collect::<Vec<_>>();
         Box::new(Self::unify_all_supers(inherited, TypeLogger::ignore()))
     }
 
-    fn map_ref_inherited(inherited: &<ThinType as TypeTrait>::Inherited, mut f: impl FnMut(Cow<'_, ThinType>) -> Self) -> Self::Inherited {
+    fn map_ref_inherited(
+        inherited: &<ThinType<'tree> as TypeTrait<'tree>>::Inherited,
+        mut f: impl FnMut(Cow<'_, ThinType<'tree>>) -> Self
+    ) -> Self::Inherited {
         let inherited = inherited.iter().map(|x| f(Cow::Borrowed(x))).collect::<Vec<_>>();
         Box::new(Self::unify_all_supers(inherited, TypeLogger::ignore()))
     }
 
     fn map_type_arg(
-        type_arg: <ThinType as TypeTrait>::TypeArg,
-        mut f: impl FnMut(ThinType) -> Self
+        type_arg: <ThinType<'tree> as TypeTrait<'tree>>::TypeArg,
+        mut f: impl FnMut(ThinType<'tree>) -> Self
     ) -> Self::TypeArg {
         FatTypeArg {
             variance_bound: Variance::default(),
@@ -264,8 +290,8 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     }
 
     fn map_ref_type_arg(
-        type_arg: &<ThinType as TypeTrait>::TypeArg,
-        mut f: impl FnMut(&ThinType) -> Self
+        type_arg: &<ThinType<'tree> as TypeTrait<'tree>>::TypeArg,
+        mut f: impl FnMut(&ThinType<'tree>) -> Self
     ) -> Self::TypeArg {
         FatTypeArg {
             variance_bound: Variance::default(),
@@ -274,16 +300,18 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     }
 
     fn map_rest_arg_type_in_fn(
+        ann: Ann<'tree>,
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         mut arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: ThinType,
         return_type: ReturnType<Self>,
-        mut f: impl FnMut(ThinType) -> Self
+        mut f: impl FnMut(ThinType<'tree>) -> Self
     ) -> FnType<Self> {
         let intended_rest_arg_type = f(rest_arg_type);
         let rest_arg_type = FatRestArgType::from(intended_rest_arg_type, &mut arg_types);
         FnType {
+            ann,
             type_params,
             this_type,
             arg_types,
@@ -293,16 +321,18 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     }
 
     fn map_ref_rest_arg_type_in_fn(
+        ann: Ann<'tree>,
         type_params: Vec<TypeParam<Self>>,
         this_type: Self,
         mut arg_types: Vec<OptionalType<Self>>,
         rest_arg_type: &ThinType,
         return_type: ReturnType<Self>,
-        mut f: impl FnMut(Cow<'_, ThinType>) -> Self
+        mut f: impl FnMut(Cow<'_, ThinType<'tree>>) -> Self
     ) -> FnType<Self> {
         let intended_rest_arg_type = f(Cow::Borrowed(rest_arg_type));
         let rest_arg_type = FatRestArgType::from(intended_rest_arg_type, &mut arg_types);
         FnType {
+            ann,
             type_params,
             this_type,
             arg_types,
@@ -312,38 +342,46 @@ impl TypeTraitMapsFrom<ThinType> for FatType {
     }
 }
 
-impl TypeTraitMapsFrom<FatType> for ThinType {
-    fn map_inherited(inherited: <FatType as TypeTrait>::Inherited, f: impl FnMut(FatType) -> Self) -> Self::Inherited {
+impl<'tree> TypeTraitMapsFrom<FatType<'tree>> for ThinType<'tree> {
+    fn map_inherited(
+        inherited: <FatType<'tree> as TypeTrait<'tree>>::Inherited,
+        f: impl FnMut(FatType<'tree>) -> Self
+    ) -> Self::Inherited {
         inherited.into_bare_fat_types().map(f).collect()
     }
 
-    fn map_ref_inherited(inherited: &<FatType as TypeTrait>::Inherited, mut f: impl FnMut(Cow<'_, FatType>) -> Self) -> Self::Inherited {
+    fn map_ref_inherited(
+        inherited: &<FatType<'tree> as TypeTrait<'tree>>::Inherited,
+        mut f: impl FnMut(Cow<'_, FatType<'tree>>) -> Self
+    ) -> Self::Inherited {
         inherited.clone().into_bare_fat_types().map(|x| f(Cow::Owned(x))).collect()
     }
 
     fn map_type_arg(
-        type_arg: <FatType as TypeTrait>::TypeArg,
-        mut f: impl FnMut(FatType) -> Self
+        type_arg: <FatType<'tree> as TypeTrait<'tree>>::TypeArg,
+        mut f: impl FnMut(FatType<'tree>) -> Self
     ) -> Self::TypeArg {
         f(type_arg.type_)
     }
 
     fn map_ref_type_arg(
-        type_arg: &<FatType as TypeTrait>::TypeArg,
-        mut f: impl FnMut(&FatType) -> Self
+        type_arg: &<FatType<'tree> as TypeTrait<'tree>>::TypeArg,
+        mut f: impl FnMut(&FatType<'tree>) -> Self
     ) -> Self::TypeArg {
         f(&type_arg.type_)
     }
 
     fn map_rest_arg_type_in_fn(
-        type_params: Vec<TypeParam<Self>>,
+        ann: Ann<'tree>,
+        type_params: Vec<TypeParam<'tree, Self>>,
         this_type: Self,
-        arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: FatRestArgType,
-        return_type: ReturnType<Self>,
-        mut f: impl FnMut(FatType) -> Self
+        arg_types: Vec<OptionalType<'tree, Self>>,
+        rest_arg_type: FatRestArgType<'tree>,
+        return_type: ReturnType<'tree, Self>,
+        mut f: impl FnMut(FatType<'tree>) -> Self
     ) -> FnType<Self> {
         FnType {
+            ann,
             type_params,
             this_type,
             arg_types,
@@ -353,14 +391,16 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
     }
 
     fn map_ref_rest_arg_type_in_fn(
-        type_params: Vec<TypeParam<Self>>,
+        ann: Ann<'tree>,
+        type_params: Vec<TypeParam<'tree, Self>>,
         this_type: Self,
-        arg_types: Vec<OptionalType<Self>>,
-        rest_arg_type: &FatRestArgType,
-        return_type: ReturnType<Self>,
-        mut f: impl FnMut(Cow<'_, FatType>) -> Self
+        arg_types: Vec<OptionalType<'tree, Self>>,
+        rest_arg_type: &FatRestArgType<'tree>,
+        return_type: ReturnType<'tree, Self>,
+        mut f: impl FnMut(Cow<'_, FatType<'tree>>) -> Self
     ) -> FnType<Self> {
         FnType {
+            ann,
             type_params,
             this_type,
             arg_types,
@@ -370,7 +410,7 @@ impl TypeTraitMapsFrom<FatType> for ThinType {
     }
 }
 
-impl FnType<FatType> {
+impl<'tree> FnType<'tree, FatType<'tree>> {
     /// Min and max number of arguments.
     /// Returns `usize::MAX` for unbounded max arguments (array rest type)
     pub fn arity_range(&self) -> Range<usize> {
@@ -384,9 +424,10 @@ impl FnType<FatType> {
     }
 }
 
-impl TypeParam<FatType> {
-    pub fn into_decl(self) -> FatTypeDecl {
+impl<'tree> TypeParam<FatType<'tree>> {
+    pub fn into_decl(self) -> FatTypeDecl<'tree> {
         FatTypeDecl {
+            ann: self.ann,
             name: self.name,
             // No higher-kinded types
             type_params: Vec::new(),
@@ -396,12 +437,14 @@ impl TypeParam<FatType> {
 
     /// Converts this into the nominal type it declares: for [FatType], just a nominal type with the
     /// name, inherited, and variance bound
-    pub fn into_type(self) -> FatTypeArg {
+    pub fn into_type(self) -> FatTypeArg<'tree> {
         FatTypeArg {
             variance_bound: self.variance_bound,
             type_: FatType::Nominal {
+                ann: self.ann,
                 nullability: Nullability::NonNullable,
-                id: TypeIdent {
+                id: IdentType {
+                    ann: self.ann,
                     name: self.name,
                     // No HKTs
                     generic_args: Vec::new()
@@ -412,7 +455,7 @@ impl TypeParam<FatType> {
     }
 }
 
-impl FatTypeInherited {
+impl<'tree> FatTypeInherited<'tree> {
     pub const EMPTY: Self = Self::empty();
 
     /// Also = `default()`
@@ -426,7 +469,7 @@ impl FatTypeInherited {
         }
     }
 
-    pub fn map(self, f: impl FnMut(FatType) -> FatType) -> Self {
+    pub fn map(self, f: impl FnMut(FatType<'tree>) -> FatType<'tree>) -> Self {
         Self {
             super_ids: self.super_ids,
             structure: self.structure.map(|x| x.map(f)),
@@ -436,7 +479,7 @@ impl FatTypeInherited {
         }
     }
 
-    pub fn map_ref(&self, f: impl FnMut(&FatType) -> FatType) -> Self {
+    pub fn map_ref(&self, f: impl FnMut(&FatType<'tree>) -> FatType<'tree>) -> Self {
         Self {
             super_ids: self.super_ids.clone(),
             structure: self.structure.as_ref().map(|x| x.map_ref(f)),
@@ -456,12 +499,13 @@ impl FatTypeInherited {
     /// because presumably they shouldn't be needed (`Any` = structural so no guard and `any` type,
     /// `Never` = no possible instances no guard and `never` type, `Null` = the only possible
     /// instance is `null` so no guard and `null` type)
-    pub fn into_fat_type(mut self, nullability: Nullability) -> FatType {
+    pub fn into_fat_type(mut self, ann: Ann<'tree>, nullability: Nullability) -> FatType<'tree> {
         if self.is_never {
-            return FatType::Never { nullability };
+            return FatType::Never { ann, nullability };
         }
         if let Some(id) = self.super_ids.pop_front() {
             return FatType::Nominal {
+                ann,
                 nullability,
                 id,
                 inherited: Box::new(self)
@@ -469,32 +513,35 @@ impl FatTypeInherited {
         }
         if let Some(structure) = self.structure {
             return FatType::Structural {
+                ann,
                 nullability,
                 structure
             };
         }
-        FatType::Any
+        FatType::Any { ann }
     }
 
     /// Converts into bare fat types, i.e. without the inherited parts.
     /// Just a type for never, each identifier, and each structure.
     /// These types convert into thin types but should not be used anything else,
     /// as they have ids with incorrect supertypes.
-    fn into_bare_fat_types(self) -> impl Iterator<Item=FatType> {
+    fn into_bare_fat_types(self) -> impl Iterator<Item=FatType<'tree>> {
         once_if(self.is_never, || FatType::NEVER)
             .chain(self.super_ids.into_iter().map(|id| FatType::Nominal {
+                ann: id.ann,
                 nullability: Nullability::NonNullable,
                 id,
                 inherited: Box::default()
             }))
             .chain(self.structure.map(|structure| FatType::Structural {
+                ann: *structure.ann(),
                 nullability: Nullability::NonNullable,
                 structure
             }).into_iter())
     }
 }
 
-impl InheritedTrait for FatTypeInherited {
+impl<'tree> InheritedTrait<'tree> for FatTypeInherited<'tree> {
     fn is_empty_inherited(&self) -> bool {
         !self.is_never &&
             self.super_ids.is_empty() &&
@@ -504,8 +551,8 @@ impl InheritedTrait for FatTypeInherited {
     }
 }
 
-impl TypeArgTrait for FatTypeArg {
-    type Type = FatType;
+impl<'tree> TypeArgTrait<'tree> for FatTypeArg<'tree> {
+    type Type = FatType<'tree>;
 
     fn type_(&self) -> &Self::Type {
         &self.type_
@@ -520,8 +567,8 @@ impl TypeArgTrait for FatTypeArg {
     }
 }
 
-impl FatRestArgType {
-    const EMPTY_REST_ARG_REF: &'static FatType = &FatType::EMPTY_REST_ARG;
+impl<'tree> FatRestArgType<'tree> {
+    const EMPTY_REST_ARG_REF: &'static FatType<'static> = &FatType::<'static>::EMPTY_REST_ARG;
 
     /// Creates from the given [FatType].
     ///
@@ -534,10 +581,10 @@ impl FatRestArgType {
     /// - If it's `Any`, that is equivalent to an array of `Any` (can take extra elements of any type)
     /// - Otherwise, this will return [FatRestArgType::Illegal], which will log an error later if
     ///   the type is actually used somewhere.
-    pub fn from(intended_type: FatType, arg_types: &mut Vec<OptionalType<FatType>>) -> Self {
+    pub fn from(intended_type: FatType, arg_types: &mut Vec<OptionalType<FatType<'tree>>>) -> Self {
         let kind = FatRestArgKind::of(&intended_type);
         match kind {
-            FatRestArgKind::Any => Self::Array { element: FatType::Any },
+            FatRestArgKind::Any => Self::Array { ann: *intended_type.ann(), element: FatType::Any },
             FatRestArgKind::Tuple => {
                 let mut elements = intended_type.into_structure().and_then(|x| x.into_tuple_element_types())
                     .expect("FatRestArgType::from: intended_type is not a tuple but FatRestArgKind::of returned FatRestArgKind::Tuple");
@@ -547,7 +594,7 @@ impl FatRestArgType {
             FatRestArgKind::Array => {
                 let element = intended_type.into_structure().and_then(|x| x.into_array_element_type())
                     .expect("FatRestArgType::from: intended_type is not an array but FatRestArgKind::of returned FatRestArgKind::Array");
-                Self::Array { element }
+                Self::Array { ann: *intended_type.ann(), element }
             }
             FatRestArgKind::Illegal => Self::Illegal { intended_type }
         }
@@ -555,19 +602,19 @@ impl FatRestArgType {
 
     //Can't really abstract (I mean we could proc-macro this whole map/map_ref thing...)
     //noinspection DuplicatedCode
-    pub fn map(self, mut f: impl FnMut(FatType) -> FatType) -> Self {
+    pub fn map(self, mut f: impl FnMut(FatType<'tree>) -> FatType<'tree>) -> Self {
         match self {
             Self::None => Self::None,
-            Self::Array { element } => Self::Array { element: f(element) },
+            Self::Array { ann, element } => Self::Array { ann, element: f(element) },
             Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
         }
     }
 
     //noinspection DuplicatedCode
-    pub fn map_ref(&self, mut f: impl FnMut(&FatType) -> FatType) -> Self {
+    pub fn map_ref(&self, mut f: impl FnMut(&FatType<'tree>) -> FatType<'tree>) -> Self {
         match self {
             Self::None => Self::None,
-            Self::Array { element } => Self::Array { element: f(element) },
+            Self::Array { ann, element } => Self::Array { ann: *ann, element: f(element) },
             Self::Illegal { intended_type } => Self::Illegal { intended_type: f(intended_type) }
         }
     }
@@ -575,66 +622,66 @@ impl FatRestArgType {
     /// Gets the argument at the specified index, if any.
     ///
     /// (Rest arguments are always optional)
-    pub fn get(&self, _idx: usize) -> Option<&FatType> {
+    pub fn get(&self, _idx: usize) -> Option<&FatType<'tree>> {
         match self {
             Self::None => None,
-            Self::Array { element } => Some(element),
-            Self::Illegal { intended_type: _ } => None
+            Self::Array { element, .. } => Some(element),
+            Self::Illegal { .. } => None
         }
     }
 
     /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty.
     ///
     /// (Rest arguments are always optional)
-    pub fn iter(&self) -> impl Iterator<Item = &FatType> {
+    pub fn iter(&self) -> impl Iterator<Item = &FatType<'tree>> {
         // Use option/flatten to avoid auto_enum
         match self {
             Self::None => None,
-            Self::Array { element } => Some(repeat(element)),
-            Self::Illegal { intended_type: _ } => None
+            Self::Array { element, .. } => Some(repeat(element)),
+            Self::Illegal { .. } => None
         }.into_iter().flatten()
     }
 
     /// Iterates the rest arguments: returns infinite element types if this is an array, otherwise empty.
     ///
     /// (Rest arguments are always optional)
-    pub fn into_iter(self) -> impl Iterator<Item = FatType> {
+    pub fn into_iter(self) -> impl Iterator<Item = FatType<'tree>> {
         // Use option/flatten to avoid auto_enum
         match self {
             Self::None => None,
-            Self::Array { element } => Some(repeat(element)),
-            Self::Illegal { intended_type: _ } => None
+            Self::Array { element, .. } => Some(repeat(element)),
+            Self::Illegal { .. } => None
         }.into_iter().flatten()
     }
 
     /// Converts into a [FatType]. If possible this will use a static or internal reference.
-    pub fn as_cow(&self) -> Cow<'_, FatType> {
+    pub fn as_cow(&self) -> Cow<'_, FatType<'tree>> {
         match self {
             Self::None => Cow::Borrowed(Self::EMPTY_REST_ARG_REF),
-            Self::Array { element } => Cow::Owned(FatType::array(element.clone())),
+            Self::Array { ann, element } => Cow::Owned(FatType::array(*ann, element.clone())),
             Self::Illegal { intended_type } => Cow::Borrowed(intended_type)
         }
     }
 }
 
-impl RestArgTrait for FatRestArgType {
+impl<'tree> RestArgTrait<'tree> for FatRestArgType<'tree> {
     fn is_empty_rest_arg(&self) -> bool {
         matches!(self, Self::None)
     }
 }
 
-impl Into<FatType> for FatRestArgType {
-    fn into(self) -> FatType {
+impl<'tree> Into<FatType<'tree>> for FatRestArgType<'tree> {
+    fn into(self) -> FatType<'tree> {
         match self {
             Self::None => FatType::EMPTY_REST_ARG,
-            Self::Array { element } => FatType::array(element),
+            Self::Array { ann, element } => FatType::array(ann, element),
             Self::Illegal { intended_type } => intended_type
         }
     }
 }
 
 impl FatRestArgKind {
-    pub fn of(intended_type: &FatType) -> Self {
+    pub fn of(intended_type: &FatType<'_>) -> Self {
         if matches!(intended_type, FatType::Any) {
             return Self::Any;
         }
@@ -646,31 +693,33 @@ impl FatRestArgKind {
     }
 }
 
-impl FatTypeHole {
-    pub fn new() -> Self {
+impl<'tree> FatTypeHole<'tree> {
+    pub fn new(ann: Ann<'tree>) -> Self {
         Self {
-            upper_bound: Rc::new(RefCell::new(FatType::NEVER)),
+            ann,
+            upper_bound: Rc::new(RefCell::new(FatType::never(ann))),
         }
     }
 }
 
-impl PartialEq<FatTypeHole> for FatTypeHole {
-    fn eq(&self, other: &FatTypeHole) -> bool {
+impl<'tree> PartialEq for FatTypeHole<'tree> {
+    fn eq(&self, other: &FatTypeHole<'tree>) -> bool {
         Rc::ptr_eq(&self.upper_bound, &other.upper_bound)
     }
 }
 
-impl Eq for FatTypeHole {}
+impl<'tree> Eq for FatTypeHole<'tree> {}
 
-impl Default for FatTypeHole {
+impl<'tree> Default for FatTypeHole<'tree> {
     fn default() -> Self {
-        Self::new()
+        Self::new(Ann::default())
     }
 }
 
-impl From<FatType> for FatTypeHole {
-    fn from(t: FatType) -> Self {
+impl<'tree> From<FatType<'tree>> for FatTypeHole<'tree> {
+    fn from(t: FatType<'tree>) -> Self {
         Self {
+            ann: *t.ann(),
             upper_bound: Rc::new(RefCell::new(t))
         }
     }

@@ -11,9 +11,9 @@ use crate::{error, hint, issue};
 use crate::analyses::bindings::{Locality, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, WeakScopePtr};
 use crate::analyses::scopes::scope_imports::{ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx};
-use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, TypeIdent};
+use crate::analyses::types::{DeterminedReturnType, FatType, FatTypeInherited, ResolveCache, ResolveCtx, ReturnType, RlReturnType, RlType, IdentType};
 use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstCatchParameter, AstImportPath, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
+use crate::ast::typed_nodes::{AstCatchParameter, ImportPathAst, AstImportStatement, AstNode, AstParameter, AstReturn, AstThrow, AstTypeBinding, AstTypeIdent, AstTypeImportSpecifier, AstValueBinding, AstValueDecl, AstValueIdent, AstValueImportSpecifier, DynAstTypeBinding, DynAstValueBinding};
 use crate::diagnostics::{FileLogger, TypeLogger};
 
 /// A local scope: contains all of the bindings in a scope node
@@ -25,7 +25,7 @@ use crate::diagnostics::{FileLogger, TypeLogger};
 pub struct Scope<'tree> {
     pub node: TSNode<'tree>,
     did_set_params: bool,
-    imported_script_paths: Vec<AstImportPath<'tree>>,
+    imported_script_paths: Vec<ImportPathAst<'tree>>,
     pub values: ValueScope<'tree>,
     pub types: TypeScope<'tree>,
     pub(crate) resolve_cache: ResolveCache,
@@ -95,29 +95,29 @@ impl<'tree> Scope<'tree> {
         }
     }
 
-    /// Resolve the [AstImportPath] and [AstValueImportSpecifier] for a value import
+    /// Resolve the [ImportPathAst] and [AstValueImportSpecifier] for a value import
     ///
     /// This expects idx to be from this scope as it also indexes `imported_script_paths` to get the
-    /// [AstImportPath]. If you don't have this assumption this could return random unrelated values
-    pub fn value_import(&self, idx: &ScopeValueImportIdx) -> (&AstImportPath<'tree>, &DynAstValueBinding<'tree>) {
+    /// [ImportPathAst]. If you don't have this assumption this could return random unrelated values
+    pub fn value_import(&self, idx: &ScopeValueImportIdx) -> (&ImportPathAst<'tree>, &DynAstValueBinding<'tree>) {
         let import_path = &self.imported_script_paths[idx.import_path_idx];
         (import_path, self.values.hoisted(&idx.imported_name).expect("value_import idx not in scope"))
     }
 
-    /// Resolve the [AstImportPath] and [AstTypeImportSpecifier] for a type import
+    /// Resolve the [ImportPathAst] and [AstTypeImportSpecifier] for a type import
     ///
     /// This expects idx to be from this scope as it also indexes `imported_script_paths` to get the
-    /// [AstImportPath]. If you don't have this assumption this could return random unrelated values
-    pub fn type_import(&self, idx: &ScopeTypeImportIdx) -> (&AstImportPath<'tree>, &DynAstTypeBinding<'tree>) {
+    /// [ImportPathAst]. If you don't have this assumption this could return random unrelated values
+    pub fn type_import(&self, idx: &ScopeTypeImportIdx) -> (&ImportPathAst<'tree>, &DynAstTypeBinding<'tree>) {
         let import_path = &self.imported_script_paths[idx.import_path_idx];
         (import_path, self.types.get(&idx.imported_name).expect("value_import idx not in scope"))
     }
 
-    /// Resolve the [AstImportPath] and import-specifier [TSNode] for an import
+    /// Resolve the [ImportPathAst] and import-specifier [TSNode] for an import
     ///
     /// This expects idx to be from this scope as it also indexes `imported_script_paths` to get the
-    /// [AstImportPath]. If you don't have this assumption this could return random unrelated values
-    pub fn import(&self, idx: &ScopeImportIdx<impl ScopeImportAlias>) -> (&AstImportPath<'tree>, TSNode<'tree>) {
+    /// [ImportPathAst]. If you don't have this assumption this could return random unrelated values
+    pub fn import(&self, idx: &ScopeImportIdx<impl ScopeImportAlias>) -> (&ImportPathAst<'tree>, TSNode<'tree>) {
         ScopeImportAlias::_index_into_scope(idx, self)
     }
 }
@@ -369,7 +369,7 @@ impl<'tree> TypeScope<'tree> {
     }
 
     /// Lookup the identifier and substitute generic parameters to get its resolved inherited types
-    pub fn inherited(&self, id: TypeIdent<FatType>, ctx: &ResolveCtx<'_>) -> Option<FatTypeInherited> {
+    pub fn inherited(&self, id: IdentType<FatType>, ctx: &ResolveCtx<'_>) -> Option<FatTypeInherited> {
         let decl_ast = self.get(&id.name)?;
         // let decl_node = decl_ast.node(); (TODO: use in type logger)
         let decl = decl_ast.type_decl().resolve(ctx);

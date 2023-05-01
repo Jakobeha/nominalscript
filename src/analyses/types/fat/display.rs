@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 use join_lazy_fmt::Join;
-use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, ThinType, TypeIdent, TypeStructure, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType, ReturnType, RestArgTrait, TypeArgTrait, FatTypeArg};
+use crate::analyses::types::{FnType, Nullability, Field, Optionality, OptionalType, ThinType, IdentType, StructureType, TypeTrait, TypeParam, Variance, FatType, FatTypeHole, InheritedTrait, FatTypeInherited, NominalGuard, FatRestArgType, ReturnType, RestArgTrait, TypeArgTrait, FatTypeArg};
 use crate::misc::DisplayWithCtx;
 
 /// Context which affects how a type is formatted when printed. This includes rules like
@@ -189,7 +189,7 @@ impl Display for Optionality {
     }
 }
 
-impl<Type: TypeTrait<TypeArg=TypeArg> + Display, TypeArg: TypeArgTrait + Display> Display for TypeIdent<Type> {
+impl<Type: TypeTrait<TypeArg=TypeArg> + Display, TypeArg: TypeArgTrait + Display> Display for IdentType<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if !self.generic_args.is_empty() {
@@ -199,23 +199,23 @@ impl<Type: TypeTrait<TypeArg=TypeArg> + Display, TypeArg: TypeArgTrait + Display
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> Display for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> Display for StructureType<Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.with_ctx(&TypeDisplayCtx::default()))
     }
 }
 
-impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for TypeStructure<Type> {
+impl<Type: TypeTrait<Inherited=Inherited, TypeArg=TypeArg, RestArg=RestArgType> + DisplayWithCtx<TypeDisplayCtx> + Display, Inherited: InheritedTrait + DisplayWithCtx<DisplayInherited>, TypeArg: TypeArgTrait + Display, RestArgType: RestArgTrait + Display> DisplayWithCtx<TypeDisplayCtx> for StructureType<Type> {
     fn fmt(&self, f: &mut Formatter<'_>, ctx: &TypeDisplayCtx) -> std::fmt::Result {
         match self {
-            TypeStructure::Fn { fn_type } => write!(f, "{}", fn_type.with_ctx(ctx)),
-            TypeStructure::Array { element_type } => {
+            StructureType::Fn { fn_type } => write!(f, "{}", fn_type.with_ctx(ctx)),
+            StructureType::Array { element_type } => {
                 let mut ctx = *ctx;
                 ctx.must_paren_fn = true;
                 write!(f, "{}[]", element_type.with_ctx(&ctx))
             },
-            TypeStructure::Tuple { element_types } => write!(f, "[{}]", ", ".join(element_types)),
-            TypeStructure::Object { field_types } => write!(f, "{{ {} }}", ", ".join(field_types)),
+            StructureType::Tuple { element_types } => write!(f, "[{}]", ", ".join(element_types)),
+            StructureType::Object { field_types } => write!(f, "{{ {} }}", ", ".join(field_types)),
         }
     }
 }

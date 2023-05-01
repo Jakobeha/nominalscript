@@ -2,6 +2,8 @@
 mod thin;
 /// Fat (post-resolution, includes supertypes) types + the unification algorithm
 mod fat;
+/// Abstracted data-structues shared by thin and fat types
+mod generic;
 /// Type resolution + resolved lazy, which combines thin and fat type to handle cyclic dependencies,
 /// resolution caching, etc.
 mod resolve;

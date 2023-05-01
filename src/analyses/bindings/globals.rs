@@ -2,7 +2,9 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::path::Path;
+
 use indexmap::Equivalent;
+
 use crate::analyses::bindings::{HoistedValueBinding, Locality, TypeBinding, TypeName, ValueBinding, ValueName};
 use crate::analyses::scopes::ExprTypeMap;
 use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, FatTypeDecl, ResolveCtx, RlType, RlTypeDecl};
@@ -20,7 +22,7 @@ fn get_global_bindings() -> (HashMap<ValueName, GlobalValueBinding>, HashMap<Typ
         },
         false
     );
-    let global_script_path = module_root_path.join("global_bindings.ns");
+    let global_script_path = module_root_path.join("globals.ns");
     let global_module = &global_project.begin_transpile_file(&global_script_path).expect("global bindings script should be valid");
     let global_exports = &global_module.exports;
     let ctx = ResolveCtx::new(global_project.ctx(), global_module.path());

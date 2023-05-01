@@ -6,7 +6,7 @@ use replace_with::replace_with_or_default;
 use smallvec::SmallVec;
 
 use crate::analyses::bindings::{FieldName, TypeName};
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, TypeIdent, TypeLoc, TypeParam, TypeStructure};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, OptionalType, ReturnType, IdentType, TypeLoc, TypeParam, StructureType};
 use crate::diagnostics::TypeLogger;
 use crate::{error, issue};
 use crate::misc::{iter_if, once_if, RefIterator};
@@ -322,7 +322,7 @@ impl FatTypeHole {
     }
 }
 
-impl TypeIdent<FatType> {
+impl IdentType<FatType> {
     /// Paths to occurrences of the name (including in this type itself).
     ///
     /// Function types which declare a parameter shadowing the old name don't have occurrences.
@@ -412,7 +412,7 @@ impl TypeIdent<FatType> {
     }
 }
 
-impl TypeStructure<FatType> {
+impl StructureType<FatType> {
     /// Paths to occurrences of the name
     ///
     /// Function types which declare a parameter shadowing the old name don't have occurrences.

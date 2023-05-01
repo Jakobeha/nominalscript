@@ -6,7 +6,7 @@ use replace_with::{replace_with, replace_with_or_default};
 
 use crate::{error, note};
 use crate::analyses::bindings::TypeName;
-use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, HasNullability, Nullability, Optionality, OptionalType, ReturnType, StructureKind, TypeIdent, TypeLoc, TypeParam, TypeStructure, Variance};
+use crate::analyses::types::{FatRestArgType, FatType, FatTypeArg, FatTypeHole, FatTypeInherited, Field, FnType, HasNullability, Nullability, Optionality, OptionalType, ReturnType, StructureKind, IdentType, TypeLoc, TypeParam, StructureType, Variance};
 use crate::analyses::types::fat::occurrences::FatIdentIndexStepInFn;
 use crate::diagnostics::TypeLogger;
 use crate::misc::{iter_eq, rc_unwrap_or_clone, VecExtendNoDup, VecFilter};
@@ -18,8 +18,8 @@ impl FatType {
     /// explicitly handled (if disjoint and union, will handle by making `this` `None`)
     #[must_use = "check if the unified structure is `Never`"]
     pub fn unify_structure(
-        this: &mut Option<TypeStructure<Self>>,
-        other: Option<TypeStructure<Self>>,
+        this: &mut Option<StructureType<Self>>,
+        other: Option<StructureType<Self>>,
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) -> bool {
@@ -52,8 +52,8 @@ impl FatType {
     /// Returns if the structures are disjoint, so the union is `Any` and intersection is `Never`.
     #[must_use = "check if disjoint"]
     pub fn unify_structure2(
-        this: &mut TypeStructure<Self>,
-        mut other: TypeStructure<Self>,
+        this: &mut StructureType<Self>,
+        mut other: StructureType<Self>,
         bias: Variance,
         e: TypeLogger<'_, '_, '_>
     ) -> bool {
@@ -65,20 +65,20 @@ impl FatType {
                 }
 
                 if bias.do_union() {
-                    replace_with(this, || TypeStructure::Array { element_type: Box::default() }, |this| {
-                        let TypeStructure::Tuple { element_types } = this else { unreachable!() };
+                    replace_with(this, || StructureType::Array { element_type: Box::default() }, |this| {
+                        let StructureType::Tuple { element_types } = this else { unreachable!() };
                         let element_types = element_types.into_iter().map(|x| x.collapse_optionality_into_nullability());
-                        TypeStructure::Array {
+                        StructureType::Array {
                             element_type: Box::new(FatType::unify_all(element_types, Variance::Bivariant, TypeLogger::ignore()))
                         }
                     });
                 } else {
                     let len = match &this {
-                        TypeStructure::Tuple { element_types } => element_types.len(),
+                        StructureType::Tuple { element_types } => element_types.len(),
                         _ => unreachable!()
                     };
-                    let TypeStructure::Array { element_type } = other else { unreachable!() };
-                    other = TypeStructure::Tuple {
+                    let StructureType::Array { element_type } = other else { unreachable!() };
+                    other = StructureType::Tuple {
                         element_types: vec![OptionalType::optional(*element_type); len]
                     }
                 }
@@ -88,19 +88,19 @@ impl FatType {
                     error!(e, "a tuple is not a supertype of an array");
                 }
                 if bias.do_union() {
-                    let TypeStructure::Tuple { element_types } = other else { unreachable!() };
+                    let StructureType::Tuple { element_types } = other else { unreachable!() };
                     let element_types = element_types.into_iter().map(|x| x.collapse_optionality_into_nullability());
-                    other = TypeStructure::Array {
+                    other = StructureType::Array {
                         element_type: Box::new(FatType::unify_all(element_types, Variance::Bivariant, TypeLogger::ignore()))
                     }
                 } else {
                     let len = match &other {
-                        TypeStructure::Tuple { element_types } => element_types.len(),
+                        StructureType::Tuple { element_types } => element_types.len(),
                         _ => unreachable!()
                     };
-                    replace_with(this, || TypeStructure::Tuple { element_types: Vec::default() }, |this| {
-                        let TypeStructure::Array { element_type } = this else { unreachable!() };
-                        TypeStructure::Tuple {
+                    replace_with(this, || StructureType::Tuple { element_types: Vec::default() }, |this| {
+                        let StructureType::Array { element_type } = this else { unreachable!() };
+                        StructureType::Tuple {
                             element_types: vec![OptionalType::optional(*element_type); len]
                         }
                     });
@@ -110,11 +110,11 @@ impl FatType {
         }
         // Merge if equivalent kinds or log error
         match (this, other) {
-            (TypeStructure::Fn { fn_type }, TypeStructure::Fn { fn_type: other_fn_type }) => {
+            (StructureType::Fn { fn_type }, StructureType::Fn { fn_type: other_fn_type }) => {
                 Self::unify_fn(fn_type, *other_fn_type, bias, e);
                 false
             }
-            (TypeStructure::Array { element_type }, TypeStructure::Array { element_type: other_element_type }) => {
+            (StructureType::Array { element_type }, StructureType::Array { element_type: other_element_type }) => {
                 Self::unify(
                     element_type,
                     *other_element_type,
@@ -123,7 +123,7 @@ impl FatType {
                 );
                 false
             }
-            (TypeStructure::Tuple { element_types }, TypeStructure::Tuple { element_types: other_element_types }) => {
+            (StructureType::Tuple { element_types }, StructureType::Tuple { element_types: other_element_types }) => {
                 Self::unify_optionals(
                     "tuple element",
                     element_types,
@@ -133,7 +133,7 @@ impl FatType {
                 );
                 false
             }
-            (TypeStructure::Object { field_types }, TypeStructure::Object { field_types: other_field_types }) => {
+            (StructureType::Object { field_types }, StructureType::Object { field_types: other_field_types }) => {
                 Self::unify_fields(
                     field_types,
                     other_field_types,
@@ -550,8 +550,8 @@ impl FatType {
     /// inherited, the less instances exist, and a type union has more instances).
     // This function is essentially exact same as unify_fields...is there a good way to abstract?
     pub fn unify_super_ids(
-        this: &mut VecDeque<TypeIdent<FatType>>,
-        mut other: VecDeque<TypeIdent<FatType>>,
+        this: &mut VecDeque<IdentType<FatType>>,
+        mut other: VecDeque<IdentType<FatType>>,
         bias: Variance,
         e: &TypeLogger<'_, '_, '_>
     ) {

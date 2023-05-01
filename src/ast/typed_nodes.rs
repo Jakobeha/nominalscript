@@ -2,10 +2,12 @@ use std::rc::Rc;
 use enquote::unquote;
 use once_cell::unsync::{Lazy, OnceCell};
 
-use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeName, ValueBinding, ValueName};
+use crate::analyses::bindings::{DynValueBinding, FieldName, HoistedValueBinding, Locality, LocalTypeBinding, LocalValueBinding, TypeBinding, TypeIdent, TypeName, ValueBinding, ValueIdent, ValueName};
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr, ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::analyses::types::{DeterminedType, DynRlType, DynRlTypeDecl, FatType, Field, HasNullability, NominalGuard, Optionality, OptionalType, ResolveCtx, ResolvedLazy, ReturnType, RlImportedTypeDecl, RlImportedValueType, RlReturnType, RlType, RlTypeDecl, RlTypeParam, ThinType, ThinTypeDecl, TypeParam, Variance};
+use crate::ast::ann::Ann;
 use crate::ast::tree_sitter::TSNode;
+use crate::{impl_has_ann_record_struct, impl_has_ann_wrapper_struct};
 use crate::import_export::export::ImportPath;
 
 pub trait AstNode<'tree> {
@@ -28,137 +30,110 @@ pub type DynAstValueBinding<'tree> = dyn AstValueBinding<'tree> + 'tree;
 pub trait AstTypeBinding<'tree>: AstNode<'tree> + TypeBinding {}
 pub type DynAstTypeBinding<'tree> = dyn AstTypeBinding<'tree> + 'tree;
 
-#[derive(Debug, Clone)]
-pub struct AstValueIdent<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: ValueName,
-}
+/// Arbitrary expression
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueExpr<'tree>(TSNode<'tree>);
 
-#[derive(Debug, Clone)]
-pub struct AstTypeIdent<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: TypeName,
-}
-
+/// Formal parameter
 #[derive(Debug)]
-pub struct AstTypeParameter<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: AstTypeIdent<'tree>,
-    pub nominal_supertypes: Vec<AstType<'tree>>,
-    pub shape: RlTypeParam
-}
-
-#[derive(Debug, Clone)]
-pub struct AstType<'tree> {
-    pub node: TSNode<'tree>,
-    pub shape: RlType,
-}
-
-#[derive(Debug, Clone)]
-pub struct AstReturnType<'tree> {
-    pub node: TSNode<'tree>,
-    pub shape: RlReturnType,
-}
-
-#[derive(Debug)]
-pub struct AstParameter<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: AstValueIdent<'tree>,
+pub struct ValueParameter<'tree> {
+    pub ann: Ann<'tree>,
+    pub name: ValueIdent<'tree>,
     pub is_this_param: bool,
     pub is_rest_param: bool,
     pub is_optional: bool,
-    pub type_: Option<AstType<'tree>>,
-    pub value: Option<TSNode<'tree>>,
-    backwards_hole: Option<Lazy<RlType>>,
-    // pub local_uses: LocalUses<'tree>,
+    pub type_: Option<ValueParameterType<'tree>>,
+    pub value: Option<ValueExpr<'tree>>,
 }
+impl_has_ann_record_struct!(ValueParameter);
 
+/// Formal parameter's type, which is different from [RlType] because it sometimes it's inferred
 #[derive(Debug)]
-pub struct AstCatchParameter<'tree> {
-    pub name: AstValueIdent<'tree>,
-    // pub local_uses: LocalUses<'tree>,
+pub enum ValueParameterType<'tree> {
+    /// Explicitly provided type
+    Explicit { type_: RlType<'tree>> },
+    /// Backwards-inferred hole
+    Hole { hole: Lazy<RlType<'tree>> }
 }
 
+/// "Parameter" bound in a `catch` clause
+#[derive(Debug)]
+pub struct CatchParameter<'tree> {
+    pub name: AstValueIdent<'tree>,
+}
+impl_has_ann_wrapper_struct!(CatchParameter by name);
+
+/// Return statement
 #[derive(Debug, Clone, Copy)]
-pub struct AstReturn<'tree> {
-    pub node: TSNode<'tree>,
-    pub returned_value: Option<TSNode<'tree>>,
+pub struct Return<'tree> {
+    pub ann: Ann<'tree>,
+    pub returned_value: Option<ValueExpr<'tree>>,
 }
+impl_has_ann_record_struct!(Return);
 
+/// Throw statement
 #[derive(Debug, Clone, Copy)]
-pub struct AstThrow<'tree> {
-    pub node: TSNode<'tree>,
-    pub thrown_value: Option<TSNode<'tree>>,
+pub struct Throw<'tree> {
+    pub ann: Ann<'tree>,
+    pub thrown_value: Option<ValueExpr<'tree>>,
+}
+impl_has_ann_record_struct!(Throw);
+
+/// Value declaration
+#[derive(Debug)]
+pub struct ValueDecl<'tree> {
+    pub ann: Ann<'tree>,
+    pub name: ValueIdent<'tree>,
+    pub type_: Option<RlType<'tree>>,
+    pub value: Option<ValueExpr<'tree>>,
 }
 
+/// Function declaration
 #[derive(Debug)]
-pub struct AstValueDecl<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: AstValueIdent<'tree>,
-    pub type_: Option<AstType<'tree>>,
-    pub value: Option<TSNode<'tree>>,
-    // pub local_uses: LocalUses<'tree>,
+pub struct FunctionDecl<'tree> {
+    pub ann: Ann<'tree>,
+    pub name: ValueIdent<'tree>,
+    pub nominal_params: Vec<RlTypeParameter<'tree>>,
+    pub formal_params: Vec<Rc<ValueParameter<'tree>>>,
+    pub return_type: Option<RlReturnType<'tree>>,
+    fn_type: RlType<'tree>,
+    custom_inferred_fn_type: OnceCell<RlType<'tree>>,
 }
 
+// TODO: Should we refactor the import specifier into RlImportedValueType?
+//   Probably, but wait until we have a better idea of this design
+/// Value import specifier (`bar as baz` in `import {bar as baz, ;Bar as Baz} from 'foo'`)
 #[derive(Debug)]
-pub struct AstFunctionDecl<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: AstValueIdent<'tree>,
-    pub nominal_params: Vec<AstTypeParameter<'tree>>,
-    pub formal_params: Vec<Rc<AstParameter<'tree>>>,
-    pub return_type: Option<AstReturnType<'tree>>,
-    fn_type: RlType,
-    custom_inferred_fn_type: OnceCell<RlType>,
-    // pub local_uses: LocalUses<'tree>,
+pub struct ValueImportSpecifier<'tree> {
+    pub ann: Ann<'tree>,
+    pub original_name: ValueIdent<'tree>,
+    pub alias: ValueIdent<'tree>,
+    pub shape: RlImportedValueType<'tree>,
 }
 
+/// Type import specifier (`Bar as Baz` in `import {bar as baz, ;Bar as Baz} from 'foo'`)
 #[derive(Debug)]
-pub struct AstNominalGuard<'tree> {
-    pub node: TSNode<'tree>,
-    pub parameter: AstValueIdent<'tree>,
-    pub body: TSNode<'tree>,
-    pub shape: NominalGuard,
+pub struct TypeImportSpecifier<'tree> {
+    pub ann: Ann<'tree>,
+    pub original_name: TypeIdent<'tree>,
+    pub alias: TypeIdent<'tree>,
+    pub shape: RlImportedTypeDecl<'tree>,
 }
 
+/// Import path (`'foo'` in `import {bar as baz, ;Bar as Baz} from 'foo'`)
 #[derive(Debug)]
-pub struct AstTypeDecl<'tree> {
-    pub node: TSNode<'tree>,
-    pub name: AstTypeIdent<'tree>,
-    pub nominal_params: Vec<AstTypeParameter<'tree>>,
-    pub nominal_supertypes: Vec<AstType<'tree>>,
-    pub typescript_supertype: Option<TSNode<'tree>>,
-    pub guard: Option<AstNominalGuard<'tree>>,
-    pub shape: RlTypeDecl,
-}
-
-#[derive(Debug)]
-pub struct AstValueImportSpecifier<'tree> {
-    pub node: TSNode<'tree>,
-    pub original_name: AstValueIdent<'tree>,
-    pub alias: AstValueIdent<'tree>,
-    pub shape: RlImportedValueType,
-}
-
-#[derive(Debug)]
-pub struct AstTypeImportSpecifier<'tree> {
-    pub node: TSNode<'tree>,
-    pub original_name: AstTypeIdent<'tree>,
-    pub alias: AstTypeIdent<'tree>,
-    pub shape: RlImportedTypeDecl,
-}
-
-#[derive(Debug)]
-pub struct AstImportPath<'tree> {
-    pub node: TSNode<'tree>,
+pub struct ImportPathAst<'tree> {
+    pub ann: Ann<'tree>,
     pub module_path: ImportPath,
 }
 
+/// Import statement (the entire thing `import {bar as baz, ;Bar as Baz} from 'foo'`)
 #[derive(Debug)]
-pub struct AstImportStatement<'tree> {
-    pub node: TSNode<'tree>,
-    pub path: AstImportPath<'tree>,
-    pub imported_values: Vec<AstValueImportSpecifier<'tree>>,
-    pub imported_types: Vec<AstTypeImportSpecifier<'tree>>,
+pub struct ImportStatement<'tree> {
+    pub ann: Ann<'tree>,
+    pub path: ImportPathAst<'tree>,
+    pub imported_values: Vec<ValueImportSpecifier<'tree>>,
+    pub imported_types: Vec<TypeImportSpecifier<'tree>>,
     pub(crate) import_path_idx: usize
 }
 
@@ -871,8 +846,8 @@ impl<'tree> AstTypeImportSpecifier<'tree> {
     }
 }
 
-impl_ast!(AstImportPath);
-impl<'tree> AstImportPath<'tree> {
+impl_ast!(ImportPathAst);
+impl<'tree> ImportPathAst<'tree> {
     pub fn new(node: TSNode<'tree>) -> Self {
         assert_kind!(node, ["string"]);
         let module_path = ImportPath::from(unquote(node.text()).expect("import path is not a well-formed string literal"));
@@ -891,7 +866,7 @@ impl<'tree> AstImportStatement<'tree> {
         node: TSNode<'tree>,
     ) -> Self {
         assert_kind!(node, ["import_statement"]);
-        let path = AstImportPath::new(node.named_child(1).unwrap());
+        let path = ImportPathAst::new(node.named_child(1).unwrap());
         let import_container = node.named_child(0).unwrap();
         let imported_values = import_container
             .named_children(&mut node.walk())

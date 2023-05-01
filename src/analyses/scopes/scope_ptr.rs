@@ -303,7 +303,7 @@ impl<'tree> Hash for InactiveScopePtr<'tree> {
 
 impl<'tree> WeakScopePtr<'tree> {
     /// Creates an uninialized scope pointer which will always `upgrade` to `None`
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         WeakScopePtr(Weak::new())
     }
 
