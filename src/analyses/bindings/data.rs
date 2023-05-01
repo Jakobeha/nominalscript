@@ -4,9 +4,9 @@ use std::hash::Hash;
 
 use derive_more::Display;
 
-use crate::analyses::bindings::{TypeName, ValueName};
+use crate::analyses::bindings::{TypeIdent, ValueIdent};
 use crate::analyses::types::{DynRlType, DynRlTypeDecl};
-use crate::ast::tree_sitter::TSNode;
+use crate::ast::ann::HasAnn;
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {
@@ -23,11 +23,9 @@ pub enum Locality {
 
 /// Declares a value identifier which can be referenced:
 /// imports, declarations, parameters, predefined globals, etc.
-pub trait ValueBinding<'tree>: Debug {
+pub trait ValueBinding<'tree>: HasAnn<'tree> + Debug {
     /// Binding name
-    fn name(&self) -> &ValueName;
-    /// Where the binding was declared, if it was declared in a syntax-tree
-    fn node(&self) -> Option<&TSNode<'tree>>;
+    fn name(&self) -> &ValueIdent<'tree>;
     /// Semantic type of the value
     fn value_type(&self) -> &DynRlType<'tree>;
     /// Binding's locality
@@ -38,11 +36,9 @@ pub type DynValueBinding<'tree> = dyn ValueBinding<'tree> + 'tree;
 
 /// Declares a type identifier which can be referenced:
 /// imported types, type declarations, type parameters, predefined globals, etc.
-pub trait TypeBinding<'tree>: Debug {
+pub trait TypeBinding<'tree>: HasAnn<'tree> + Debug {
     /// Binding name
-    fn name(&self) -> &TypeName;
-    /// Where the binding was declared, if it was declared in a syntax-tree
-    fn node(&self) -> Option<&TSNode<'tree>>;
+    fn name(&self) -> &TypeIdent<'tree>;
     /// Semantic type declaration (semantic version of this).
     ///
     /// If local, the name and node will be the same.

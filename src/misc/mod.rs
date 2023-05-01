@@ -1,5 +1,7 @@
 /// Iterator chain macro
 mod chain;
+/// Safely downcast types with lifetimes
+mod downcast_with_lifetime;
 /// Type with 2 forms of equality: semantic (equivalence) and intrinsic (identity)
 mod eqv_ident;
 /// Display with context like indentation
@@ -34,6 +36,7 @@ mod utf8_error_offset_by;
 
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use chain::chain;
+pub(crate) use downcast_with_lifetime::*;
 pub use eqv_ident::*;
 pub use fmt_with_ctx::*;
 pub(crate) use frozen_map_iter::FrozenMapIter;

@@ -17,7 +17,7 @@ pub struct $NameStr(str);
 $crate::impl_has_ann_record_struct!($NameIdent);
 #[doc = concat!("A [", stringify!($NameStr), "] with source info.")]
 #[doc = "This *does not* implement [Eq], [Ord], or [Hash], because often you will want to compare the names, but sometimes you may want to compare source info as well (there's an explicit check, [Self::identical], for that)"]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct $NameIdent<'tree> {
     pub ann: Ann<'tree>,
     #[doc = "The name"]
@@ -126,6 +126,18 @@ impl<'tree> $NameIdent<'tree> {
 
     pub fn of(ann: Ann<'tree>, name: &'tree (impl AsRef<str> + ?Sized)) -> Self {
         Self::of_str(ann, name.as_ref())
+    }
+}
+
+impl<'tree> AsRef<str> for $NameIdent<'tree> {
+    fn as_ref(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+
+impl<'tree> Borrow<$NameStr> for $NameIdent<'tree> {
+    fn borrow(&self) -> &$NameStr {
+        self.name
     }
 }
 

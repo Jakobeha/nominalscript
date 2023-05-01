@@ -9,7 +9,7 @@ use elsa::FrozenMap;
 use indexmap::IndexSet;
 use once_cell::unsync::OnceCell;
 
-use crate::{error, issue, ProjectCtx};
+use crate::{debug, error, issue, ProjectCtx};
 use crate::analyses::bindings::TypeNameStr;
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx, WeakScopePtr};
 use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, IdentType, Nullability, OptionalType, ReturnType, StructureType, ThinType, ThinTypeDecl, TypeParam, Variance};
@@ -19,7 +19,7 @@ use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};
 use crate::import_export::ModulePath;
-use crate::misc::{impl_by_map, OnceCellExt};
+use crate::misc::{downcast_ref_with_lifetime, impl_by_map, OnceCellExt};
 
 /// `ResolvedLazy` = lazy value which is "resolved" (computed) according to how NominalScript does
 /// unordered cyclic resolution. It contains a **thin** (pre-resolution, context-sensitive) version
@@ -95,7 +95,7 @@ pub struct ResolveCtx<'a, 'tree> {
 struct RecursiveResolution;
 
 /// Trait implemented by [ResolvedLazy] which lets you use `DynResolvedLazy` values with arbitrary thin versions.
-pub trait ResolvedLazyTrait<'tree, Fat: FatTrait>: Debug {
+pub trait ResolvedLazyTrait<'tree, Fat: FatTrait<'tree>>: Debug {
     fn resolve(&self, ctx: &ResolveCtx<'_, 'tree>) -> &Fat;
 
     fn box_clone(&self) -> Box<DynResolvedLazy<'tree, Fat>>;
@@ -104,9 +104,12 @@ pub trait ResolvedLazyTrait<'tree, Fat: FatTrait>: Debug {
 }
 
 /// Trait implemented by the fat version of a [ResolvedLazy] ADT
-pub trait FatTrait: Debug + Clone {
+pub trait FatTrait<'tree>: Debug + Clone {
     /// Thin version which can be constructed from this
     type NormalThin: FromFat<Self>;
+
+    /// Attempt to downcast the thin type into [Self::NormalThin]
+    fn downcast_thin(thin: &DynResolveInto<'tree, Self>) -> Option<&Self::NormalThin>;
 }
 
 /// Resolved lazy value where you don't know/care about the thin version (dynamically-sized)
@@ -154,6 +157,7 @@ pub trait ResolveInto<'tree, Fat> {
     /// (e.g. logging diagnostics and going through imports is ok).
     fn resolve(&self, scope: Option<&ActiveScopePtr<'tree>>, ctx: &ResolveCtx<'_, 'tree>) -> Fat;
 }
+pub type DynResolveInto<'tree, Fat> = dyn ResolveInto<'tree, Fat> + 'tree;
 
 impl<Fat: ToThin<Thin> + ?Sized, Thin> FromFat<Fat> for Thin {
     fn from_fat(fat: &Fat) -> Self {
@@ -243,7 +247,7 @@ impl<'tree, Thin: ResolveInto<'tree, Fat>, Fat> ResolvedLazy<'tree, Thin, Fat> {
     }
 }
 
-impl<'tree, Thin: ResolveInto<'tree, Fat> + Debug + Clone + 'tree, Fat: FatTrait + 'tree> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> where Fat::NormalThin: Clone {
+impl<'tree, Thin: ResolveInto<'tree, Fat> + Debug + Clone + 'tree, Fat: FatTrait<'tree> + 'tree> ResolvedLazyTrait<Fat> for ResolvedLazy<Thin, Fat> where Fat::NormalThin: Clone {
     fn resolve(&self, ctx: &ResolveCtx<'_, 'tree>) -> &Fat {
         self.resolve(ctx)
     }
@@ -253,7 +257,7 @@ impl<'tree, Thin: ResolveInto<'tree, Fat> + Debug + Clone + 'tree, Fat: FatTrait
     }
 
     fn normalize_clone(&self, ctx: &ResolveCtx<'_, 'tree>) -> ResolvedLazy<Fat::NormalThin, Fat> {
-        match (&self.thin as &dyn Any).downcast_ref::<Fat::NormalThin>() {
+        match Fat::downcast_thin(&self.thin as &DynResolveInfo<'tree, Fat>) {
             None => ResolvedLazy::resolved(self.resolve(ctx).clone()),
             Some(thin) => ResolvedLazy {
                 scope: self.scope.clone(),
@@ -298,8 +302,12 @@ impl<'tree, Thin, Fat> ResolvedLazy<'tree, Thin, Fat> {
     }
 }
 
-impl<'tree> FatTrait for FatType<'tree> {
+impl<'tree> FatTrait<'tree> for FatType<'tree> {
     type NormalThin = ThinType<'tree>;
+
+    fn downcast_thin(thin: &DynResolveInto<'tree, Self>) -> Option<&Self::NormalThin> {
+        downcast_ref_with_lifetime!(('tree, DynResolveInto<Self> => ThinType) thin)
+    }
 }
 
 impl<'tree> ToThin<ThinType<'tree>> for FatType<'tree> {
@@ -324,8 +332,12 @@ impl<'tree> ToThin<ThinType<'tree>> for FatType<'tree> {
     }
 }
 
-impl<'tree> FatTrait for FatTypeDecl<'tree> {
+impl<'tree> FatTrait<'tree> for FatTypeDecl<'tree> {
     type NormalThin = ThinTypeDecl<'tree>;
+
+    fn downcast_thin(thin: &DynResolveInto<'tree, Self>) -> Option<&Self::NormalThin> {
+        downcast_ref_with_lifetime!(('tree, DynResolveInto<Self> => ThinTypeDecl) thin)
+    }
 }
 
 impl<'tree> ToThin<ThinTypeDecl<'tree>> for FatTypeDecl<'tree> {
@@ -355,7 +367,7 @@ impl<'tree> ToThin<ThinTypeDecl<'tree>> for FatTypeDecl<'tree> {
 }
 
 impl_by_map!(
-    <'tree, Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: ToThin<Lhs> | crate::analyses::types::TypeTrait<'tree>> FatTrait (
+    <'tree, Lhs: crate::analyses::types::TypeTraitMapsFrom<Rhs>, Rhs: ToThin<Lhs> | crate::analyses::types::TypeTrait<'tree>> FatTrait<'tree> (
         type NormalThin
     ) for IdentType, StructureType, TypeParam, OptionalType, ReturnType
 );
@@ -381,12 +393,19 @@ impl<'tree> ResolveInto<FatType<'tree>> for ThinType<'tree> {
             },
             ThinType::Nominal { ann, nullability, id } => {
                 let id = id.resolve(scope, ctx);
-                let inherited = scope.and_then(|scope| {
-                    scope.types.inherited(id.clone(), ctx).or_else(|| {
-                        error!(e, "Unresolved type: {}", id => scope.node);
-                        None
-                    })
-                }).unwrap_or_else(FatTypeInherited::empty);
+                let inherited = if ctx.idents_being_resolved.borrow_mut().insert(id.name.name) {
+                    let inherited = scope.and_then(|scope| {
+                        scope.types.inherited(id.clone(), ctx).or_else(|| {
+                            error!(e, "Unresolved type" => id);
+                            None
+                        })
+                    }).unwrap_or_else(FatTypeInherited::empty);
+                    ctx.idents_being_resolved.borrow_mut().shift_remove(&id.name);
+                    inherited
+                } else {
+                    debug!(e, "Recursive type" => id);
+                    FatTypeInherited::empty()
+                };
                 FatType::Nominal { ann: *ann, nullability: *nullability, id, inherited: Box::new(inherited) }
             }
             ThinType::IllegalVoid { ann } => {

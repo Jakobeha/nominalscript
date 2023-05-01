@@ -477,7 +477,7 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "parenthesized_expression" => {
                         let expr = node.named_child(0).unwrap();
-                        let type_ = node.field_child("nominal_type").map(|t| AstType::of_annotation(&scope, t));
+                        let type_ = node.field_child("nominal_type").map(|t| AstType::parse_annotation(&scope, t));
                         if !traversal_state.is_up() {
                             if let Some(type_) = type_ {
                                 m.typed_exprs.require(expr, type_.clone());

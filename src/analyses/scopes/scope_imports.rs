@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Display};
-use crate::analyses::bindings::{TypeIdent, TypeName, ValueIdent, ValueName};
+use crate::analyses::bindings::{TypeIdent, ValueIdent};
 use crate::analyses::scopes::Scope;
 use crate::analyses::types::{DynResolvedLazy, FatTrait, FatType, FatTypeDecl};
 use crate::ast::tree_sitter::TSNode;

@@ -14,6 +14,7 @@ mod loc;
 
 pub use thin::*;
 pub use fat::*;
+pub use generic::*;
 pub use resolve::*;
 pub use determined::*;
 pub use loc::*;
