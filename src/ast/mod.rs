@@ -5,15 +5,10 @@ use tree_sitter_nominalscript::language_nominalscript;
 use crate::ast::tree_sitter::TSParser;
 use crate::misc::NiceMutex;
 
-/// Wrapper/shim around the tree-sitter library providing misc functionality
-pub mod tree_sitter;
-/// Tree-sitter queries for NominalScript
-pub mod queries;
-/// General-purpose typed node wrapper macros, and typed node wrappers for NominalScript
-/// (???: migrate into a separate module or crate?)
-pub mod typed_nodes;
-/// Annotations: source info
+/// Annotations: source info (general)
 pub mod ann;
+/// Parse "thin" semantic nodes for NominalScript (TODO update)
+pub mod typed_nodes;
 
 lazy_static! {
     pub static ref NOMINALSCRIPT_PARSER: NiceMutex<TSParser> =
