@@ -6,8 +6,8 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign};
 
 use replace_with::replace_with_or_default;
 
-use crate::ast::ann::{Ann, HasAnn};
-use crate::ast::tree_sitter::TSNode;
+use crate::type_sitter::ann::{Ann, HasAnn};
+use crate::concrete::tree_sitter::TSNode;
 
 /// A TypeScript type (not used by nominalscript)
 #[derive(Debug, Clone, PartialEq, Eq)]

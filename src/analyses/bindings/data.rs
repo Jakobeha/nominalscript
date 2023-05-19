@@ -6,7 +6,7 @@ use derive_more::Display;
 
 use crate::analyses::bindings::{TypeIdent, ValueIdent};
 use crate::analyses::types::{DynRlType, DynRlTypeDecl};
-use crate::ast::ann::HasAnn;
+use crate::type_sitter::ann::HasAnn;
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Locality {

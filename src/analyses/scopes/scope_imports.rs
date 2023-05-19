@@ -2,8 +2,8 @@ use std::fmt::{Debug, Display};
 use crate::analyses::bindings::{TypeIdent, ValueIdent};
 use crate::analyses::scopes::Scope;
 use crate::analyses::types::{DynResolvedLazy, FatTrait, FatType, FatTypeDecl};
-use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::ImportPathAst;
+use crate::concrete::tree_sitter::TSNode;
+use crate::concrete::typed_nodes::ImportPathAst;
 use crate::impl_has_eqv_ident_struct;
 use crate::import_export::export::Exports;
 

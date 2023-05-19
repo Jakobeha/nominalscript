@@ -2,15 +2,19 @@ use lazy_static::lazy_static;
 
 use tree_sitter_nominalscript::language_nominalscript;
 
-use crate::ast::tree_sitter::TSParser;
+use crate::concrete::tree_sitter::TSParser;
 use crate::misc::NiceMutex;
+pub use package::*;
 
-/// Annotations: source info (general)
+/// Annotations = source info
 pub mod ann;
-/// Parse "thin" semantic nodes for NominalScript (TODO update)
-pub mod typed_nodes;
+/// Nominalscript syntax nodes
+pub mod nodes;
+/// Nominalscript syntax queries
+pub mod queries;
+mod package;
 
 lazy_static! {
-    pub static ref NOMINALSCRIPT_PARSER: NiceMutex<TSParser> =
+    pub static ref PARSER: NiceMutex<TSParser> =
         NiceMutex::new(TSParser::new(language_nominalscript()).expect("failed to load NominalScript parser"));
 }

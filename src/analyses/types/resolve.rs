@@ -12,7 +12,7 @@ use crate::{debug, error, issue, ProjectCtx};
 use crate::analyses::bindings::TypeNameStr;
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx, WeakScopePtr};
 use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, IdentType, InferrableThinType, Nullability, OptionalType, ReturnType, StructureType, ThinType, ThinTypeDecl, TypeParam, Variance};
-use crate::ast::ann::{Ann, HasAnn};
+use crate::type_sitter::ann::{Ann, HasAnn};
 use crate::compile::begin_transpile_file_no_cache;
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectDiagnostics, TypeLogger};
 use crate::import_export::import_ctx::{FileImportCtx, ImportError};

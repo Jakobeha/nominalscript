@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use crate::analyses::scopes::{ExprTypeMap, InactiveScopePtr};
 
 use crate::analyses::types::DeterminedReturnType;
-use crate::ast::tree_sitter::{TSCursor, TSNode};
+use crate::concrete::tree_sitter::{TSCursor, TSNode};
 
 /// The hierarchy of scopes within a file or module (including submodules)
 #[derive(Debug)]

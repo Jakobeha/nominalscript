@@ -10,7 +10,7 @@ use lazy_static::lazy_static;
 use log::{debug, error};
 use smallvec::SmallVec;
 
-use crate::ast::tree_sitter::TSRange;
+use crate::concrete::tree_sitter::TSRange;
 use crate::import_export::ModulePath;
 use crate::misc::FrozenMapIter;
 

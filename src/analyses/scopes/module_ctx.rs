@@ -1,5 +1,5 @@
 use crate::analyses::scopes::{ExprTypeMap, ModuleScopes};
-use crate::ast::tree_sitter::TSTree;
+use crate::concrete::tree_sitter::TSTree;
 
 #[derive(Debug)]
 pub struct ModuleCtx<'tree> {

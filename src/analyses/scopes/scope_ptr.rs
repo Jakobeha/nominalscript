@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 
 use crate::analyses::scopes::Scope;
-use crate::ast::tree_sitter::TSNode;
+use crate::concrete::tree_sitter::TSNode;
 
 /// Strong and (mutably) dereferencable pointer to a scope.
 ///

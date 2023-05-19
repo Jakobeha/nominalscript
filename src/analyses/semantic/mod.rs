@@ -1,8 +1,8 @@
 use once_cell::unsync::OnceCell;
 use crate::analyses::bindings::{TypeIdent, ValueIdent};
 use crate::analyses::types::{RlInferrableType, RlReturnType, RlType};
-use crate::ast::ann::Ann;
-use crate::ast::tree_sitter::TSNode;
+use crate::type_sitter::ann::Ann;
+use crate::concrete::tree_sitter::TSNode;
 use crate::{impl_has_ann_record_struct, impl_has_ann_wrapper_struct};
 use crate::analyses::scopes::{ScopeTypeImportIdx, ScopeValueImportIdx};
 use crate::import_export::export::ImportPath;

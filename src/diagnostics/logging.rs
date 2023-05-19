@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use smallvec::SmallVec;
 
 use crate::analyses::types::{ThinType, TypeLoc};
-use crate::ast::tree_sitter::TSNode;
+use crate::concrete::tree_sitter::TSNode;
 use crate::diagnostics::{FileDiagnostic, FileDiagnostics, GlobalDiagnostic, ProjectDiagnostics};
 use crate::import_export::ModulePath;
 use crate::{note, hint, issue};
@@ -311,7 +311,7 @@ mod tests {
     use tree_sitter_typescript::language_typescript;
 
     use crate::{debug, error, hint, info, issue, note, warning, hint_if, note_if, issue_if};
-    use crate::ast::tree_sitter::TSParser;
+    use crate::concrete::tree_sitter::TSParser;
     use crate::diagnostics::{ProjectDiagnostics, ProjectLogger};
     use crate::import_export::ModulePath;
 

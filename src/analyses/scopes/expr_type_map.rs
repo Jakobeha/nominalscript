@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::analyses::types::{DeterminedType, ResolveCtx};
-use crate::ast::tree_sitter::TSNode;
+use crate::concrete::tree_sitter::TSNode;
 use crate::diagnostics::FileLogger;
 
 /// Keeps track of an expression's required type (from context) and assigned type (actually inferred).

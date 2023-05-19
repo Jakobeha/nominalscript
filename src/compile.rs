@@ -11,10 +11,10 @@ use crate::analyses::bindings::{FieldName, FieldNameStr, TypeNameStr, ValueBindi
 use crate::analyses::global_bindings::GlobalTypeBinding;
 use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
 use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, StructureType, Variance};
-use crate::ast::NOMINALSCRIPT_PARSER;
-use crate::ast::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
-use crate::ast::tree_sitter::{TraversalState, TreeCreateError, TSCursor, TSNode, TSQueryCursor, TSTree};
-use crate::ast::typed_nodes::{AstCatchParameter, AstFunctionDecl, AstImportStatement, AstNode, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
+use crate::concrete::NOMINALSCRIPT_PARSER;
+use crate::concrete::queries::{EXPORT_ID, FUNCTION, IMPORT, NOMINAL_TYPE, VALUE};
+use crate::concrete::tree_sitter::{TraversalState, TreeCreateError, TSCursor, TSNode, TSQueryCursor, TSTree};
+use crate::concrete::typed_nodes::{AstCatchParameter, AstFunctionDecl, AstImportStatement, AstNode, AstParameter, AstReturn, AstReturnType, AstThrow, AstType, AstTypeDecl, AstTypeIdent, AstValueDecl, AstValueIdent};
 use crate::diagnostics::{FileDiagnostics, FileLogger, ProjectLogger, TypeLogger};
 use crate::import_export::export::{Exports, Module};
 use crate::import_export::import_ctx::ImportError;

@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::fmt::Display;
 use crate::analyses::bindings::{FieldName, TypeNameStr};
 use crate::analyses::types::{FatType, HasNullability, Nullability, ThinType, StructureType, Variance};
-use crate::ast::tree_sitter::TSNode;
+use crate::concrete::tree_sitter::TSNode;
 use crate::diagnostics::{FileLogger, TypeLogger};
 use crate::{error, issue, hint_if};
 use join_lazy_fmt::Join;

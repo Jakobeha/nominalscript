@@ -10,7 +10,7 @@ pub use data::*;
 use crate::analyses::bindings::TypeName;
 use crate::analyses::types::{FnType, HasNullability, InheritedTrait, Nullability, Optionality, OptionalType, RestArgTrait, ReturnType, StructureKind, ThinType, TypeArgTrait, IdentType, TypeParam, StructureType, TypeTrait, TypeTraitMapsFrom, Variance};
 use crate::analyses::types::generic::{FnType, HasNullability, IdentType, impl_structural_type_constructors, InheritedTrait, Nullability, OptionalType, RestArgTrait, ReturnType, StructureKind, StructureType, TypeArgTrait, TypeParam, TypeTrait, TypeTraitMapsFrom, Variance};
-use crate::ast::ann::{Ann, HasAnn};
+use crate::type_sitter::ann::{Ann, HasAnn};
 use crate::diagnostics::TypeLogger;
 use crate::misc::{once_if, rc_unwrap_or_clone};
 

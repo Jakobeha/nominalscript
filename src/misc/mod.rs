@@ -1,3 +1,5 @@
+/// Custom arena types
+pub mod arena;
 /// Iterator chain macro
 mod chain;
 /// Safely downcast types with lifetimes

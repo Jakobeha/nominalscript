@@ -6,8 +6,8 @@ use crate::analyses::bindings::{DynValueBinding, ValueName};
 use crate::analyses::global_bindings::GlobalValueBinding;
 use crate::analyses::scopes::{ActiveScopePtr, ExprTypeMap};
 use crate::analyses::types::{DynRlType, RlType};
-use crate::ast::tree_sitter::TSNode;
-use crate::ast::typed_nodes::{AstReturn, AstThrow, AstValueDecl, DynAstValueBinding};
+use crate::concrete::tree_sitter::TSNode;
+use crate::concrete::typed_nodes::{AstReturn, AstThrow, AstValueDecl, DynAstValueBinding};
 use crate::diagnostics::FileLogger;
 use crate::error;
 

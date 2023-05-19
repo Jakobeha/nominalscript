@@ -1,4 +1,4 @@
-use crate::ast::tree_sitter::{TSNode, TSRange};
+use crate::concrete::tree_sitter::{TSNode, TSRange};
 
 /// Annotation = source info
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]

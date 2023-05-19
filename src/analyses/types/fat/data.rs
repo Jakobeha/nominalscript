@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::analyses::types::{IdentType, NominalGuard, Nullability, StructureType, TypeParam, Variance};
 use crate::analyses::types::generic::{IdentType, NominalGuard, Nullability, StructureType, TypeParam, TypescriptType, Variance};
-use crate::ast::ann::Ann;
+use crate::type_sitter::ann::Ann;
 use crate::{impl_has_ann_enum, impl_has_ann_record_struct, impl_has_ann_wrapper_struct};
 use crate::analyses::bindings::TypeIdent;
 

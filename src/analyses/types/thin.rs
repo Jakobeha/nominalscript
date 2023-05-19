@@ -6,7 +6,7 @@ use replace_with::replace_with_or_default;
 use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
 use crate::analyses::bindings::TypeIdent;
 use crate::analyses::types::generic::{HasNullability, IdentType, impl_structural_type_constructors, InheritedTrait, NominalGuard, Nullability, RestArgTrait, StructureType, TypeArgTrait, TypeParam, TypescriptType, TypeTrait};
-use crate::ast::ann::Ann;
+use crate::type_sitter::ann::Ann;
 
 /// Type declaration before we've resolved the supertypes
 #[derive(Debug, Clone)]
