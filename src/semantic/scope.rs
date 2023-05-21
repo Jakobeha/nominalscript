@@ -1,51 +1,113 @@
+use std::cell::Cell;
+use std::ops::{Deref, DerefMut};
 use indexmap::{IndexMap, IndexSet};
 use type_sitter_lib::UntypedNode;
-use crate::analyses::bindings::{TypeNameStr, ValueNameStr};
-use crate::semantic::def::{TypeDef, ValueDef};
+use typed_arena_nomut::Arena;
+use crate::analyses::bindings::ValueNameStr;
+use crate::impl_has_ann_record_struct;
+use crate::misc::arena::IdentityRef;
+use crate::semantic::ann::Ann;
+use crate::semantic::def::{OwnedTypeDef, OwnedValueDef, ValueDef};
+use crate::semantic::expr::{Expr, OwnedExpr, OwnedType, Type};
+
+/// A node which could contain its own scope
+pub type ScopeNode<'tree> = UntypedNode<'tree>;
 
 /// A top-level scope
-pub struct TopLevelScope<'tree>(Scope<'tree>);
+pub struct TopLevelScope<'tree>(OwnedScope<'tree>);
 
 /// e.g. toplevel scope, class scope, function scope
-pub struct Scope<'tree> {
+pub type Scope<'tree> = IdentityRef<'tree, OwnedScope<'tree>>;
+#[derive(Debug)]
+pub struct OwnedScope<'tree> {
     /// The scope node
-    node: UntypedNode<'tree>,
+    pub ann: Ann<'tree>,
     /// The parent scope
-    parent: Option<&'tree Scope<'tree>>,
+    pub parent: Option<Scope<'tree>>,
     /// The child scopes
-    children: Vec<Scope<'tree>>,
+    children: Arena<OwnedScope<'tree>>,
     /// Value definitions
-    value_defs: ArenaSet<ValueDef<'tree>>,
+    pub value_defs: ArenaAssocVec<OwnedValueDef<'tree>>,
     /// Type definitions
-    type_defs: ArenaSet<TypeDef<'tree>>,
+    pub type_defs: ArenaAssocVec<OwnedTypeDef<'tree>>,
     /// Value expressions
-    value_uses: IndexSet<Expr<'tree>>,
-    /// Types (there are no type expressions)
-    type_uses: IndexSet<Type<'tree>>,
-    /// Values
-    values: IndexSet<Value<'tree>>,
+    pub exprs: ArenaVec<OwnedExpr<'tree>>,
     /// Types
-    types: IndexSet<Type<'tree>>,
+    pub types: ArenaVec<OwnedType<'tree>>,
     /// Scope `return` or `throw` if present
-    exit: Option<ScopeExit<'tree>>
+    exit: Cell<Option<ScopeExit<'tree>>>
 }
 
 pub enum ScopeExit<'tree> {
-    Return { expr: &'tree Expr<'tree> },
-    Throw { expr: &'tree Expr<'tree> }
+    Return { expr: Expr<'tree> },
+    Throw { expr: Expr<'tree> }
 }
 
-/// A local scope: contains all of the value bindings in a scope node
-/// (top level, module, statement block, class declaration, arrow function, etc.)
-#[derive(Debug)]
-pub struct ValueScope<'tree> {
-    defs: IndexMap<&'tree ValueNameStr, &'tree ValueDef>,
-    catch_param: OnceCell<Rc<AstCatchParameter<'tree>>>,
-    hoisted: HashMap<ValueName, Box<DynAstValueBinding<'tree>>>,
-    sequential: HashMap<ValueName, Vec<Box<AstValueDecl<'tree>>>>,
-    exported: HashMap<ValueName, ExportedId<'tree, ValueName>>,
-    return_: Option<AstReturn<'tree>>,
-    throw: Option<AstThrow<'tree>>,
+impl_has_ann_record_struct!(('tree) OwnedScope<'tree>);
+
+impl<'tree> TopLevelScope<'tree> {
+    /// Create a new, empty top-level scope
+    #[inline]
+    pub fn new(ann: Ann<'tree>) -> Self {
+        TopLevelScope(OwnedScope::new(ann, None))
+    }
+}
+
+impl<'tree> Deref for TopLevelScope<'tree> {
+    type Target = OwnedScope<'tree>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'tree> DerefMut for TopLevelScope<'tree> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<'tree> OwnedScope<'tree> {
+    /// Create a new, empty scope
+    fn new(ann: Ann<'tree>, parent: Option<Scope<'tree>>) -> Self {
+        Self {
+            ann,
+            parent,
+            children: Arena::new(),
+            value_defs: ArenaAssocVec::new(),
+            type_defs: ArenaAssocVec::new(),
+            exprs: ArenaVec::new(),
+            types: ArenaVec::new(),
+            exit: Cell::new(None),
+        }
+    }
+}
+
+impl<'tree> Scope<'tree> {
+    /// Add a child scope
+    pub fn add_child(self, ann: Ann<'tree>) -> Scope<'tree> {
+        let child = OwnedScope::new(ann, Some(self));
+        self.children.alloc(child).into()
+    }
+
+    /// Iterate child scopes
+    pub fn children(&self) -> impl Iterator<Item=Scope<'tree>> {
+        self.children.iter().map(|child| child.into())
+    }
+
+    /// Add an exit
+    pub fn add_exit(&self, exit: ScopeExit<'tree>) {
+        // TODO: assert that there is no exit yet.
+        //   If there is one, log an error and set to the earlier exit
+        self.exit.set(Some(exit))
+    }
+
+    /// Get the current exit
+    pub fn exit(&self) -> Option<ScopeExit<'tree>> {
+        self.exit.get()
+    }
 }
 
 /// A local scope: contains all of the type bindings in a scope node

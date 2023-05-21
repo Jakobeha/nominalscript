@@ -1,23 +1,31 @@
 use crate::analyses::bindings::{TypeNameStr, ValueNameStr};
 use crate::impl_has_name;
+use crate::misc::arena::IdentityRef;
+use crate::semantic::expr::{Expr, Type};
 
 /// Value declaration
-pub struct ValueDef<'tree> {
+pub type ValueDef<'tree> = IdentityRef<'tree, OwnedValueDef<'tree>>;
+/// Owned [ValueDef]
+#[derive(Debug)]
+pub struct OwnedValueDef<'tree> {
     /// Name
-    name: &'tree ValueNameStr,
+    pub name: &'tree ValueNameStr,
     /// Type
-    type_: Type<'tree>,
+    pub type_: Type<'tree>,
     /// Initial value
-    init: Option<Expr<'tree>>
+    pub init: Option<Expr<'tree>>
 }
 
 /// Type declaration
-pub struct TypeDef<'tree> {
+pub type TypeDef<'tree> = IdentityRef<'tree, OwnedTypeDef<'tree>>;
+/// Owned [TypeDef]
+#[derive(Debug)]
+pub struct OwnedTypeDef<'tree> {
     /// Name
-    name: &'tree TypeNameStr,
+    pub name: &'tree TypeNameStr,
     /// Type this is defined as
-    value: Type<'tree>
+    pub value: Type<'tree>
 }
 
-impl_has_name!(('tree) &'tree ValueNameStr for ValueDef<'tree>);
-impl_has_name!(('tree) &'tree TypeNameStr for TypeDef<'tree>);
+impl_has_name!(('tree) &'tree ValueNameStr for OwnedValueDef<'tree>);
+impl_has_name!(('tree) &'tree TypeNameStr for OwnedTypeDef<'tree>);

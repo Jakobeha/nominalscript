@@ -1,13 +1,15 @@
 use crate::semantic::def::{TypeDef, ValueDef};
 
 /// Value reference
+#[repr(transparent)]
 pub struct ValueUse<'tree> {
     /// Referenced declaration
-    decl: &'tree ValueDef<'tree>
+    def: ValueDef<'tree>
 }
 
 /// Type reference
+#[repr(transparent)]
 pub struct TypeUse<'tree> {
     /// Referenced declaration
-    decl: &'tree TypeDef<'tree>
+    def: TypeDef<'tree>
 }

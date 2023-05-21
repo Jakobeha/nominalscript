@@ -1,12 +1,27 @@
-use crate::concrete::tree_sitter::{TSNode, TSRange};
+use type_sitter_lib::tree_sitter_wrapper::{Node, Range};
 
-/// Annotation = source info
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+/// Annotation = source (syntax) info for semantic nodes
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub enum Ann<'tree> {
-    /// The annotated data came from source
-    DirectSource { loc: TSNode<'tree> },
-    /// The annotated data was inferred from source
-    InferredSource { loc: TSNode<'tree> },
+    /// The annotated semantic node came from source
+    DirectSource {
+        /// Source node it was derived from
+        loc: Node<'tree>
+    },
+    /// The annotated semantic node was inferred from source
+    InferredSource {
+        /// "Main" node it was inferred from
+        primary_loc: Node<'tree>,
+        /// Other nodes it was inferred from
+        other_locs: Vec<Node<'tree>>
+    },
+    /// The annotated semantic node is implicit
+    Implicit {
+        /// Node immediately before it
+        before_loc: Node<'tree>,
+        /// Node immediately after it
+        after_loc: Node<'tree>
+    },
     #[default]
     /// The annotated data is a global constant
     Intrinsic,
@@ -21,17 +36,41 @@ pub trait HasAnn<'tree> {
 }
 
 impl<'tree> Ann<'tree> {
-    /// Source location
-    pub fn loc(&self) -> Option<TSNode<'tree>> {
+    /// Source location(s)
+    pub fn locs(&self) -> impl Iterator<Item=Node<'tree>> {
+        let (primary_loc, other_locs) = match self {
+            Self::DirectSource { loc } => (Some(loc), None),
+            Self::InferredSource { primary_loc, other_locs } => (Some(primary_loc), Some(other_locs.iter())),
+            Self::Implicit { after_loc, .. } => (Some(after_loc), None),
+            Self::Intrinsic => (None, None),
+        };
+        primary_loc.into_iter().chain(other_locs.into_iter().flatten())
+    }
+
+    /// Primary source location
+    pub fn primary_loc(&self) -> Option<Node<'tree>> {
         match self {
-            Self::DirectSource { loc } | Self::InferredSource { loc } => Some(*loc),
+            Self::DirectSource { loc } |
+            Self::InferredSource { primary_loc: loc, .. } |
+            Self::Implicit { after_loc: loc, .. } => Some(*loc),
             Self::Intrinsic => None,
         }
     }
 
     /// Source location range
-    pub fn range(&self) -> Option<TSRange> {
-        self.loc().map(|l| l.range())
+    pub fn range(&self) -> Option<Range> {
+        match self {
+            Self::Implicit { after_loc, .. } => {
+                let after_loc_range = after_loc.range();
+                Some(Range::new(
+                    after_loc_range.start_byte(),
+                    after_loc_range.start_byte(),
+                    after_loc_range.start_point(),
+                    after_loc_range.start_point(),
+                ))
+            },
+            _ => self.locs().map(|n| n.range()).reduce(|a, b| a | b)
+        }
     }
 }
 
