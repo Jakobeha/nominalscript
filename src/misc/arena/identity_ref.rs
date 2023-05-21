@@ -25,6 +25,13 @@ impl<'a, T> Deref for IdentityRef<'a, T> {
     }
 }
 
+impl<'a, T> AsRef<T> for IdentityRef<'a, T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        self.0
+    }
+}
+
 impl<'a, T> Clone for IdentityRef<'a, T> {
     #[inline]
     fn clone(&self) -> Self {

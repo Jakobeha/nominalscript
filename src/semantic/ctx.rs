@@ -6,8 +6,6 @@ use crate::semantic::expr::{Expr, Type};
 pub struct ProjectCtx<'tree> {
     /// Expression types
     pub expr_types: ExprTypes<'tree>,
-    /// Node annotations
-    pub node_annotations: NodeAnnotations<'tree>,
     /// Logger
     pub logger: Logger<'tree>
 }

@@ -4,16 +4,14 @@ use indexmap::{IndexMap, IndexSet};
 use type_sitter_lib::UntypedNode;
 use typed_arena_nomut::Arena;
 use crate::analyses::bindings::ValueNameStr;
-use crate::impl_has_ann_record_struct;
+use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
 use crate::misc::arena::IdentityRef;
 use crate::semantic::ann::Ann;
 use crate::semantic::def::{OwnedTypeDef, OwnedValueDef, ValueDef};
 use crate::semantic::expr::{Expr, OwnedExpr, OwnedType, Type};
 
-/// A node which could contain its own scope
-pub type ScopeNode<'tree> = UntypedNode<'tree>;
-
 /// A top-level scope
+#[derive(Debug)]
 pub struct TopLevelScope<'tree>(OwnedScope<'tree>);
 
 /// e.g. toplevel scope, class scope, function scope
@@ -38,12 +36,24 @@ pub struct OwnedScope<'tree> {
     exit: Cell<Option<ScopeExit<'tree>>>
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScopeExit<'tree> {
-    Return { expr: Expr<'tree> },
-    Throw { expr: Expr<'tree> }
+    Return {
+        /// Source location
+        ann: Ann<'tree>,
+        /// Returned expression
+        expr: Expr<'tree>
+    },
+    Throw {
+        /// Source location
+        ann: Ann<'tree>,
+        /// Returned expression
+        expr: Expr<'tree>
+    }
 }
 
-impl_has_ann_record_struct!(('tree) OwnedScope<'tree>);
+impl_has_ann_record_struct!(OwnedScope);
+impl_has_ann_enum!(ScopeExit { Return, Throw });
 
 impl<'tree> TopLevelScope<'tree> {
     /// Create a new, empty top-level scope

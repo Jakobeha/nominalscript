@@ -1,4 +1,5 @@
 use type_sitter_lib::tree_sitter_wrapper::{Node, Range};
+use crate::misc::arena::IdentityRef;
 
 /// Annotation = source (syntax) info for semantic nodes
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
@@ -192,6 +193,7 @@ macro_rules! impl_has_ann_enum {
 }
 
 impl_has_ann_as_ref!(Box);
+impl_has_ann_as_ref!(IdentityRef);
 
 impl<'tree> HasAnn<'tree> for Ann<'tree> {
     fn ann(&self) -> &Ann {
