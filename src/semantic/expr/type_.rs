@@ -1,34 +1,14 @@
 use indexmap::IndexMap;
 use ouroboros::self_referencing;
+
+use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
 use crate::analyses::bindings::FieldNameStr;
 use crate::analyses::types::{Nullability, Optionality};
-use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
 use crate::misc::arena::IdentityRef;
 use crate::semantic::ann::Ann;
 use crate::semantic::def::OwnedTypeDef;
-use crate::semantic::r#use::{TypeUse, ValueUse};
+use crate::semantic::r#use::TypeUse;
 use crate::syntax::nodes;
-
-/// Value expression = either a value (identifier, builtin or structure) or operation which reduces to a value
-pub type Expr<'tree> = IdentityRef<'tree, Expr<'tree>>;
-/// Owned [Expr]
-#[derive(Debug)]
-pub enum OwnedExpr<'tree> {
-    Identifier {
-        /// Source location
-        ann: Ann<'tree>,
-        /// Identifier name and declaration referenced by this identifier, or [None] if this is a
-        /// nonexistent reference
-        r#use: Option<ValueUse<'tree>>
-    },
-    /// Misc operation, we only care about the sub-expressions
-    Misc {
-        /// Source location
-        ann: Ann<'tree>,
-        /// Immediate sub-expressions (e.g. operator arguments, or function call name and arguments)
-        children: Expr<'tree>
-    }
-}
 
 /// Type = identifier with optional generics, builtin or structural type.
 pub type Type<'tree> = IdentityRef<'tree, Type<'tree>>;
@@ -164,7 +144,6 @@ pub struct FieldType<'tree> {
     pub value: Type<'tree>
 }
 
-impl_has_ann_enum!(OwnedExpr { Identifier, Misc });
 impl_has_ann_record_struct!(OwnedType);
 impl_has_ann_record_struct!(TypeIdentifier);
 impl_has_ann_enum!(TypeStructure (Fn) { Array, Tuple, Object });

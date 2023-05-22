@@ -1,31 +1,51 @@
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
+use std::iter::{empty, once};
+use std::path::Path;
+use auto_enums::auto_enum;
 use type_sitter_lib::tree_sitter_wrapper::{Node, Range};
 use crate::misc::arena::IdentityRef;
 
-/// Annotation = source (syntax) info for semantic nodes
+/// Annotation = source (syntax) info for semantic nodes.
+///
+/// For proper memoization, *any* syntax node used to create a semantic node must be part of its
+/// annotation. When syntqx nodes are edited, we:
+///
+/// - Delete all semantic nodes annotated with deleted or changed syntax nodes
+/// - (Re)process inserted or changed syntax nodes, which will insert new data into scopes
+///   and parent expressions (including re-inserting data which was deleted because its syntax
+///   changed)
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub enum Ann<'tree> {
+    #[default]
+    /// The annotated semantic node is defined globally, so not tied to any source
+    Intrinsic,
     /// The annotated semantic node came from source
     DirectSource {
-        /// Source node it was derived from
+        /// Source syntax node it was derived from
         loc: Node<'tree>
+    },
+    /// The annotated semantic node came from the absence of source
+    ImplicitSource {
+        /// Syntax node immediately before what would be parsed into this
+        before_loc: Node<'tree>,
+        /// Syntax node immediately after what would be parsed into this
+        after_loc: Node<'tree>
     },
     /// The annotated semantic node was inferred from source
     InferredSource {
-        /// "Main" node it was inferred from
+        /// "Main" syntax node it was inferred from
         primary_loc: Node<'tree>,
-        /// Other nodes it was inferred from
-        other_locs: Vec<Node<'tree>>
+        /// Other syntax nodes it was inferred from
+        other_locs: BTreeSet<Node<'tree>>
     },
-    /// The annotated semantic node is implicit
-    Implicit {
-        /// Node immediately before it
-        before_loc: Node<'tree>,
-        /// Node immediately after it
-        after_loc: Node<'tree>
-    },
-    #[default]
-    /// The annotated data is a global constant
-    Intrinsic,
+    /// The annotated semantic node was derived from other semantic nodes with the given annotations
+    Derived {
+        /// "Main" syntax nodes of derived semantic nodes
+        primary_locs: BTreeSet<Ann<'tree>>,
+        /// Other syntax nodes of derived semantic nodes
+        other_locs: BTreeSet<Ann<'tree>>
+    }
 }
 
 /// Type with an annotation
@@ -37,31 +57,36 @@ pub trait HasAnn<'tree> {
 }
 
 impl<'tree> Ann<'tree> {
-    /// Source location(s)
+    /// Source location(s) AKA syntax nodes this semantic node was created from
+    #[auto_enum]
     pub fn locs(&self) -> impl Iterator<Item=Node<'tree>> {
-        let (primary_loc, other_locs) = match self {
-            Self::DirectSource { loc } => (Some(loc), None),
-            Self::InferredSource { primary_loc, other_locs } => (Some(primary_loc), Some(other_locs.iter())),
-            Self::Implicit { after_loc, .. } => (Some(after_loc), None),
-            Self::Intrinsic => (None, None),
-        };
-        primary_loc.into_iter().chain(other_locs.into_iter().flatten())
-    }
-
-    /// Primary source location
-    pub fn primary_loc(&self) -> Option<Node<'tree>> {
         match self {
-            Self::DirectSource { loc } |
-            Self::InferredSource { primary_loc: loc, .. } |
-            Self::Implicit { after_loc: loc, .. } => Some(*loc),
-            Self::Intrinsic => None,
+            Self::Intrinsic => empty(),
+            Self::DirectSource { loc } => once(loc),
+            Self::ImplicitSource { before_loc, after_loc } => once(before_loc).chain(once(after_loc)),
+            Self::InferredSource { primary_loc, other_locs } => once(primary_loc).chain(other_locs.iter()),
+            Self::Derived { primary_locs, other_locs } => primary_locs.iter().chain(other_locs.iter())
         }
     }
 
-    /// Source location range
-    pub fn range(&self) -> Option<Range> {
+    /// Primary source location AKA syntax node this was created from. Some nodes may be created
+    /// from multiple nodes
+    #[inline]
+    pub fn primary_loc(&self) -> Option<Node<'tree>> {
+        self.locs().next()
+    }
+
+    /// File path the semantic node was created from (path of its primary location). Very complex
+    /// derived nodes may be created from multiple paths.
+    #[inline]
+    pub fn primary_path(&self) -> Option<&'tree Path> {
+        self.primary_loc().and_then(|n| n.path())
+    }
+
+    /// Reported source location range
+    pub fn reported_range(&self) -> Option<Range> {
         match self {
-            Self::Implicit { after_loc, .. } => {
+            Self::ImplicitSource { after_loc, .. } => {
                 let after_loc_range = after_loc.range();
                 Some(Range::new(
                     after_loc_range.start_byte(),
@@ -70,20 +95,33 @@ impl<'tree> Ann<'tree> {
                     after_loc_range.start_point(),
                 ))
             },
-            _ => self.locs().map(|n| n.range()).reduce(|a, b| a | b)
+            _ => self.range()
         }
+    }
+
+    /// Source location range. The smallest range containing all source nodes, except if this node
+    /// was created multiple paths, the range only contains nodes in the primary path.
+    ///
+    /// This is used for ordering and error reporting.
+    pub fn range(&self) -> Option<Range> {
+        let primary_path = self.primary_path();
+        self.locs()
+            .filter(|n| n.path() == primary_path)
+            .map(|n| n.range())
+            .reduce(|a, b| a | b)
     }
 }
 
 impl<'tree> PartialOrd for Ann<'tree> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.range().partial_cmp(&other.range())
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 impl<'tree> Ord for Ann<'tree> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.range().cmp(&other.range())
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.primary_path().cmp(&other.primary_path())
+            .then(self.range().cmp(&other.range()))
     }
 }
 

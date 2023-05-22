@@ -10,6 +10,4 @@ pub mod def;
 pub mod r#use;
 /// Value and type expressions
 pub mod expr;
-/// Project context = expression types, node annotations, and logger
-pub mod ctx;
 mod package;

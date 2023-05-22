@@ -1,18 +1,16 @@
 use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use type_sitter_lib::UntypedNode;
 use typed_arena_nomut::Arena;
-use crate::analyses::bindings::ValueNameStr;
 use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
 use crate::misc::arena::IdentityRef;
 use crate::semantic::ann::Ann;
-use crate::semantic::def::{OwnedTypeDef, OwnedValueDef, ValueDef};
-use crate::semantic::expr::{Expr, OwnedExpr, OwnedType, Type};
+use crate::semantic::def::{OwnedTypeDef, OwnedValueDef};
+use crate::semantic::expr::{Expr, OwnedExpr, OwnedType};
+pub use toplevel::*;
 
-/// A top-level scope
-#[derive(Debug)]
-pub struct TopLevelScope<'tree>(OwnedScope<'tree>);
+mod toplevel;
 
 /// e.g. toplevel scope, class scope, function scope
 pub type Scope<'tree> = IdentityRef<'tree, OwnedScope<'tree>>;
@@ -54,30 +52,6 @@ pub enum ScopeExit<'tree> {
 
 impl_has_ann_record_struct!(OwnedScope);
 impl_has_ann_enum!(ScopeExit { Return, Throw });
-
-impl<'tree> TopLevelScope<'tree> {
-    /// Create a new, empty top-level scope
-    #[inline]
-    pub fn new(ann: Ann<'tree>) -> Self {
-        TopLevelScope(OwnedScope::new(ann, None))
-    }
-}
-
-impl<'tree> Deref for TopLevelScope<'tree> {
-    type Target = OwnedScope<'tree>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'tree> DerefMut for TopLevelScope<'tree> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 
 impl<'tree> OwnedScope<'tree> {
     /// Create a new, empty scope
