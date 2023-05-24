@@ -1,5 +1,3 @@
-/// Custom arena types
-pub mod arena;
 /// Iterator chain macro
 mod chain;
 /// Safely downcast types with lifetimes
@@ -29,6 +27,8 @@ mod rc_unwrap_or_clone;
 mod ref_iterator;
 /// Filter an error in an empty result, e.g. to remove "already exists" I/O errors
 mod result_filter_err;
+/// Get either value of a result where both branches are the same
+mod result_either;
 /// `Vec::extend_no_dup`
 mod vec_extend_no_dup;
 /// `Vec::find_remove`
@@ -55,6 +55,7 @@ pub(crate) use once_cell_with_option::OnceCellExt;
 pub(crate) use rc_unwrap_or_clone::rc_unwrap_or_clone;
 pub(crate) use ref_iterator::RefIterator;
 pub(crate) use result_filter_err::ResultFilterErr;
+pub(crate) use result_either::result_either;
 pub(crate) use vec_extend_no_dup::VecExtendNoDup;
 pub(crate) use vec_find_remove::VecFilter;
 pub(crate) use utf8_error_offset_by::Utf8ErrorOffsetBy;

@@ -600,6 +600,7 @@ dependencies = [
  "roaring",
  "self_cell",
  "serde_json",
+ "slice-group-by",
  "smallvec",
  "smol_str",
  "stable_deref_trait",

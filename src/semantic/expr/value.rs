@@ -80,13 +80,11 @@ impl<'tree, 'a, T: HasExprType<'tree>> HasExprType<'tree> for IdentityRef<'a, T>
 
 impl<'tree> ExprType<'tree> {
     /// The type this expression **is**
-    #[inline]
     pub fn assigned(&self) -> Option<Type<'tree>> {
         self.assigned.get()
     }
 
     /// The type this expression **must be assigned at compile-time** or there is a type error
-    #[inline]
     pub fn required(&self) -> Option<Type<'tree>> {
         self.required.get().filter(|_, c| match c {
             CheckTypeAt::CompileTime => true,
@@ -99,7 +97,6 @@ impl<'tree> ExprType<'tree> {
     /// means there are no valid assignments), and if `assigned` is not a subtype of `required`,
     /// the compiler will insert a runtime guard to check instances are instances of `required` at
     /// runtime.
-    #[inline]
     pub fn runtime_required(&self) -> Option<Type<'tree>> {
         self.required.get().filter(|_, c| match c {
             CheckTypeAt::CompileTime => false,
@@ -109,7 +106,6 @@ impl<'tree> ExprType<'tree> {
 
     /// Set the type this expression **is**. If already assigned, logs an error and assigns to the
     /// type intersection.
-    #[inline]
     pub fn assign(&self, type_: Type<'tree>) {
         self.assigned.set(Some(match self.assigned.get() {
             None => type_,
@@ -122,7 +118,6 @@ impl<'tree> ExprType<'tree> {
 
     /// Set the type this expression **must be assigned at compile-time**. If already required, logs
     /// an error and requires the type intersection. If runtime-required, **panics**.
-    #[inline]
     pub fn require(&self, type_: Type<'tree>) {
         self.required.set(Some((match self.required.get() {
             None => type_,
@@ -139,7 +134,6 @@ impl<'tree> ExprType<'tree> {
     /// Set the type this expression **must be an instance of at runtime**. If already runtime-
     /// required, logs an error and runtime-requires the type intersection. If compile-time
     /// required, **panics**.
-    #[inline]
     pub fn runtime_require(&self, type_: Type<'tree>) {
         self.required.set(Some((match self.required.get() {
             None => type_,

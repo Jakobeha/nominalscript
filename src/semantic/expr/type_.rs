@@ -69,7 +69,7 @@ pub struct FnType<'tree> {
     /// Source location
     pub ann: Ann<'tree>,
     /// Type parameters
-    pub type_parameters: ArenaAssocVec<OwnedTypeDef<'tree>>,
+    pub type_parameters: AssocArena<OwnedTypeDef<'tree>>,
     /// This parameter type
     #[borrows(type_parameters)]
     #[covariant]

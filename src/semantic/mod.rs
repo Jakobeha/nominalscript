@@ -11,3 +11,5 @@ pub mod r#use;
 /// Value and type expressions
 pub mod expr;
 mod package;
+/// Custom arena types
+pub mod arena;
