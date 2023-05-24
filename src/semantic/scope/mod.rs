@@ -4,12 +4,12 @@ use indexmap::IndexMap;
 use type_sitter_lib::UntypedNode;
 use typed_arena_nomut::Arena;
 use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
-use crate::misc::arena::{AssocArena, IdentityRef, IndexArena};
 use crate::semantic::ann::Ann;
 use crate::semantic::def::{OwnedTypeDef, OwnedValueDef};
 use crate::semantic::expr::{Expr, OwnedExpr, OwnedType};
 pub use toplevel::*;
 use crate::analyses::bindings::{TypeNameStr, ValueNameStr};
+use crate::semantic::arena::{AnnArena, IdentityRef, NameArena};
 
 mod toplevel;
 
@@ -24,13 +24,13 @@ pub struct OwnedScope<'tree> {
     /// The child scopes
     children: Arena<OwnedScope<'tree>>,
     /// Value definitions
-    pub value_defs: AssocArena<&'tree ValueNameStr, OwnedValueDef<'tree>>,
+    pub value_defs: NameArena<'tree, OwnedValueDef<'tree>>,
     /// Type definitions
-    pub type_defs: AssocArena<&'tree TypeNameStr, OwnedTypeDef<'tree>>,
+    pub type_defs: NameArena<'tree, OwnedTypeDef<'tree>>,
     /// Value expressions
-    pub exprs: IndexArena<OwnedExpr<'tree>>,
+    pub exprs: AnnArena<'tree, OwnedExpr<'tree>>,
     /// Types
-    pub types: IndexArena<OwnedType<'tree>>,
+    pub types: AnnArena<'tree, OwnedType<'tree>>,
     /// Scope `return` or `throw` if present
     exit: Cell<Option<ScopeExit<'tree>>>
 }
@@ -61,10 +61,10 @@ impl<'tree> OwnedScope<'tree> {
             ann,
             parent,
             children: Arena::new(),
-            value_defs: AssocArena::new(),
-            type_defs: AssocArena::new(),
-            exprs: IndexArena::new(),
-            types: IndexArena::new(),
+            value_defs: NameArena::new(),
+            type_defs: NameArena::new(),
+            exprs: AnnArena::new(),
+            types: AnnArena::new(),
             exit: Cell::new(None),
         }
     }

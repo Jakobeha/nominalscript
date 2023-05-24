@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use crate::impl_has_ann_enum;
-use crate::misc::arena::IdentityRef;
 use crate::semantic::ann::Ann;
+use crate::semantic::arena::IdentityRef;
 use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
 

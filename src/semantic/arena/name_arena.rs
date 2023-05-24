@@ -2,8 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::misc::arena::HasKey;
-use crate::misc::arena::index::IndexArena;
 use crate::semantic::ann::Ann;
 use crate::semantic::arena::{AnnArena, HasName, NameRemover};
 

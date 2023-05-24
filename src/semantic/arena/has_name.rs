@@ -15,7 +15,7 @@ impl$(<$($a),*>)? HasName for $Ty {
     type Name = $Name;
 
     fn name(&self) -> &Self::Name {
-        &self.name
+        &self.ident.name
     }
 }
     }

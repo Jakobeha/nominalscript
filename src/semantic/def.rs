@@ -1,8 +1,9 @@
 use crate::analyses::bindings::{TypeNameStr, ValueNameStr};
 use crate::{impl_has_ann_record_struct, impl_has_name};
-use crate::misc::arena::IdentityRef;
 use crate::semantic::ann::Ann;
+use crate::semantic::arena::{IdentityRef, impl_has_name};
 use crate::semantic::expr::{Expr, Type};
+use crate::semantic::name::{TypeIdent, ValueIdent};
 
 /// Value declaration
 pub type ValueDef<'tree> = IdentityRef<'tree, OwnedValueDef<'tree>>;
@@ -11,8 +12,8 @@ pub type ValueDef<'tree> = IdentityRef<'tree, OwnedValueDef<'tree>>;
 pub struct OwnedValueDef<'tree> {
     /// Source location
     pub ann: Ann<'tree>,
-    /// Name
-    pub name: &'tree ValueNameStr,
+    /// Identifier
+    pub ident: ValueIdent<'tree>,
     /// Type
     pub type_: Type<'tree>,
     /// Initial value
@@ -26,8 +27,8 @@ pub type TypeDef<'tree> = IdentityRef<'tree, OwnedTypeDef<'tree>>;
 pub struct OwnedTypeDef<'tree> {
     /// Source location
     pub ann: Ann<'tree>,
-    /// Name
-    pub name: &'tree TypeNameStr,
+    /// Identifier
+    pub ident: TypeIdent<'tree>,
     /// Type this is defined as
     pub value: Type<'tree>
 }

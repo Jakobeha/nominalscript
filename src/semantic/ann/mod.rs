@@ -10,8 +10,8 @@ use type_sitter_lib::tree_sitter_wrapper::{Node, Range};
 
 pub use point::*;
 
-use crate::misc::arena::IdentityRef;
 use crate::misc::define_wrapper_structs;
+use crate::semantic::arena::IdentityRef;
 
 mod point;
 
