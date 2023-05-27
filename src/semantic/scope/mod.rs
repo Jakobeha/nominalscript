@@ -13,6 +13,13 @@ use crate::semantic::arena::{AnnArena, IdentityRef, NameArena};
 
 mod toplevel;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopePhase {
+    Definitions,
+    Expressions,
+    Done
+}
+
 /// e.g. toplevel scope, class scope, function scope
 pub type Scope<'tree> = IdentityRef<'tree, OwnedScope<'tree>>;
 #[derive(Debug)]
@@ -20,17 +27,20 @@ pub struct OwnedScope<'tree> {
     /// The scope node
     pub ann: Ann<'tree>,
     /// The parent scope
-    pub parent: Option<Scope<'tree>>,
+    parent: Option<Scope<'tree>>,
+    /// The scope's phase. Certain methods are only permitted in certain phases, and will **panic**
+    /// otherwise
+    phase: Cell<ScopePhase>,
     /// The child scopes
     children: Arena<OwnedScope<'tree>>,
     /// Value definitions
-    pub value_defs: NameArena<'tree, OwnedValueDef<'tree>>,
+    value_defs: NameArena<'tree, OwnedValueDef<'tree>>,
     /// Type definitions
-    pub type_defs: NameArena<'tree, OwnedTypeDef<'tree>>,
+    type_defs: NameArena<'tree, OwnedTypeDef<'tree>>,
     /// Value expressions
-    pub exprs: AnnArena<'tree, OwnedExpr<'tree>>,
+    exprs: AnnArena<'tree, OwnedExpr<'tree>>,
     /// Types
-    pub types: AnnArena<'tree, OwnedType<'tree>>,
+    types: AnnArena<'tree, OwnedType<'tree>>,
     /// Scope `return` or `throw` if present
     exit: Cell<Option<ScopeExit<'tree>>>
 }
@@ -60,6 +70,7 @@ impl<'tree> OwnedScope<'tree> {
         Self {
             ann,
             parent,
+            phase: Cell::new(ScopePhase::Definitions),
             children: Arena::new(),
             value_defs: NameArena::new(),
             type_defs: NameArena::new(),
@@ -71,19 +82,30 @@ impl<'tree> OwnedScope<'tree> {
 }
 
 impl<'tree> Scope<'tree> {
+    /// Get the scope's current phase
+    pub fn phase(&self) -> ScopePhase {
+        self.phase.get()
+    }
+
     /// Add a child scope
-    pub fn add_child(self, ann: Ann<'tree>) -> Scope<'tree> {
+    pub fn add_child(&self, ann: Ann<'tree>) -> Scope<'tree> {
+        assert_eq!(self.phase(), ScopePhase::Definitions, "Scope::add_child can only be called in the Definitions phase");
         let child = OwnedScope::new(ann, Some(self));
         self.children.alloc(child).into()
     }
 
     /// Iterate child scopes
     pub fn children(&self) -> impl Iterator<Item=Scope<'tree>> {
+        assert!(
+            matches!(self.phase(), ScopePhase::Expressions || ScopePhase::Done),
+            "Scope::children can only be called in the Expressions or Done phases"
+        );
         self.children.iter().map(|child| child.into())
     }
 
     /// Add an exit
     pub fn add_exit(&self, exit: ScopeExit<'tree>) {
+        assert_eq!(self.phase(), ScopePhase::Expressions, "Scope::add_exit can only be called in the Expressions phase");
         // TODO: assert that there is no exit yet.
         //   If there is one, log an error and set to the earlier exit
         self.exit.set(Some(exit))
