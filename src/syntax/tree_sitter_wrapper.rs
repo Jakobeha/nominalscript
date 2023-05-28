@@ -1,8 +1,10 @@
-pub struct Custom {
+use roaring::RoaringTreemap;
+use yak_sitter::define_custom_wrapper;
+use crate::diagnostics::{FileDiagnostics, FileLogger};
 
+pub struct TreeCustom {
+    deleted_nodes: RoaringTreemap,
+    diagnostics: FileDiagnostics
 }
 
-// TODO: Create macro in type_sitter_lib::tree_sitter_wrapper to make this a lot easier
-pub type Tree = type_sitter_lib::tree_sitter_wrapper::Tree<Custom>;
-pub type Node<'tree> = type_sitter_lib::tree_sitter_wrapper::Node<'tree, Custom>;
-pub type TreeCursor<'tree> = type_sitter_lib::tree_sitter_wrapper::TreeCursor<'tree, Custom>;
+define_custom_wrapper!(TreeCustom);

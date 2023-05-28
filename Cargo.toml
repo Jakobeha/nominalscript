@@ -13,7 +13,8 @@ homepage = "https://github.com/Jakobeha/nominalscript"
 [dependencies]
 tree-sitter-nominalscript = { path = "vendor/tree-sitter-nominalscript" }
 streaming-iterator = "0.1.9"
-type-sitter-lib = { path = "../type-sitter/type-sitter-lib", version = "0.2.0" }
+type-sitter-lib = { path = "../type-sitter/type-sitter-lib", version = "0.3.0" }
+yak-sitter = { path = "../type-sitter/yak-sitter", version = "0.3.0" }
 tree-sitter = "0.20.10"
 thiserror = "1.0.38"
 auto_enums = "0.8.0"
@@ -46,6 +47,5 @@ typed-arena-nomut = "0.1.0"
 slice-group-by = "0.3.1"
 
 [dev-dependencies]
-type-sitter-cli = { path = "../type-sitter/type-sitter-cli", version = "0.2.1" }
 tree-sitter-typescript = "0.20.2"
 test-log = "0.2.11"

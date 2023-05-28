@@ -1,38 +1,85 @@
-use std::cell::RefCell;
-use std::collections::{btree_set, BTreeSet};
+use std::cell::{Ref, RefCell};
+use std::collections::{BTreeMap, HashSet};
 use std::env::VarError;
 use std::fmt::{Debug, Display, Formatter};
+use std::mem::take;
+use std::path::{Path, PathBuf};
 
-use derive_more::Display;
-use join_lazy_fmt::Join;
-use elsa::FrozenMap;
 use lazy_static::lazy_static;
-use log::{debug, error};
+use nonempty::NonEmpty;
 use smallvec::SmallVec;
+use streaming_iterator::StreamingIterator;
+use typed_arena_nomut::Arena;
+use yak_sitter::Range;
 
 use crate::concrete::tree_sitter::TSRange;
-use crate::import_export::ModulePath;
-use crate::misc::FrozenMapIter;
+use crate::misc::DisplayWithCtx;
+use crate::semantic::arena::AnnArenaPhase;
 
-pub struct ProjectDiagnostics {
-    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
-    /// duplicates
-    print_globals_immediately: bool,
-    global: RefCell<BTreeSet<GlobalDiagnostic>>,
-    by_file: FrozenMap<ModulePath, Box<FileDiagnostics>>,
+/// Diagnostic logging phases, map 1-1 with [AnnArenaPhase].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticsPhase {
+    /// Insert new diagnostics, and prints if `print_immediately` is set. Maps to [AnnArenaPhase::Insertion]
+    Recording,
+    /// Print collected diagnostics, unless `print_immediately` is set. Maps to [AnnArenaPhase::Retrieval]
+    Retrieval,
+    /// Remove diagnostics for nodes which have been removed. Maps to [AnnArenaPhase::Removal]
+    Removal
 }
 
+
+/// Diagnostics which don't belong to any particular file, but the package itself
+#[derive(Debug, Clone)]
+pub struct PackageDiagnostics {
+    /// If set, diagnostics are printed immediately after being recorded. Useful for debugging
+    ///
+    /// We still store all diagnostics because we allow loggers to make duplicates
+    pub print_immediately: bool,
+    /// Phase
+    phase: DiagnosticsPhase,
+    /// The diagnostics
+    diagnostics: Arena<PackageDiagnostic>,
+    /// Diagnostics already recorded
+    already_recorded: RefCell<HashSet<*const PackageDiagnostic>>,
+}
+
+/// Diagnostics for a source file
 #[derive(Debug)]
 pub struct FileDiagnostics {
-    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
-    /// duplicates
-    print_locals_immediately: bool,
-    path: ModulePath,
-    diagnostics: RefCell<BTreeSet<FileDiagnostic>>
+    /// If set, diagnostics are printed immediately after being recorded. Useful for debugging
+    ///
+    /// We still store all diagnostics because we allow loggers to make duplicates
+    pub print_immediately: bool,
+    /// File's path
+    path: PathBuf,
+    state: FileDiagnosticsState
+}
+
+#[derive(Default)]
+enum FileDiagnosticsState {
+    Recording {
+        diagnostics: Arena<FileDiagnostic>,
+        /// Diagnostics already recorded
+        already_recorded: RefCell<HashSet<*const FileDiagnostic>>,
+    },
+    Retrieval {
+        /// The diagnostics, in order of their ranges
+        ordered_diagnostics: Vec<FileDiagnostic>,
+    },
+    Removal {
+        /// The diagnostics, in order of their ranges, with `None` for removed ones
+        diagnostics: Vec<Option<FileDiagnostic>>,
+        /// Map of byte offsets to indices.
+        ///
+        /// At each offset, indices of diagnostics containing any points until the next entry's offset
+        indices_at_point: BTreeMap<usize, NonEmpty<usize>>
+    },
+    #[default]
+    Broken
 }
 
 #[derive(Debug, Clone)]
-pub struct GlobalDiagnostic {
+pub struct PackageDiagnostic {
     pub level: DiagnosticLevel,
     pub message: String,
     pub additional_info: SmallVec<[AdditionalInfo; 4]>
@@ -40,21 +87,17 @@ pub struct GlobalDiagnostic {
 
 #[derive(Debug, Clone)]
 pub struct FileDiagnostic {
+    pub location: Range,
     pub level: DiagnosticLevel,
     pub message: String,
     pub additional_info: SmallVec<[AdditionalInfo; 4]>,
-    pub location: TSRange
 }
 
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DiagnosticLevel {
-    #[display(fmt = "error")]
     Error,
-    #[display(fmt = "warning")]
     Warning,
-    #[display(fmt = "info")]
     Info,
-    #[display(fmt = "debug")]
     Debug
 }
 
@@ -66,149 +109,293 @@ pub enum LoggerLevel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdditionalInfo {
+    pub location: Option<Range>,
     pub type_: AdditionalInfoType,
     pub message: String,
-    pub location: Option<TSRange>
 }
 
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AdditionalInfoType {
-    #[display(fmt = "issue")]
     Issue,
-    #[display(fmt = "hint")]
     Hint,
-    #[display(fmt = "note")]
     Note,
 }
 
 macro_rules! impl_count_level_shorthands {
     () => {
+    /// Count how many "error" diagnostics were recorded
     pub fn count_errors(&self) -> usize {
         self.count_level(DiagnosticLevel::Error)
     }
 
+    /// Count how many "warning" diagnostics were recorded
     pub fn count_warnings(&self) -> usize {
         self.count_level(DiagnosticLevel::Warning)
     }
 
+    /// Count how many "info" diagnostics were recorded
     pub fn count_infos(&self) -> usize {
         self.count_level(DiagnosticLevel::Info)
     }
 
+    /// Count how many "debug" diagnostics were recorded
     pub fn count_debugs(&self) -> usize {
         self.count_level(DiagnosticLevel::Debug)
     }
     }
 }
 
-impl ProjectDiagnostics {
+impl PackageDiagnostics {
+    /// Create a instance with no diagnostics in the [DiagnosticsPhase::Recording] phase
     pub fn new(print_immediately: bool) -> Self {
         Self {
-            print_globals_immediately: print_immediately,
-            global: RefCell::new(BTreeSet::new()),
-            by_file: FrozenMap::new(),
+            print_immediately,
+            phase: DiagnosticsPhase::Recording,
+            diagnostics: Arena::new(),
+            already_recorded: RefCell::new(HashSet::new()),
         }
     }
 
-    pub fn file(&self, path: &ModulePath) -> &FileDiagnostics {
-        if let Some(file) = self.by_file.get(path) {
-            return file
+    /// Record diagnostic, logging if `print_immediately` is set
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Recording] phase
+    pub fn insert(&self, diagnostic: PackageDiagnostic) {
+        self.assert_phase("insert", DiagnosticsPhase::Recording);
+        if let Some(already_recorded) = self.get_already_recorded(&diagnostic) {
+            log::debug!("Redundant diagnostic:\n1.  {}\n2.  {}", already_recorded, diagnostic);
+            return;
         }
-        let print_immediately = self.print_globals_immediately;
-        self.by_file.insert(path.clone(), Box::new(FileDiagnostics::new(path.clone(), print_immediately)))
-    }
-
-    pub fn insert_global(&self, diagnostic: GlobalDiagnostic) {
-        let mut global = self.global.borrow_mut();
-        if let Some(existing) = global.get(&diagnostic) {
-            debug!("Duplicate diagnostic was replaced: {}", existing);
-        }
-        if self.print_globals_immediately && RUST_LOG.logs(diagnostic.level) {
-            eprintln!("{}", diagnostic);
-        }
-        global.insert(diagnostic);
-    }
-
-    /// Iterator requires an owned reference because we allow insertion behind shared references
-    pub fn iter_global(&mut self) -> impl Iterator<Item=&GlobalDiagnostic> {
-        self.global.get_mut().iter()
-    }
-
-    /// Prints diagnostics immediately. We still have to store them because we allow loggers to make
-    /// duplicates
-    pub fn set_print_immediately(&mut self, print_immediately: bool) {
-        self.print_globals_immediately = print_immediately;
-        for file in self.by_file.as_mut().values_mut() {
-            file.print_locals_immediately = print_immediately;
+        let diagnostic = self.do_insert(diagnostic);
+        if self.print_immediately && RUST_LOG.logs(diagnostic.level) {
+            diagnostic.log_to_rust();
         }
     }
 
+    /// Iterate diagnostics in the order they were inserted.
+    /// 
+    /// **Panics** if not in the [DiagnosticsPhase::Retrieval] phase
+    pub fn iter(&self) -> typed_arena_nomut::Iter<'_, PackageDiagnostic> {
+        self.assert_phase("iterate", DiagnosticsPhase::Retrieval);
+        self.diagnostics.iter()
+    }
+    
+    /// Count how many diagnostics of a certain level there are.
     pub fn count_level(&self, level: DiagnosticLevel) -> usize {
-        self.global.borrow().iter().filter(|d| d.level == level).count() +
-            FrozenMapIter::new(&self.by_file).map(|(_, fds)| fds.count_level(level)).sum::<usize>()
+        self.assert_phase("count", DiagnosticsPhase::Retrieval);
+        self.diagnostics.iter().filter(|d| d.level == level).count()
     }
 
     impl_count_level_shorthands!();
+
+    /// Remove all diagnostics.
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Removal] phase
+    pub fn clear(&mut self) {
+        self.assert_phase("clear", DiagnosticsPhase::Removal);
+        *self.diagnostics = Arena::new();
+        self.already_recorded.borrow_mut().clear();
+    }
+
+    /// Transition from [DiagnosticsPhase::Recording] to [DiagnosticsPhase::Retrieval]
+    pub fn finish_recording(&mut self) {
+        self.assert_phase("finish recording", DiagnosticsPhase::Recording);
+        self.phase = DiagnosticsPhase::Retrieval;
+    }
+
+    /// Transition from [DiagnosticsPhase::Retrieval] to [DiagnosticsPhase::Removal]
+    pub fn finish_retrieval(&mut self) {
+        self.assert_phase("finish retrieval", DiagnosticsPhase::Retrieval);
+        self.phase = DiagnosticsPhase::Removal;
+    }
+
+    /// Transition from [DiagnosticsPhase::Removal] to [DiagnosticsPhase::Recording]
+    pub fn finish_removal(&mut self) {
+        self.assert_phase("finish removal", DiagnosticsPhase::Removal);
+        self.phase = DiagnosticsPhase::Recording;
+    }
+
+    fn assert_phase(&self, verb: &'static str, phase: DiagnosticsPhase) {
+        assert_eq!(self.phase, phase, "Can only {} diagnostics in the {:?} phase", verb, phase);
+    }
+
+    fn get_already_recorded(&self, diagnostic: &PackageDiagnostic) -> Option<Ref<'_, PackageDiagnostic>> {
+        Ref::filter_map(self.already_recorded.borrow(), |a| {
+            // SAFETY: Raw pointer points to element in arena
+            a.get(&(diagnostic as *const _)).map(|&d| unsafe { &*d })
+        }).ok()
+    }
+
+    fn do_insert(&self, diagnostic: PackageDiagnostic) -> &PackageDiagnostic {
+        let diagnostic = self.diagnostics.alloc(diagnostic);
+        self.already_recorded.borrow_mut().insert(diagnostic as *const _);
+        diagnostic
+    }
+}
+
+impl<'a> IntoIterator for &'a PackageDiagnostics {
+    type Item = &'a PackageDiagnostic;
+    type IntoIter = typed_arena_nomut::Iter<'a, PackageDiagnostic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 impl FileDiagnostics {
-    pub fn new(path: ModulePath, print_immediately: bool) -> Self {
+    pub fn new(path: PathBuf, print_immediately: bool) -> Self {
         Self {
             path,
-            print_locals_immediately: print_immediately,
-            diagnostics: RefCell::new(BTreeSet::new()),
+            print_immediately,
+            state: FileDiagnosticsState::Recording {
+                diagnostics: Arena::new(),
+                already_recorded: RefCell::new(HashSet::new()),
+            },
         }
     }
 
+    /// Record diagnostic, logging if `print_immediately` is set
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Recording] phase
     pub fn insert(&self, diagnostic: FileDiagnostic) {
-        let mut diagnostics = self.diagnostics.borrow_mut();
-        if let Some(existing) = diagnostics.get(&diagnostic) {
-            debug!("Duplicate diagnostic was replaced: {}", existing);
+        let FileDiagnosticsState::Recording { diagnostics, already_recorded } = &self.state else {
+            panic!("Can only insert diagnostics in the Recording phase")
+        };
+        if let Some(already_recorded) = Self::get_already_recorded(already_recorded, &diagnostic) {
+            log::debug!("Redundant diagnostic:\n1.  {}\n2.  {}", already_recorded.with_ctx(&self.path), diagnostic.with_ctx(&self.path));
+            return;
         }
-        if self.print_locals_immediately && RUST_LOG.logs(diagnostic.level) {
-            eprintln!("{}:{}", self.path.path().display(), diagnostic);
+        let diagnostic = Self::do_insert(diagnostics, already_recorded, diagnostic);
+        if self.print_immediately && RUST_LOG.logs(diagnostic.level) {
+            diagnostic.log_to_rust();
         }
-        diagnostics.insert(diagnostic);
     }
 
-    /// Iterator requires an owned reference because we allow insertion behind shared references
-    pub fn iter(&mut self) -> impl Iterator<Item=&FileDiagnostic> {
-        self.diagnostics.get_mut().iter()
+    /// Iterate diagnostics in order of their ranges.
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Retrieval] phase
+    pub fn iter(&self) -> std::slice::Iter<'_, FileDiagnostic> {
+        let FileDiagnosticsState::Retrieval { ordered_diagnostics } = &self.state else {
+            panic!("Can only iterate diagnostics in the Retrieval phase")
+        };
+        ordered_diagnostics.iter()
     }
 
+    /// Count how many diagnostics of a certain level there are.
     pub fn count_level(&self, level: DiagnosticLevel) -> usize {
-        self.diagnostics.borrow().iter().filter(|d| d.level == level).count()
+        let FileDiagnosticsState::Retrieval { ordered_diagnostics } = &self.state else {
+            panic!("Can only count diagnostics in the Retrieval phase")
+        };
+        ordered_diagnostics.iter().filter(|d| d.level == level).count()
     }
 
     impl_count_level_shorthands!();
 
+    /// Remove all diagnostics within a specified byte range
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Removal] phase
+    pub fn remove_in_byte_range(&mut self, range: std::ops::Range<usize>) {
+        let FileDiagnosticsState::Removal { diagnostics, indices_at_point } = &mut self.state else {
+            panic!("Can only remove diagnostics in the Removal phase")
+        };
+        // Same code as in [AnnArena] to remove diagnostics in a range
+        let before_range_start = indices_at_point.range(..range.start).next_back().into_iter();
+        let in_range = indices_at_point.range(range);
+        let all_indices = before_range_start.chain(in_range).flat_map(|(_, indices)| indices).copied();
+        for index in all_indices {
+            // We don't want to remove from the vec because that has bad time complexity.
+            // Instead we save all "removing" for when we construct the arena.
+            diagnostics[index] = None
+        }
+    }
+
+    /// Remove all diagnostics.
+    ///
+    /// **Panics** if not in the [DiagnosticsPhase::Removal] phase
+    pub fn clear(&mut self) {
+        let FileDiagnosticsState::Removal { diagnostics, indices_at_point } = &mut self.state else {
+            panic!("Can only clear diagnostics in the Removal phase")
+        };
+        diagnostics.clear();
+        indices_at_point.clear();
+    }
+
+    /// Transition from [DiagnosticsPhase::Recording] to [DiagnosticsPhase::Retrieval]
+    pub fn finish_recording(&mut self) {
+        let FileDiagnosticsState::Recording { diagnostics, .. } = take(&mut self.state) else {
+            panic!("Can only finish recording diagnostics in the Recording phase")
+        };
+
+        // Sort diagnostics by range
+        let mut ordered_diagnostics = diagnostics.into_vec();
+        ordered_diagnostics.sort_by_key(|d| d.range);
+        self.state = FileDiagnosticsState::Retrieval { ordered_diagnostics }
+    }
+
+    /// Transition from [DiagnosticsPhase::Retrieval] to [DiagnosticsPhase::Removal]
+    pub fn finish_retrieval(&mut self) {
+        let FileDiagnosticsState::Retrieval { ordered_diagnostics } = take(&mut self.state) else {
+            panic!("Can only finish retrieval diagnostics in the Retrieval phase")
+        };
+        // TODO: The logic in [AnnArena]
+        ordered_diagnostics;
+    }
+
+    /// Transition from [DiagnosticsPhase::Removal] to [DiagnosticsPhase::Recording]
+    pub fn finish_removal(&mut self) {
+        let FileDiagnosticsState::Removal { diagnostics: diagnostics2, .. } = take(&mut self.state) else {
+            panic!("Can only finish removal diagnostics in the Removal phase")
+        };
+
+        // Reconstruct arena
+        let diagnostics = Arena::new();
+        let diagnostics2 = diagnostics.alloc_extend(diagnostics2.into_iter().filter_map(|d| d));
+        let already_recorded = RefCell::new(diagnostics2.map(|d| d as *const _).collect::<HashSet<_>>());
+        self.state = FileDiagnosticsState::Recording { diagnostics, already_recorded }
+    }
+
+    fn assert_phase(&self, verb: &'static str, phase: DiagnosticsPhase) {
+        assert_eq!(self.phase, phase, "Can only {} diagnostics in the {:?} phase", verb, phase);
+    }
+
+    fn get_already_recorded(already_recorded: &RefCell<HashSet<*const FileDiagnostic>>, diagnostic: &FileDiagnostic) -> Option<Ref<'_, FileDiagnostic>> {
+        Ref::filter_map(already_recorded.borrow(), |a| {
+            // SAFETY: Raw pointer points to element in arena
+            a.get(&(diagnostic as *const _)).map(|&d| unsafe { &*d })
+        }).ok()
+    }
+
+    fn do_insert<'a>(diagnostics: &'a Arena<FileDiagnostic>, already_recorded: &'a RefCell<HashSet<*const FileDiagnostic>>, diagnostic: FileDiagnostic) -> &'a FileDiagnostic {
+        let diagnostic = diagnostics.alloc(diagnostic);
+        already_recorded.borrow_mut().insert(diagnostic as *const _);
+        diagnostic
+    }
 }
 
 impl<'a> IntoIterator for &'a mut FileDiagnostics {
     type Item = &'a FileDiagnostic;
-    type IntoIter = btree_set::Iter<'a, FileDiagnostic>;
+    type IntoIter = std::slice::Iter<'a, FileDiagnostic>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.diagnostics.get_mut().iter()
+        self.iter()
     }
 }
 
-impl FileDiagnostic {
-    pub fn from_global(global: GlobalDiagnostic, location: TSRange) -> Self {
-        Self {
-            level: global.level,
-            message: global.message,
-            additional_info: global.additional_info,
-            location
-        }
-    }
-
+impl PackageDiagnostic {
     pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo>) {
         self.additional_info.extend(info);
     }
 }
 
-impl GlobalDiagnostic {
+impl FileDiagnostic {
+    pub fn from_package(package: PackageDiagnostic, location: TSRange) -> Self {
+        Self {
+            level: package.level,
+            message: package.message,
+            additional_info: package.additional_info,
+            location
+        }
+    }
+
     pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo>) {
         self.additional_info.extend(info);
     }
@@ -251,11 +438,11 @@ impl LoggerLevel {
             Ok(level) => {
                 match Self::VALID_RUST_LOG_VALUES.iter().find(|(str, _)| level.as_str() == *str) {
                     None => {
-                        error!(
-                        "Invalid RUST_LOG value: {}.\nValid ones are: [{}]",
-                        level,
-                        ", ".join(Self::VALID_RUST_LOG_VALUES.iter().map(|(str, _)| str))
-                    );
+                        log::error!(
+                            "Invalid RUST_LOG value: {}.\nValid ones are: [{}]",
+                            level,
+                            ", ".join(Self::VALID_RUST_LOG_VALUES.iter().map(|(str, _)| str))
+                        );
                         LoggerLevel::default()
                     }
                     Some((_, level)) => *level
@@ -263,7 +450,7 @@ impl LoggerLevel {
             },
             Err(VarError::NotPresent) => LoggerLevel::default(),
             Err(VarError::NotUnicode(str)) => {
-                error!("Invalid RUST_LOG value: not unicode ({})", str.to_string_lossy());
+                log::error!("Invalid RUST_LOG value: not unicode ({})", str.to_string_lossy());
                 LoggerLevel::default()
             }
         }
@@ -277,24 +464,27 @@ impl Default for LoggerLevel {
 }
 
 // region display
-impl Display for ProjectDiagnostics {
+impl Display for PackageDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let global_borrow = self.global.borrow();
-        for diagnostic in &*global_borrow {
+        self.assert_phase("display", DiagnosticsPhase::Retrieval);
+        for diagnostic in self.diagnostics.iter() {
             writeln!(f, "{}", diagnostic)?;
-        }
-        for (_, diagnostics) in FrozenMapIter::new(&self.by_file) {
-            let diagnostics_borrow = diagnostics.diagnostics.borrow();
-            for diagnostic in &*diagnostics_borrow {
-                write!(f, "{}:", diagnostics.path.path().display())?;
-                writeln!(f, "{}", diagnostic)?;
-            }
         }
         Ok(())
     }
 }
 
-impl Display for GlobalDiagnostic {
+impl Display for FileDiagnostics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.assert_phase("display", DiagnosticsPhase::Retrieval);
+        for diagnostic in self.diagnostics.iter() {
+            writeln!(f, "{}", diagnostic.with_ctx(&self.path))?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for PackageDiagnostic {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.level, self.message)?;
         for info in &self.additional_info {
@@ -304,9 +494,9 @@ impl Display for GlobalDiagnostic {
     }
 }
 
-impl Display for FileDiagnostic {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}: {}", self.location, self.level, self.message)?;
+impl DisplayWithCtx<Path> for FileDiagnostic {
+    fn fmt(&self, f: &mut Formatter<'_>, path: &Path) -> std::fmt::Result {
+        write!(f, "{} @ {}:{}: {}", self.level, path.display(), self.location, self.message)?;
         for info in &self.additional_info {
             write!(f, "\n  {}", info)?;
         }
@@ -324,25 +514,46 @@ impl Display for AdditionalInfo {
         Ok(())
     }
 }
+
+impl Display for DiagnosticLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DiagnosticLevel::Error => write!(f, "error"),
+            DiagnosticLevel::Warning => write!(f, "warning"),
+            DiagnosticLevel::Info => write!(f, "info"),
+            DiagnosticLevel::Debug => write!(f, "debug"),
+        }
+    }
+}
+
+impl Display for AdditionalInfoType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdditionalInfoType::Issue => write!(f, "issue"),
+            AdditionalInfoType::Hint => write!(f, "hint"),
+            AdditionalInfoType::Note => write!(f, "note"),
+        }
+    }
+}
 // endregion
 
 // region eq ord
-impl PartialEq<GlobalDiagnostic> for GlobalDiagnostic {
+impl PartialEq<PackageDiagnostic> for PackageDiagnostic {
     fn eq(&self, other: &Self) -> bool {
         self.level == other.level
             && self.message == other.message
     }
 }
 
-impl Eq for GlobalDiagnostic {}
+impl Eq for PackageDiagnostic {}
 
-impl PartialOrd<GlobalDiagnostic> for GlobalDiagnostic {
+impl PartialOrd<PackageDiagnostic> for PackageDiagnostic {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for GlobalDiagnostic {
+impl Ord for PackageDiagnostic {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.level.cmp(&other.level)
             .then(self.message.cmp(&other.message))
@@ -373,12 +584,3 @@ impl Ord for FileDiagnostic {
     }
 }
 // endregion
-
-impl Debug for ProjectDiagnostics {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProjectDiagnostics")
-            .field("global", &self.global)
-            .field("by_file", &"...")
-            .finish()
-    }
-}

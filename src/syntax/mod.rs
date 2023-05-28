@@ -12,7 +12,7 @@ pub mod nodes;
 pub mod queries;
 mod package;
 /// tree-sitter-wrapper for types nodes, with custom `Tree` data
-mod tree_sitter_wrapper;
+pub mod tree_sitter_wrapper;
 
 lazy_static! {
     pub static ref PARSER: NiceMutex<TSParser> =
