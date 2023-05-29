@@ -6,7 +6,7 @@ use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
 
 /// Value expression = either a value (identifier, builtin or structure) or operation which reduces to a value
-pub type Expr<'tree> = IdentityRef<'tree, Expr<'tree>>;
+pub type Expr<'tree> = IdentityRef<'tree, OwnedExpr<'tree>>;
 /// Owned [Expr]
 #[derive(Debug)]
 pub enum OwnedExpr<'tree> {

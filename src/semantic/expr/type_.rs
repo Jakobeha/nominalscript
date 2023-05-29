@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 use ouroboros::self_referencing;
 
 use crate::{impl_has_ann_enum, impl_has_ann_record_struct};
-use crate::analyses::bindings::FieldNameStr;
+use crate::analyses::bindings::FieldName;
 use crate::analyses::types::{Nullability, Optionality};
 use crate::misc::ByEqv;
 use crate::semantic::ann::Ann;
@@ -13,7 +13,7 @@ use crate::semantic::r#use::TypeUse;
 use crate::syntax::nodes;
 
 /// Type = identifier with optional generics, builtin or structural type.
-pub type Type<'tree> = IdentityRef<'tree, Type<'tree>>;
+pub type Type<'tree> = IdentityRef<'tree, OwnedType<'tree>>;
 /// Owned [Type]
 #[derive(Debug)]
 pub struct OwnedType<'tree> {

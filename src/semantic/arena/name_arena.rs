@@ -5,10 +5,9 @@ use std::mem::MaybeUninit;
 use std::ops::RangeBounds;
 
 use once_cell::unsync::OnceCell;
-use type_sitter_lib::tree_sitter_wrapper::Node;
+use yak_sitter::Node;
 
 use crate::{error, issue};
-use crate::diagnostics::ProjectLogger;
 use crate::semantic::ann::Point;
 use crate::semantic::arena::{AnnArena, AnnArenaPhase, HasName};
 
@@ -35,6 +34,14 @@ impl<'tree, T: HasName<'tree>> NameArena<'tree, T> {
         }
     }
 
+    /// Create an empty [NameArena] in the [AnnArenaPhase::Unset] phase.
+    pub fn new_unset() -> Self {
+        NameArena {
+            base: AnnArena::new_unset(),
+            by_name: OnceCell::new()
+        }
+    }
+
     /// Get the current phase. **Panics** if in the [AnnArenaPhase::Broken] phase.
     #[inline]
     pub fn phase(&self) -> AnnArenaPhase {
@@ -55,7 +62,7 @@ impl<'tree, T: HasName<'tree>> NameArena<'tree, T> {
     /// Converts from [AnnArenaPhase::Insertion] to [AnnArenaPhase::Retrieval].
     ///
     /// **Panics** if not in the [AnnArenaPhase::Insertion] phase.
-    pub fn conv_retrieval(&self, e: &ProjectLogger<'_>) {
+    pub fn conv_retrieval(&self) {
         self.base.conv_retrieval();
         // Create the map of elements by name
         let mut by_name = self.base.iter()
@@ -72,13 +79,13 @@ impl<'tree, T: HasName<'tree>> NameArena<'tree, T> {
                 // Comparing indices is faster
                 match index.cmp(&other_index) {
                     Ordering::Less => {
-                        error!(e, "Name already defined: `{}`", name => other;
-                            issue!("First defined here" => elem));
+                        error!("Name already defined: `{}`" @ other, name;
+                            issue!("First defined here" @ elem));
                     },
                     Ordering::Equal => {},
                     Ordering::Greater => {
-                        error!(e, "Name already defined: `{}`", name => elem;
-                            issue!("First defined here" => other));
+                        error!("Name already defined: `{}`" @ elem, name;
+                            issue!("First defined here" @ other));
                     }
                 }
             }
@@ -101,14 +108,12 @@ impl<'tree, T: HasName<'tree>> NameArena<'tree, T> {
 
     /// Converts from [AnnArenaPhase::Removal] to [AnnArenaPhase::Insertion].
     ///
-    /// **Panics** if not in the [AnnArenaPhase::Removal] phase.
+    /// **Panics** if not in the [AnnArenaPhase::Removal] or [AnnArenaPhase::Unset] phase.
     pub fn conv_insertion(&mut self) {
         self.base.conv_insertion();
         // Unset by_name
         // ???: like with ann_arena, preserve names we already know so we don't have to recompute?
-        let Some(_) = self.by_name.take() else {
-            unreachable!("base conv_insertion worked, so this should be in removal phase and therefore by_name should be set")
-        };
+        //    (by_name will only be set if we're in the `Removal` and not `Unset` phase)
     }
     // endregion
 

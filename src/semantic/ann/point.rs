@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use type_sitter_lib::tree_sitter_wrapper::Node;
+use yak_sitter::Node;
 
 /// Annotation span vertex or range endpoint = file-path and byte offset.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

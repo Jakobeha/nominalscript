@@ -1005,6 +1005,7 @@ dependencies = [
  "once_cell",
  "streaming-iterator",
  "tree-sitter",
+ "yak-sitter",
 ]
 
 [[package]]

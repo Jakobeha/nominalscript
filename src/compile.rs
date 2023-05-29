@@ -7,7 +7,7 @@ use std::rc::Rc;
 use derive_more::{Display, Error, From};
 
 use crate::{debug, error, issue};
-use crate::analyses::bindings::{FieldName, FieldNameStr, TypeNameStr, ValueBinding, ValueNameStr};
+use crate::analyses::bindings::{FieldName, FieldName, TypeName, ValueBinding, ValueName};
 use crate::analyses::global_bindings::GlobalTypeBinding;
 use crate::analyses::scopes::{ActiveScopeRef, ModuleCtx, ScopeChain};
 use crate::analyses::types::{DeterminedReturnType, DeterminedType, FatType, Field, HasNullability, Nullability, OptionalType, ResolveCtx, RlReturnType, RlType, StructureType, Variance};
@@ -223,7 +223,7 @@ pub(crate) fn finish_transpile<'tree>(
                             false => None,
                             true => {
                                 let name_node = node.field_child("name").unwrap();
-                                let name = ValueNameStr::of(name_node.text());
+                                let name = ValueName::of(name_node.text());
                                 scopes.hoisted_in_top_scope(name).map(|x| x.down_to_fn_decl().expect("hoisted declaration isn't a function (TODO handle, probably just return None here)"))
                             }
                         };
@@ -333,7 +333,7 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "variable_declarator" => {
                         let name_node = node.field_child("name").unwrap();
-                        let name = ValueNameStr::of(name_node.text());
+                        let name = ValueName::of(name_node.text());
                         let decl = scopes.at_exact_pos(name, node).expect("decl should have been added at this variable declarator's position");
                         if !traversal_state.is_up() {
                             if let (Some(value), Some(type_)) = (decl.value, decl.type_.as_ref()) {
@@ -420,7 +420,7 @@ pub(crate) fn finish_transpile<'tree>(
                         if traversal_state.is_up() {
                             let object = node.named_child(0).unwrap();
                             let field_name_node = node.field_child("property").unwrap();
-                            let field_name = FieldNameStr::of(field_name_node.text());
+                            let field_name = FieldName::of(field_name_node.text());
                             let is_nullable_access = node.child_of_kind("optional_chain", &mut c).is_some();
                             let object_type_det = m.typed_exprs.get(object);
                             if let Some(object_type_det) = object_type_det {
@@ -494,7 +494,7 @@ pub(crate) fn finish_transpile<'tree>(
                     "identifier" |
                     "shorthand_property_identifier" => {
                         skip_children = true;
-                        let ident = ValueNameStr::of(node.text());
+                        let ident = ValueName::of(node.text());
                         let def = scopes.at_pos(ident, node);
                         let Some(def) = def else {
                             error!(e, "Unresolved identifier: {}", ident => node);
@@ -505,11 +505,11 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "true" => {
                         skip_children = true;
-                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("True")).expect("builtin True type should exist").type_det());
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeName::of("True")).expect("builtin True type should exist").type_det());
                     }
                     "false" => {
                         skip_children = true;
-                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("False")).expect("builtin False type should exist").type_det());
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeName::of("False")).expect("builtin False type should exist").type_det());
                     }
                     "null" => {
                         skip_children = true;
@@ -517,16 +517,16 @@ pub(crate) fn finish_transpile<'tree>(
                     }
                     "number" => {
                         skip_children = true;
-                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of_number_literal(node.text())).expect("builtin number literal type should exist").type_det());
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeName::of_number_literal(node.text())).expect("builtin number literal type should exist").type_det());
                     }
                     "string" |
                     "template_string" => {
                         skip_children = true;
-                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("String")).expect("builtin String type should exist").type_det());
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeName::of("String")).expect("builtin String type should exist").type_det());
                     }
                     "regex" => {
                         skip_children = true;
-                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeNameStr::of("Regex")).expect("builtin Regex type should exist").type_det());
+                        m.typed_exprs.assign(node, GlobalTypeBinding::get(TypeName::of("Regex")).expect("builtin Regex type should exist").type_det());
                     }
                     "object" => {
                         if traversal_state.is_up() {
@@ -561,7 +561,7 @@ pub(crate) fn finish_transpile<'tree>(
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
+                                                type_override = Some(GlobalTypeBinding::get(TypeName::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {
@@ -620,7 +620,7 @@ pub(crate) fn finish_transpile<'tree>(
                                         }
                                         match spread_type {
                                             FatType::Any => {
-                                                type_override = Some(GlobalTypeBinding::get(TypeNameStr::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
+                                                type_override = Some(GlobalTypeBinding::get(TypeName::of("Array")).expect("builtin Array type should exist").decl.resolve(ctx).clone().into_type());
                                                 break
                                             }
                                             FatType::Never { nullability } => {

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use auto_enums::auto_enum;
 use streaming_iterator::StreamingIterator;
-use type_sitter_lib::tree_sitter_wrapper::{Node, Range};
+use yak_sitter::{Node, Range};
 
 pub use point::*;
 
@@ -59,6 +59,30 @@ pub trait HasAnn<'tree>: Debug {
     fn ann(&self) -> &Ann<'tree>;
     /// Annotation (mutable reference)
     fn ann_mut(&mut self) -> &mut Ann<'tree>;
+
+    /// Compare values' annotations
+    #[inline]
+    fn cmp_ann(&self, other: &Self) -> Ordering {
+        self.ann().cmp(other.ann())
+    }
+
+    /// Does this value come after the other?
+    #[inline]
+    fn gt_ann(&self, other: &Self) -> bool {
+        self.cmp_ann(other) == Ordering::Greater
+    }
+
+    /// Does this value come before the other?
+    #[inline]
+    fn lt_ann(&self, other: &Self) -> bool {
+        self.cmp_ann(other) == Ordering::Less
+    }
+
+    /// Do this value and the other have the same annotation? (Means they should be the same)
+    #[inline]
+    fn eq_ann(&self, other: &Self) -> bool {
+        self.cmp_ann(other) == Ordering::Equal
+    }
 }
 
 impl<'tree> Ann<'tree> {
@@ -142,17 +166,34 @@ impl<'tree> Ord for Ann<'tree> {
 }
 
 #[macro_export]
+macro_rules! impl_has_ann_as_ref_body {
+    ($tree:lifetime) => {
+        #[inline]
+        fn ann(&self) -> &$crate::semantic::ann::Ann<$tree> {
+            self.as_ref().ann()
+        }
+        #[inline]
+        fn ann_mut(&mut self) -> &mut $crate::semantic::ann::Ann<$tree> {
+            self.as_mut().ann_mut()
+        }
+    }
+}
+
+#[macro_export]
 macro_rules! impl_has_ann_as_ref {
+    ($Name:ident<$a:lifetime, $T:ident>) => {
+        impl<$a, 'tree, $T: $crate::semantic::ann::HasAnn<'tree>> $crate::semantic::ann::HasAnn<'tree> for $Name<$a, $T> {
+            $crate::impl_has_ann_as_ref_body!('tree);
+        }
+    };
+    ($Name:ident<$T:ident>) => {
+        impl<'tree, $T: $crate::semantic::ann::HasAnn<'tree>> $crate::semantic::ann::HasAnn<'tree> for $Name<$T> {
+            $crate::impl_has_ann_as_ref_body!('tree);
+        }
+    };
     ($Name:ident) => {
-        impl<'tree, T: $crate::ast::ann::HasAnn<'tree>> $crate::ast::ann::HasAnn<'tree> for $Name<T> {
-            #[inline]
-            fn ann(&self) -> &$crate::ast::ann::Ann<'tree> {
-                self.as_ref().ann()
-            }
-            #[inline]
-            fn ann_mut(&mut self) -> &mut $crate::ast::ann::Ann<'tree> {
-                self.as_mut().ann_mut()
-            }
+        impl<'tree> $crate::semantic::ann::HasAnn<'tree> for $Name {
+            $crate::impl_has_ann_as_ref_body!('tree);
         }
     };
 }
@@ -160,25 +201,25 @@ macro_rules! impl_has_ann_as_ref {
 #[macro_export]
 macro_rules! impl_has_ann_wrapper_struct {
     ($Name:ident) => {
-        impl<'tree> $crate::ast::ann::HasAnn<'tree> for $Name<'tree> {
+        impl<'tree> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree> {
             #[inline]
-            fn ann(&self) -> &$crate::ast::ann::Ann<'tree> {
+            fn ann(&self) -> &$crate::semantic::ann::Ann<'tree> {
                 self.0.ann()
             }
             #[inline]
-            fn ann_mut(&mut self) -> &mut $crate::ast::ann::Ann<'tree> {
+            fn ann_mut(&mut self) -> &mut $crate::semantic::ann::Ann<'tree> {
                 self.0.ann_mut()
             }
         }
     };
     ($Name:ident by $field:ident) => {
-        impl<'tree> $crate::ast::ann::HasAnn<'tree> for $Name<'tree> {
+        impl<'tree> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree> {
             #[inline]
-            fn ann(&self) -> &$crate::ast::ann::Ann<'tree> {
+            fn ann(&self) -> &$crate::semantic::ann::Ann<'tree> {
                 self.$field.ann()
             }
             #[inline]
-            fn ann_mut(&mut self) -> &mut $crate::ast::ann::Ann<'tree> {
+            fn ann_mut(&mut self) -> &mut $crate::semantic::ann::Ann<'tree> {
                 self.$field.ann_mut()
             }
         }
@@ -188,11 +229,11 @@ macro_rules! impl_has_ann_wrapper_struct {
 macro_rules! impl_has_ann_record_struct_body {
     ($tree:lifetime) => {
         #[inline]
-        fn ann(&self) -> &$crate::ast::ann::Ann<$tree> {
+        fn ann(&self) -> &$crate::semantic::ann::Ann<$tree> {
             &self.ann
         }
         #[inline]
-        fn ann_mut(&mut self) -> &mut $crate::ast::ann::Ann<$tree> {
+        fn ann_mut(&mut self) -> &mut $crate::semantic::ann::Ann<$tree> {
             &self.ann
         }
     }
@@ -201,17 +242,17 @@ macro_rules! impl_has_ann_record_struct_body {
 #[macro_export]
 macro_rules! impl_has_ann_record_struct {
     ($Name:ident) => {
-        impl<'tree> $crate::ast::ann::HasAnn<'tree> for $Name<'tree> {
+        impl<'tree> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree> {
             $crate::impl_has_ann_record_struct_body!('tree);
         }
     };
     ($Name:ident<$T:ident>) => {
-        impl<'tree, $T> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
+        impl<'tree, $T> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree, $T> {
             $crate::impl_has_ann_record_struct_body!('tree);
         }
     };
     ($Name:ident<$T:ident: $Bound:ident>) => {
-        impl<'tree, $T: $Bound<'tree>> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
+        impl<'tree, $T: $Bound<'tree>> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree, $T> {
             $crate::impl_has_ann_record_struct_body!('tree);
         }
     };
@@ -221,14 +262,14 @@ macro_rules! impl_has_ann_record_struct {
 macro_rules! impl_has_ann_enum_body {
     ($tree:lifetime $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
         #[inline]
-        fn ann(&self) -> &$crate::ast::ann::Ann<$tree> {
+        fn ann(&self) -> &$crate::semantic::ann::Ann<$tree> {
             match self {
                 $($(Self::$StructCase(x) => x.ann(),)*)?
                 $($(Self::$RecordCase { ann, .. } => ann,)*)?
             }
         }
         #[inline]
-        fn ann_mut(&mut self) -> &mut $crate::ast::ann::Ann<$tree> {
+        fn ann_mut(&mut self) -> &mut $crate::semantic::ann::Ann<$tree> {
             match self {
                 $($(Self::$StructCase(x) => x.ann_mut(),)*)?
                 $($(Self::$RecordCase { ann, .. } => ann,)*)?
@@ -240,24 +281,24 @@ macro_rules! impl_has_ann_enum_body {
 #[macro_export]
 macro_rules! impl_has_ann_enum {
     ($Name:ident $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
-        impl<'tree> $crate::ast::ann::HasAnn<'tree> for $Name<'tree> {
+        impl<'tree> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree> {
             $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
     ($Name:ident<$T:ident> $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
-        impl<'tree, $T> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
+        impl<'tree, $T> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree, $T> {
             $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
     ($Name:ident<$T:ident: $Bound:ident> $(($($StructCase:ident),*))? $({ $($RecordCase:ident),* })?) => {
-        impl<'tree, $T: $Bound<'tree>> $crate::ast::ann::HasAnn<'tree> for $Name<'tree, $T> {
+        impl<'tree, $T: $Bound<'tree>> $crate::semantic::ann::HasAnn<'tree> for $Name<'tree, $T> {
             $crate::impl_has_ann_enum_body!('tree $(($($StructCase),*))? $({ $($RecordCase),* })?);
         }
     };
 }
 
-impl_has_ann_as_ref!(Box);
-impl_has_ann_as_ref!(IdentityRef);
+impl_has_ann_as_ref!(Box<T>);
+impl_has_ann_as_ref!(IdentityRef<'a, T>);
 
 impl<'tree> HasAnn<'tree> for Ann<'tree> {
     #[inline]

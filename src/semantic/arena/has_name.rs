@@ -10,9 +10,17 @@ pub trait HasName<'tree>: HasAnn<'tree> {
     fn name(&self) -> &'tree Self::Name;
 }
 
+impl<'a, 'tree, T: HasName<'tree>> HasName<'tree> for IdentityRef<'a, T> {
+    type Name = T::Name;
+
+    fn name(&self) -> &'tree Self::Name {
+        self.as_ref().name()
+    }
+}
+
 macro_rules! impl_has_name {
     ($(($($a:lifetime),*))? $Name:ty for $Ty:ty) => {
-impl$(<$($a),*>)? HasName for $Ty {
+impl$(<$($a),*>)? $crate::semantic::arena::HasName for $Ty {
     type Name = $Name;
 
     fn name(&self) -> &Self::Name {
@@ -23,3 +31,4 @@ impl$(<$($a),*>)? HasName for $Ty {
 }
 pub(crate) use impl_has_name;
 use crate::semantic::ann::HasAnn;
+use crate::semantic::arena::IdentityRef;

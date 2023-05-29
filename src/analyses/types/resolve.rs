@@ -9,7 +9,7 @@ use indexmap::IndexSet;
 use once_cell::unsync::OnceCell;
 
 use crate::{debug, error, issue, ProjectCtx};
-use crate::analyses::bindings::TypeNameStr;
+use crate::analyses::bindings::TypeName;
 use crate::analyses::scopes::{ActiveScopePtr, InactiveScopePtr, ScopeImportAlias, ScopeImportIdx, ScopeTypeImportIdx, ScopeValueImportIdx, WeakScopePtr};
 use crate::analyses::types::{FatType, FatTypeArg, FatTypeDecl, FatTypeInherited, IdentType, InferrableThinType, Nullability, OptionalType, ReturnType, StructureType, ThinType, ThinTypeDecl, TypeParam, Variance};
 use crate::type_sitter::ann::{Ann, HasAnn};
@@ -82,7 +82,7 @@ pub struct ResolvedLazy<'tree, Thin, Fat> {
 /// but also [ProjectDiagnostics] because we need to.
 /// [FileImportCtx] has a reference to [ProjectImportCtx] so that one is covered.
 pub struct ResolveCtx<'a, 'tree> {
-    idents_being_resolved: RefCell<IndexSet<&'tree TypeNameStr>>,
+    idents_being_resolved: RefCell<IndexSet<&'tree TypeName>>,
     imports: FileImportCtx<'a>,
     diagnostics: &'a FileDiagnostics,
     project_diagnostics: &'a ProjectDiagnostics,

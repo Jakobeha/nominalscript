@@ -1,12 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::mem::MaybeUninit;
+use std::mem::{MaybeUninit, take};
 use std::ops::{Bound, RangeBounds};
 
 use once_cell::unsync::OnceCell;
-use replace_with::replace_with;
 use slice_group_by::GroupBy;
-use type_sitter_lib::tree_sitter_wrapper::Node;
+use yak_sitter::Node;
 use typed_arena_nomut::Arena;
 
 use crate::misc::VecFilter;
@@ -33,8 +32,12 @@ pub struct AnnArena<'tree, T: HasAnn<'tree>> {
 }
 
 /// The phase an [AnnArena] is in (see [AnnArena] docs)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnnArenaPhase {
+    /// State which is only for empty [AnnArenaPhase], only happens when creating via
+    /// [AnnArena::new_unset] or there is a caught panic during phase transition.
+    #[default]
+    Unset,
     /// Functions as an [Arena](https://docs.rs/typed-arena/latest/typed_arena/) where you can only
     /// insert semantic nodes (and can do so behind a shared reference)
     Insertion,
@@ -47,7 +50,12 @@ pub enum AnnArenaPhase {
 }
 
 /// [AnnArena] underlying repr and state data, which indirectly identifies its phase
+#[derive(Default)]
 enum AnnArenaState<'tree, T: HasAnn<'tree>> {
+    /// Only happens when creating via [AnnArena::new_unset] or there is a caught panic during phase
+    /// transition.
+    #[default]
+    Unset,
     Shared {
         /// Storage for elements
         arena: Arena<T>,
@@ -62,9 +70,6 @@ enum AnnArenaState<'tree, T: HasAnn<'tree>> {
         /// Indices of elements containing each point and the points until the next entry
         indices_at_point: BTreeMap<Point<'tree>, Vec<usize>>,
     },
-    /// Only happens if there is a caught panic when changing into the [AnnArenaPhase::Removal]
-    /// phase. The [AnnArena] stores nothing and can no longer be used.
-    Broken
 }
 
 /// [AnnArena] underlying state for retrieval data (a cache)
@@ -81,9 +86,9 @@ struct AnnArenaRetrievalData<'tree, T: HasAnn<'tree>> {
 }
 
 impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
-    /// Create an empty [AnnArena] in the [AnnArenaPhase::Insertion].
+    /// Create an empty [AnnArena] in the [AnnArenaPhase::Insertion] phase.
     pub fn new() -> Self {
-        AnnArena {
+        Self {
             state: AnnArenaState::Shared {
                 arena: Arena::new(),
                 retrieval_data: OnceCell::new(),
@@ -91,25 +96,29 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
         }
     }
 
-    /// Get the current phase. **Panics** if in the [AnnArenaPhase::Broken] phase.
+    /// Create an empty [AnnArena] in the [AnnArenaPhase::Unset] phase.
+    pub fn new_unset() -> Self {
+        Self {
+            state: AnnArenaState::Unset,
+        }
+    }
+
+    /// Get the current phase
     pub fn phase(&self) -> AnnArenaPhase {
         match &self.state {
+            AnnArenaState::Unset => AnnArenaPhase::Unset,
             AnnArenaState::Shared { retrieval_data, .. } => match retrieval_data.get() {
                 None => AnnArenaPhase::Insertion,
                 Some(_) => AnnArenaPhase::Retrieval,
             },
             AnnArenaState::Removal { .. } => AnnArenaPhase::Removal,
-            AnnArenaState::Broken => panic!("AnnArena::phase: called in broken phase"),
         }
     }
 
-    /// Returns whether [AnnArena] is in the "broken" phase, which only happens if there's a caught
-    /// panic when changing into the [AnnArenaPhase::Removal] phase.
-    ///
-    /// The "broken" phase isn't part of [AnnArenaPhase], because most users won't care about it and
-    /// will simply want to panic if it happens.
-    pub fn is_broken(&self) -> bool {
-        matches!(self.state, AnnArenaState::Broken)
+    /// Returns whether [AnnArena] is in the "unset" phase, which only happens when creating via
+    /// [AnnArena::new_unset] or if there's a caught panic when changing phases.
+    pub fn is_unset(&self) -> bool {
+        matches!(self.state, AnnArenaState::Unset)
     }
 
     // region insertion/retrieval/removal conversions
@@ -118,7 +127,7 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
     /// **Panics** if not in the [AnnArenaPhase::Insertion] phase.
     pub fn conv_retrieval(&self) {
         let AnnArenaState::Shared { arena, retrieval_data } = &self.state else {
-            panic!("AnnArena::conv_retrieval: called in removal or broken phase");
+            panic!("AnnArena::conv_retrieval: called in removal or unset phase");
         };
         let Ok(()) = retrieval_data.set(Self::mk_retrieval_data(arena)) else {
             panic!("AnnArena::conv_retrieval: called in retrieval phase")
@@ -220,15 +229,14 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
     ///
     /// **Panics** if not in the [AnnArenaPhase::Retrieval] phase.
     pub fn conv_removal(&mut self) {
-        replace_with(&mut self.state, AnnArenaState::Broken, |state| {
-            let AnnArenaState::Shared { retrieval_data, arena } = state else {
-                panic!("AnnArena::conv_removal: called in removal or broken phase");
-            };
-            let Some(retrieval_data) = retrieval_data.into_inner() else {
-                panic!("AnnArena::conv_removal: called in insertion phase");
-            };
-            Self::mk_removal_data(arena, retrieval_data)
-        })
+        let state = take(&mut self.state);
+        let AnnArenaState::Shared { retrieval_data, arena } = state else {
+            panic!("AnnArena::conv_removal: called in removal or unset phase");
+        };
+        let Some(retrieval_data) = retrieval_data.into_inner() else {
+            panic!("AnnArena::conv_removal: called in insertion phase");
+        };
+        self.state = Self::mk_removal_data(arena, retrieval_data)
     }
 
     #[inline]
@@ -244,20 +252,44 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
         AnnArenaState::Removal { ordered_elems, indices_at_point }
     }
 
+    /// Converts from [AnnArenaPhase::Removal] or [AnnArenaPhase::Unset] to
+    /// [AnnArenaPhase::Insertion].
+    ///
+    /// **Panics** if not in the [AnnArenaPhase::Removal] or [AnnArena::Unset] phase.
+    pub fn conv_insertion(&mut self) {
+        match self.phase() {
+            AnnArenaPhase::Unset => self.conv_insertion_from_unset(),
+            AnnArenaPhase::Removal => self.conv_insertion_from_removal(),
+            _ => panic!("AnnArena::conv_insertion: called in insertion or retrieval phase"),
+        }
+    }
+
+    /// Converts from [AnnArenaPhase::Unset] to [AnnArenaPhase::Insertion].
+    ///
+    /// **Panics** if not in the [AnnArenaPhase::Unset] phase.
+    pub fn conv_insertion_from_unset(&mut self) {
+        let AnnArenaState::Unset = &self.state else {
+            panic!("AnnArena::conv_insertion_from_unset: called in insertion, retrieval, or removal phase");
+        };
+        self.state = AnnArenaState::Shared {
+            arena: Arena::new(),
+            retrieval_data: OnceCell::new()
+        }
+    }
+
     /// Converts from [AnnArenaPhase::Removal] to [AnnArenaPhase::Insertion].
     ///
     /// **Panics** if not in the [AnnArenaPhase::Removal] phase.
-    pub fn conv_insertion(&mut self) {
-        replace_with(&mut self.state, AnnArenaState::Broken, |state| {
-            // ???: preserve indices_at_point so we don't have to regenerate when converting back
-            //     into retrieval? If it's too expensive, we should try to find a way
-            let AnnArenaState::Removal { ordered_elems, indices_at_point: _ } = state else {
-                panic!("AnnArena::conv_insertion: called in insertion, retrieval, or broken phase");
-            };
-            let mut arena = Arena::new();
-            arena.alloc_extend(ordered_elems.into_iter().filter_map(|elem| elem));
-            AnnArenaState::Shared { arena, retrieval_data: OnceCell::new() }
-        })
+    pub fn conv_insertion_from_removal(&mut self) {
+        let state = take(&mut self.state);
+        // ???: preserve indices_at_point so we don't have to regenerate when converting back
+        //     into retrieval? If it's too expensive, we should try to find a way
+        let AnnArenaState::Removal { ordered_elems, indices_at_point: _ } = state else {
+            panic!("AnnArena::conv_insertion_from_removal: called in insertion, retrieval, or unset phase");
+        };
+        let mut arena = Arena::new();
+        arena.alloc_extend(ordered_elems.into_iter().filter_map(|elem| elem));
+        self.state = AnnArenaState::Shared { arena, retrieval_data: OnceCell::new() }
     }
     // endregion
 
@@ -485,7 +517,7 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
         fun: impl FnOnce(&Arena<T>) -> R
     ) -> R {
         let AnnArenaState::Shared { arena, retrieval_data } = &self.state else {
-            panic!("AnnArena::{} called in removal or broken phase", fn_name);
+            panic!("AnnArena::{} called in removal or unset phase", fn_name);
         };
         let None = retrieval_data.get().is_none() else {
             panic!("AnnArena::{} called in retrieval phase", fn_name)
@@ -501,7 +533,7 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
         fun: impl FnOnce(&Arena<T>, &AnnArenaRetrievalData<'tree, T>) -> R
     ) -> R {
         let AnnArenaState::Shared { arena, retrieval_data } = &self.state else {
-            panic!("AnnArena::{} called in removal or broken phase", fn_name);
+            panic!("AnnArena::{} called in removal or unset phase", fn_name);
         };
         let Some(retrieval_data) = retrieval_data.get() else {
             panic!("AnnArena::{} called in insertion phase", fn_name);
@@ -517,7 +549,7 @@ impl<'tree, T: HasAnn<'tree>> AnnArena<'tree, T> {
         fun: impl FnOnce(&mut Vec<Option<T>>, &mut BTreeMap<Point<'tree>, Vec<usize>>) -> R
     ) -> R {
         let AnnArenaState::Removal { ordered_elems, indices_at_point } = &mut self.state else {
-            panic!("AnnArena::{} called in insertion, retrieval, or broken phase", fn_name);
+            panic!("AnnArena::{} called in insertion, retrieval, or unset phase", fn_name);
         };
 
         fun(ordered_elems, indices_at_point)

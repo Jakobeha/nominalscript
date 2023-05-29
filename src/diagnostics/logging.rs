@@ -62,7 +62,7 @@ pub struct TypeCheckInfo<'tree> {
 /// the part for the assigned or required type
 #[derive(Debug)]
 pub struct TypeInfo<'tree> {
-    pub thin_type: ThinType,
+    pub thin_type: ThinType<'tree>,
     pub defined_value: Option<TSNode<'tree>>,
     pub explicit_type: Option<TSNode<'tree>>,
 }
@@ -184,19 +184,9 @@ impl<'a, 'b, 'tree> Drop for _TypeLogger<'a, 'b, 'tree> {
 
 #[macro_export]
 macro_rules! log {
-    ($e:expr, $level:expr, $format:literal $(, $arg:expr)* $(,)? $(;
+    ($level:expr, $format:literal @ $loc:ident $(, $arg:expr)* $(;
          $additional_info:expr)* $(;)?) => {
-        $e.log($crate::diagnostics::GlobalDiagnostic {
-            level: $level,
-            message: format!($format $(, $arg)*),
-            additional_info: $crate::misc::chain![
-                $($additional_info),*
-            ].collect::<::smallvec::SmallVec<_>>(),
-        })
-    };
-    ($e:expr, $level:expr, $format:literal $(, $arg:expr)* $(,)? => $loc:expr $(;
-         $additional_info:expr)* $(;)?) => {
-        $e.log($crate::diagnostics::FileDiagnostic {
+        $loc.logger().log($crate::diagnostics::FileDiagnostic {
             level: $level,
             message: format!($format $(, $arg)*),
             location: $loc.range(),
@@ -205,50 +195,70 @@ macro_rules! log {
             ].collect::<::smallvec::SmallVec<_>>(),
         })
     };
+    ($level:expr, $format:literal @ $loc:expr $(, $arg:expr)* $(;
+         $additional_info:expr)* $(;)?) => {{
+        let loc = $loc;
+        $crate::log!($level, $format @ loc $(, $arg)* $(; $additional_info)*);
+    }};
 }
 
 #[macro_export]
 macro_rules! error {
-    ($e:expr, $( $arg:tt )*) => {
-        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Error, $( $arg )*)
+    ($($arg:tt)*) => {
+        $crate::log!($crate::diagnostics::DiagnosticLevel::Error, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! warning {
-    ($e:expr, $( $arg:tt )*) => {
-        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Warning, $( $arg )*)
+    ($($arg:tt)*) => {
+        $crate::log!($crate::diagnostics::DiagnosticLevel::Warning, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! info {
-    ($e:expr, $( $arg:tt )*) => {
-        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Info, $( $arg )*)
+    ($($arg:tt)*) => {
+        $crate::log!($crate::diagnostics::DiagnosticLevel::Info, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! debug {
-    ($e:expr, $( $arg:tt )*) => {
-        $crate::log!($e, $crate::diagnostics::DiagnosticLevel::Debug, $( $arg )*)
+    ($($arg:tt)*) => {
+        $crate::log!($crate::diagnostics::DiagnosticLevel::Debug, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! additional_info {
+    ($type_:expr, $format:literal @ $loc:ident $(, $arg:expr)* $(,)?) => {
+        ::std::iter::once($crate::diagnostics::AdditionalInfo {
+            type_: $type_,
+            message: format!($format $(, $arg)*),
+            location: Some($loc.range()),
+        })
+    };
+    ($type_:expr, $format:literal @ $loc:expr $(, $arg:expr)* $(,)?) => {{
+        let loc = $loc;
+        $crate::additional_info!($type_, $format @ loc $(, $arg)*)
+    }};
+    ($type_:expr, $format:literal @? $loc:ident $(, $arg:expr)* $(,)?) => {
+        ::std::iter::once($crate::diagnostics::AdditionalInfo {
+            type_: $type_,
+            message: format!($format $(, $arg)*),
+            location: $loc.map(|l| l.range()),
+        })
+    };
+    ($type_:expr, $format:literal @? $loc:expr $(, $arg:expr)* $(,)?) => {{
+        let loc = $loc;
+        $crate::additional_info!($type_, $format @? loc $(, $arg)*)
+    }};
     ($type_:expr, $format:literal $(, $arg:expr)* $(,)?) => {
         ::std::iter::once($crate::diagnostics::AdditionalInfo {
             type_: $type_,
             message: format!($format $(, $arg)*),
             location: None,
-        })
-    };
-    ($type_:expr, $format:literal $(, $arg:expr)* $(,)? => $loc:expr) => {
-        ::std::iter::once($crate::diagnostics::AdditionalInfo {
-            type_: $type_,
-            message: format!($format $(, $arg)*),
-            location: Some($loc.range()),
         })
     };
 }
@@ -309,9 +319,10 @@ mod tests {
     use std::path::PathBuf;
 
     use tree_sitter_typescript::language_typescript;
+    use type_sitter_lib::UntypedNode;
+    use yak_sitter::Parser;
 
     use crate::{debug, error, hint, info, issue, note, warning, hint_if, note_if, issue_if};
-    use crate::concrete::tree_sitter::TSParser;
     use crate::diagnostics::{ProjectDiagnostics, ProjectLogger};
     use crate::import_export::ModulePath;
 
@@ -322,63 +333,64 @@ mod tests {
                 console.log('hello');
             }
         ";
-        let mut parser = TSParser::new(language_typescript()).unwrap();
-        let tree = parser.parse_string(String::from(code)).unwrap();
-        let a_node = tree.root_node().named_child(0).unwrap();
-        let b_node = a_node.named_child(1).unwrap();
+        let mut parser = Parser::new(language_typescript()).unwrap();
+        let tree = parser.parse_string(String::from(code), None, None, ()).unwrap();
+        let root = UntypedNode::new(tree.root_node());
+        let a_node = UntypedNode::new(tree.root_node().named_child(0).unwrap());
+        let b_node = UntypedNode::new(a_node.named_child(1).unwrap());
 
         let mut diagnostics = ProjectDiagnostics::new(false);
         let p = ModulePath::ns(PathBuf::from("p.ns"));
         let e = ProjectLogger::new(&mut diagnostics);
-        error!(e, "hello");
-        warning!(e, "hello");
-        info!(e, "hello");
-        debug!(e, "hello");
-        error!(e.file(&p), "hello" => a_node);
-        warning!(e.file(&p), "hello {}", "hello" => a_node);
-        info!(e.file(&p), "hello {:?} {:?}", "hello", a_node => a_node);
-        debug!(e.file(&p), "hello" => a_node);
-        error!(e, "hello";
+        error!("hello" @ root);
+        warning!("hello" @ root);
+        info!("hello" @ root);
+        debug!("hello" @ root);
+        error!("hello" @ { a_node });
+        warning!("hello {}" @ a_node, "hello");
+        info!("hello {:?} {:?}" @ { a_node }, "hello", a_node);
+        debug!("hello" @ a_node);
+        error!("hello" @ root;
             issue!("hello"));
-        warning!(e, "hello";
+        warning!("hello" @ root;
             issue!("hello");
             hint!("hello"));
-        info!(e, "hello";
+        info!("hello" @ root;
             issue!("hello");
             hint!("hello");
             note!("hello"));
-        debug!(e, "hello";
+        debug!("hello" @ root;
             issue!("hello {:?}", "hello");
             hint!("hello");
             note!("hello"));
-        error!(e, "hello";
+        error!("hello" @ root;
             issue!("hello {:?}", "hello");
-            hint!("hello" => b_node);
+            hint!("hello" @ b_node);
             note!("hello"));
-        warning!(e.file(&p), "hello" => a_node;
+        warning!("hello" @ { a_node };
             issue!("hello {:?}", "hello");
-            hint!("hello" => b_node);
+            hint!("hello" @ b_node);
             note!("hello"));
-        info!(e.file(&p), "hello" => a_node;
+        info!("hello" @ a_node;
             issue!("hello {:?}", "hello");
-            hint!("hello" => b_node);
+            hint!("hello" @ b_node);
             Some(5).into_iter().flat_map(|n| note!("hello {}", n)));
-        debug!(e.file(&p), "hello" => a_node;
+        debug!("hello" @ a_node;
             issue!("hello {:?}", "hello");
-            hint!("hello" => b_node);
+            hint!("hello" @ b_node);
             note_if!(Some(5), n => "hello {}", n));
-        error!(e.file(&p), "hello" => a_node;
+        error!("hello" @ a_node;
             issue!("hello {:?}", "hello");
             hint_if!(None::<String>, n => "hello {}", n);
-            hint!("hello" => b_node));
-        warning!(e.file(&p), "hello" => a_node;
+            hint!("hello" @ b_node));
+        warning!("hello" @ a_node;
             issue_if!(Some(5), n => "hello {}", n);
             hint!("hello {:?}", "hello");
-            hint!("hello" => b_node));
+            hint!("hello" @ b_node));
         let n = Some(5);
-        warning!(e.file(&p), "hello" => a_node;
+        warning!("hello" @ a_node;
             issue_if!(n => "hello {}", n);
             hint!("hello {:?}", "hello");
-            hint!("hello" => b_node));
+            hint!("hello" @ b_node));
     }
 }

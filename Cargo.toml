@@ -13,7 +13,7 @@ homepage = "https://github.com/Jakobeha/nominalscript"
 [dependencies]
 tree-sitter-nominalscript = { path = "vendor/tree-sitter-nominalscript" }
 streaming-iterator = "0.1.9"
-type-sitter-lib = { path = "../type-sitter/type-sitter-lib", version = "0.3.0" }
+type-sitter-lib = { path = "../type-sitter/type-sitter-lib", version = "0.3.0", features = ["yak-sitter"] }
 yak-sitter = { path = "../type-sitter/yak-sitter", version = "0.3.0" }
 tree-sitter = "0.20.10"
 thiserror = "1.0.38"
