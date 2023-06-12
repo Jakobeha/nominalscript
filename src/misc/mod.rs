@@ -20,6 +20,8 @@ mod mk_path;
 mod nice_mutex;
 /// `OnceCell::with_option`
 mod once_cell_with_option;
+/// `patricia_tree` with path keys
+mod path_patricia_map;
 /// [Rc::unwrap_or_clone] but stable
 mod rc_unwrap_or_clone;
 /// Lets you safely create an [Iterator] using a [std::cell::RefCell] reference, and the while the
@@ -51,6 +53,7 @@ pub(crate) use iter_eq::*;
 pub(crate) use mk_path::mk_path;
 pub use nice_mutex::NiceMutex;
 pub(crate) use once_cell_with_option::OnceCellExt;
+pub(crate) use path_patricia_map::PathPatriciaMap;
 //noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use rc_unwrap_or_clone::rc_unwrap_or_clone;
 pub(crate) use ref_iterator::RefIterator;
