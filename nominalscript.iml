@@ -9,10 +9,15 @@
       <sourceFolder url="file://$MODULE_DIR$/vendor/tree-sitter-nominalscript/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vendor/tree-sitter-nominalscript/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/test-resources" type="java-test-resource" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/patricia_tree/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/patricia_tree/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/patricia_tree/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/vendor/tree-sitter-nominalscript/target" />
+      <excludeFolder url="file://$MODULE_DIR$/vendor/patricia_tree/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="katex" level="application" />
   </component>
 </module>

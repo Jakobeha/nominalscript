@@ -9,6 +9,8 @@ repository = "https://github.com/Jakobeha/nominalscript"
 homepage = "https://github.com/Jakobeha/nominalscript"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[package.metadata.docs.rs]
+rustdoc-args = [ "--html-in-header", "docs/katex.html" ]
 
 [dependencies]
 # tree-sitter etc.
@@ -22,7 +24,7 @@ thiserror = "1.0.38"
 auto_enums = "0.8.0"
 # Rust data-structures
 typed-arena-nomut = "0.1.0"
-patricia_tree = { path = "vendor/patricia_tree" }
+patricia_tree = "0.6.1"
 roaring = "0.10.1"
 indexmap = "1.9.2"
 nonempty = "0.8.1"
