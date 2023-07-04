@@ -6,7 +6,7 @@ use crate::semantic::scope::{Scope, TopLevelScope};
 /// Contains all semantic data in a NominalScript package
 #[derive(Debug)]
 pub struct SemanticPackage<'tree> {
-    files: HashMap<&'tree Path, ToplevelScope<'tree>>
+    files: HashMap<&'tree Path, TopLevelScope<'tree>>
 }
 
 impl<'tree> SemanticPackage<'tree> {

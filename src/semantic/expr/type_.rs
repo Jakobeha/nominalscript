@@ -6,14 +6,14 @@ use crate::analyses::bindings::FieldName;
 use crate::analyses::types::{Nullability, Optionality};
 use crate::misc::ByEqv;
 use crate::semantic::ann::Ann;
-use crate::semantic::arena::{IdentityRef, impl_has_name};
+use crate::semantic::arena::{Interned, impl_has_name};
 use crate::semantic::def::OwnedTypeDef;
 use crate::semantic::name::{FieldIdent, FieldName};
 use crate::semantic::r#use::TypeUse;
 use crate::syntax::nodes;
 
 /// Type = identifier with optional generics, builtin or structural type.
-pub type Type<'tree> = IdentityRef<'tree, OwnedType<'tree>>;
+pub type Type<'tree> = Interned<'tree, OwnedType<'tree>>;
 /// Owned [Type]
 #[derive(Debug)]
 pub struct OwnedType<'tree> {
@@ -146,7 +146,7 @@ pub struct FieldType<'tree> {
     pub value: Type<'tree>
 }
 
-impl_has_name!(('tree) &'tree FieldName for FieldType<'tree>);
+impl_has_name!(<'tree> &'tree FieldName for FieldType<'tree>);
 impl_has_ann_record_struct!(OwnedType);
 impl_has_ann_record_struct!(TypeIdentifier);
 impl_has_ann_enum!(TypeStructure (Fn) { Array, Tuple, Object });

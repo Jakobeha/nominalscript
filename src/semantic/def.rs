@@ -2,12 +2,12 @@ use once_cell::unsync::OnceCell;
 use crate::analyses::bindings::{TypeName, ValueName};
 use crate::{impl_has_ann_record_struct, impl_has_name};
 use crate::semantic::ann::Ann;
-use crate::semantic::arena::{IdentityRef, impl_has_name};
+use crate::semantic::arena::{Interned, impl_has_name};
 use crate::semantic::expr::{Expr, Type};
 use crate::semantic::name::{TypeIdent, ValueIdent};
 
 /// Value declaration
-pub type ValueDef<'tree> = IdentityRef<'tree, OwnedValueDef<'tree>>;
+pub type ValueDef<'tree> = Interned<'tree, OwnedValueDef<'tree>>;
 /// Owned [ValueDef]
 #[derive(Debug)]
 // #[derive(MultiPhase)] #[phase(SemanticPhase)]
@@ -25,7 +25,7 @@ pub struct OwnedValueDef<'tree> {
 }
 
 /// Type declaration
-pub type TypeDef<'tree> = IdentityRef<'tree, OwnedTypeDef<'tree>>;
+pub type TypeDef<'tree> = Interned<'tree, OwnedTypeDef<'tree>>;
 /// Owned [TypeDef]
 #[derive(Debug)]
 // #[derive(MultiPhase)] #[phase(SemanticPhase)]
@@ -39,7 +39,7 @@ pub struct OwnedTypeDef<'tree> {
     pub value: OnceCell<Type<'tree>>
 }
 
-impl_has_name!(('tree) &'tree ValueName for OwnedValueDef<'tree>);
-impl_has_name!(('tree) &'tree TypeName for OwnedTypeDef<'tree>);
+impl_has_name!(<'tree> &'tree ValueName for OwnedValueDef<'tree>);
+impl_has_name!(<'tree> &'tree TypeName for OwnedTypeDef<'tree>);
 impl_has_ann_record_struct!(OwnedValueDef);
 impl_has_ann_record_struct!(OwnedTypeDef);

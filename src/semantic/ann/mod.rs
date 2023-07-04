@@ -10,8 +10,7 @@ use yak_sitter::{Node, Range};
 
 pub use point::*;
 
-use crate::misc::define_wrapper_structs;
-use crate::semantic::arena::IdentityRef;
+use crate::semantic::arena::Interned;
 
 mod point;
 
@@ -37,21 +36,24 @@ pub enum Ann<'tree> {
     /// The annotated semantic node was inferred from source
     InferredSource {
         /// Syntax nodes it was inferred from
-        locs: BTreeSet<Node<'tree>>
+        locs: DerivedNodeSet<'tree>
     },
     /// The annotated semantic node came from the absence of source
     ImplicitSource {
-        /// Syntax node immediately before what would be parsed into this
-        before_loc: Node<'tree>,
-        /// Syntax node immediately after what would be parsed into this
-        after_loc: Node<'tree>
+        /// Syntax node immediately before what would be parsed into this.
+        ///
+        /// The end of this node is the point where the implicit source would exist, and the next
+        /// node is the syntax node immediately after what would be parsed into this.
+        before_loc: Node<'tree>
     },
     /// The annotated semantic node was derived from other semantic nodes
     Derived {
         /// Syntax nodes of derived semantic nodes
-        locs: BTreeSet<Node<'tree>>
+        locs: DerivedNodeSet<'tree>
     }
 }
+
+pub type DerivedNodeSet<'tree> = BTreeSet<Node<'tree>>;
 
 /// Type with an annotation
 pub trait HasAnn<'tree>: Debug {
@@ -93,7 +95,7 @@ impl<'tree> Ann<'tree> {
             Self::Intrinsic => empty(),
             Self::DirectSource { loc } => once(loc),
             Self::InferredSource { locs } => locs.iter(),
-            Self::ImplicitSource { before_loc, after_loc } => once(before_loc).chain(once(after_loc)),
+            Self::ImplicitSource { before_loc } => once(before_loc),
             Self::Derived { locs } => locs.iter()
         }
     }
@@ -104,7 +106,7 @@ impl<'tree> Ann<'tree> {
             Ann::Intrinsic => 0,
             Ann::DirectSource { .. } => 1,
             Ann::InferredSource { locs } => locs.len(),
-            Ann::ImplicitSource { .. } => 2,
+            Ann::ImplicitSource { .. } => 1,
             Ann::Derived { locs } => locs.len()
         }
     }
@@ -226,6 +228,7 @@ macro_rules! impl_has_ann_wrapper_struct {
     };
 }
 
+#[macro_export]
 macro_rules! impl_has_ann_record_struct_body {
     ($tree:lifetime) => {
         #[inline]
@@ -298,7 +301,7 @@ macro_rules! impl_has_ann_enum {
 }
 
 impl_has_ann_as_ref!(Box<T>);
-impl_has_ann_as_ref!(IdentityRef<'a, T>);
+impl_has_ann_as_ref!(Interned<'a, T>);
 
 impl<'tree> HasAnn<'tree> for Ann<'tree> {
     #[inline]

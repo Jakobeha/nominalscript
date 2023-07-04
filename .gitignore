@@ -1,1 +1,6 @@
+/vendor/.idea
+/vendor/target
+/vendor/Cargo.lock
+/vendor/Cargo.toml
 /target
+Cargo.lock

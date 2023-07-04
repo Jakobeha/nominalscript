@@ -576,7 +576,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+    fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Name { node, .. } => yak_sitter::QueryCapture {
@@ -622,7 +622,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node(&self) -> &tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Name { node, .. } => node.node(),
@@ -636,7 +636,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Name { node, .. } => node.node_mut(),
@@ -800,17 +800,17 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         match self {}
     }
     #[inline]
-    fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+    fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
     #[inline]
-    fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node(&self) -> &tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
     #[inline]
-    fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
@@ -1005,7 +1005,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+    fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::IndentBegin { node, .. } => yak_sitter::QueryCapture {
@@ -1016,14 +1016,14 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node(&self) -> &tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::IndentBegin { node, .. } => node.node(),
         }
     }
     #[inline]
-    fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::IndentBegin { node, .. } => node.node_mut(),
@@ -1675,7 +1675,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+    fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Keyword { node, .. } => yak_sitter::QueryCapture {
@@ -1726,7 +1726,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node(&self) -> &tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Keyword { node, .. } => node.node(),
@@ -1741,7 +1741,7 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         }
     }
     #[inline]
-    fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {
             Self::Keyword { node, .. } => node.node_mut(),
@@ -2321,7 +2321,7 @@ pub mod semantic {
             }
         }
         #[inline]
-        fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+        fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalExportId { node, .. } => yak_sitter::QueryCapture {
@@ -2362,7 +2362,7 @@ pub mod semantic {
             }
         }
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalExportId { node, .. } => node.node(),
@@ -2375,7 +2375,7 @@ pub mod semantic {
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalExportId { node, .. } => node.node_mut(),
@@ -2619,7 +2619,7 @@ pub mod semantic {
             }
         }
         #[inline]
-        fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+        fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalType { node, .. } => yak_sitter::QueryCapture {
@@ -2630,14 +2630,14 @@ pub mod semantic {
             }
         }
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalType { node, .. } => node.node(),
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalType { node, .. } => node.node_mut(),
@@ -2700,12 +2700,10 @@ pub mod semantic {
             }
         }
         #[automatically_derived]
-        impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>> for FunctionDecl<'tree> {
+        impl<'tree> TryFrom<tree_sitter::Node<'tree>> for FunctionDecl<'tree> {
             type Error = type_sitter_lib::IncorrectKind<'tree>;
             #[inline]
-            fn try_from(
-                node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-            ) -> Result<Self, Self::Error> {
+            fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
                 match node.kind() {
                     "function_declaration" => Ok(unsafe {
                         Self :: FunctionDeclaration (< FunctionDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (node))
@@ -2730,7 +2728,7 @@ pub mod semantic {
             const KIND: &'static str =
                 "{function_declaration | function_signature | generator_function_declaration}";
             #[inline]
-            fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+            fn node(&self) -> &tree_sitter::Node<'tree> {
                 match self {
                     Self::FunctionDeclaration(x) => x.node(),
                     Self::FunctionSignature(x) => x.node(),
@@ -2738,7 +2736,7 @@ pub mod semantic {
                 }
             }
             #[inline]
-            fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+            fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
                 match self {
                     Self::FunctionDeclaration(x) => x.node_mut(),
                     Self::FunctionSignature(x) => x.node_mut(),
@@ -2746,7 +2744,7 @@ pub mod semantic {
                 }
             }
             #[inline]
-            fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+            fn into_node(self) -> tree_sitter::Node<'tree> {
                 match self {
                     Self::FunctionDeclaration(x) => x.into_node(),
                     Self::FunctionSignature(x) => x.into_node(),
@@ -2881,17 +2879,17 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         match self {}
     }
     #[inline]
-    fn to_raw(&self) -> crate::syntax::tree_sitter_wrapper::QueryCapture<'static, 'tree> {
+    fn to_raw(&self) -> tree_sitter::QueryCapture<'static, 'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
     #[inline]
-    fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node(&self) -> &tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
     #[inline]
-    fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+    fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
         use type_sitter_lib::TypedNode;
         match self {}
     }
@@ -2956,12 +2954,10 @@ pub mod anon_unions {
         }
     }
     #[automatically_derived]
-    impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>> for Name<'tree> {
+    impl<'tree> TryFrom<tree_sitter::Node<'tree>> for Name<'tree> {
         type Error = type_sitter_lib::IncorrectKind<'tree>;
         #[inline]
-        fn try_from(
-            node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
             match node.kind() {
                 "identifier" => Ok(unsafe {
                     Self :: Identifier (< Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (node))
@@ -2989,7 +2985,7 @@ pub mod anon_unions {
         const KIND: &'static str =
             "{identifier | nominal_type_identifier | property_identifier | type_identifier}";
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             match self {
                 Self::Identifier(x) => x.node(),
                 Self::NominalTypeIdentifier(x) => x.node(),
@@ -2998,7 +2994,7 @@ pub mod anon_unions {
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             match self {
                 Self::Identifier(x) => x.node_mut(),
                 Self::NominalTypeIdentifier(x) => x.node_mut(),
@@ -3007,7 +3003,7 @@ pub mod anon_unions {
             }
         }
         #[inline]
-        fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn into_node(self) -> tree_sitter::Node<'tree> {
             match self {
                 Self::Identifier(x) => x.into_node(),
                 Self::NominalTypeIdentifier(x) => x.into_node(),
@@ -3045,12 +3041,10 @@ pub mod anon_unions {
         }
     }
     #[automatically_derived]
-    impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>> for DefinitionMethod<'tree> {
+    impl<'tree> TryFrom<tree_sitter::Node<'tree>> for DefinitionMethod<'tree> {
         type Error = type_sitter_lib::IncorrectKind<'tree>;
         #[inline]
-        fn try_from(
-            node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
             match node.kind() {
                 "abstract_method_signature" => Ok(unsafe {
                     Self :: AbstractMethodSignature (< AbstractMethodSignature < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (node))
@@ -3071,21 +3065,21 @@ pub mod anon_unions {
     impl<'tree> type_sitter_lib::TypedNode<'tree> for DefinitionMethod<'tree> {
         const KIND: &'static str = "{abstract_method_signature | method_signature}";
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             match self {
                 Self::AbstractMethodSignature(x) => x.node(),
                 Self::MethodSignature(x) => x.node(),
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             match self {
                 Self::AbstractMethodSignature(x) => x.node_mut(),
                 Self::MethodSignature(x) => x.node_mut(),
             }
         }
         #[inline]
-        fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn into_node(self) -> tree_sitter::Node<'tree> {
             match self {
                 Self::AbstractMethodSignature(x) => x.into_node(),
                 Self::MethodSignature(x) => x.into_node(),
@@ -3121,12 +3115,10 @@ pub mod anon_unions {
         }
     }
     #[automatically_derived]
-    impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>> for IndentBegin<'tree> {
+    impl<'tree> TryFrom<tree_sitter::Node<'tree>> for IndentBegin<'tree> {
         type Error = type_sitter_lib::IncorrectKind<'tree>;
         #[inline]
-        fn try_from(
-            node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
             match node.kind() {
                 "nominal_type_declaration" => Ok(unsafe {
                     Self :: NominalTypeDeclaration (< NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (node))
@@ -3145,21 +3137,21 @@ pub mod anon_unions {
     impl<'tree> type_sitter_lib::TypedNode<'tree> for IndentBegin<'tree> {
         const KIND: &'static str = "{nominal_type_declaration | nominal_type_guard}";
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             match self {
                 Self::NominalTypeDeclaration(x) => x.node(),
                 Self::NominalTypeGuard(x) => x.node(),
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             match self {
                 Self::NominalTypeDeclaration(x) => x.node_mut(),
                 Self::NominalTypeGuard(x) => x.node_mut(),
             }
         }
         #[inline]
-        fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn into_node(self) -> tree_sitter::Node<'tree> {
             match self {
                 Self::NominalTypeDeclaration(x) => x.into_node(),
                 Self::NominalTypeGuard(x) => x.into_node(),
@@ -3195,14 +3187,10 @@ pub mod anon_unions {
         }
     }
     #[automatically_derived]
-    impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>>
-        for PunctuationDelimiter<'tree>
-    {
+    impl<'tree> TryFrom<tree_sitter::Node<'tree>> for PunctuationDelimiter<'tree> {
         type Error = type_sitter_lib::IncorrectKind<'tree>;
         #[inline]
-        fn try_from(
-            node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
             match node.kind() {
                 ";" => Ok(unsafe {
                     Self::Semicolon(<symbols::Semicolon<'tree> as type_sitter_lib::TypedNode<
@@ -3225,21 +3213,21 @@ pub mod anon_unions {
     impl<'tree> type_sitter_lib::TypedNode<'tree> for PunctuationDelimiter<'tree> {
         const KIND: &'static str = "{; | ?}";
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             match self {
                 Self::Semicolon(x) => x.node(),
                 Self::Question(x) => x.node(),
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             match self {
                 Self::Semicolon(x) => x.node_mut(),
                 Self::Question(x) => x.node_mut(),
             }
         }
         #[inline]
-        fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn into_node(self) -> tree_sitter::Node<'tree> {
             match self {
                 Self::Semicolon(x) => x.into_node(),
                 Self::Question(x) => x.into_node(),
@@ -3275,12 +3263,10 @@ pub mod anon_unions {
         }
     }
     #[automatically_derived]
-    impl<'tree> TryFrom<crate::syntax::tree_sitter_wrapper::Node<'tree>> for PunctuationBracket<'tree> {
+    impl<'tree> TryFrom<tree_sitter::Node<'tree>> for PunctuationBracket<'tree> {
         type Error = type_sitter_lib::IncorrectKind<'tree>;
         #[inline]
-        fn try_from(
-            node: crate::syntax::tree_sitter_wrapper::Node<'tree>,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(node: tree_sitter::Node<'tree>) -> Result<Self, Self::Error> {
             match node.kind() {
                 "<" => Ok(unsafe {
                     Self :: Lt (< symbols :: Lt < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (node))
@@ -3299,21 +3285,21 @@ pub mod anon_unions {
     impl<'tree> type_sitter_lib::TypedNode<'tree> for PunctuationBracket<'tree> {
         const KIND: &'static str = "{< | >}";
         #[inline]
-        fn node(&self) -> &crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node(&self) -> &tree_sitter::Node<'tree> {
             match self {
                 Self::Lt(x) => x.node(),
                 Self::Gt(x) => x.node(),
             }
         }
         #[inline]
-        fn node_mut(&mut self) -> &mut crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn node_mut(&mut self) -> &mut tree_sitter::Node<'tree> {
             match self {
                 Self::Lt(x) => x.node_mut(),
                 Self::Gt(x) => x.node_mut(),
             }
         }
         #[inline]
-        fn into_node(self) -> crate::syntax::tree_sitter_wrapper::Node<'tree> {
+        fn into_node(self) -> tree_sitter::Node<'tree> {
             match self {
                 Self::Lt(x) => x.into_node(),
                 Self::Gt(x) => x.into_node(),

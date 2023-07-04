@@ -1,6 +1,12 @@
-[submodule "vendor/tree-sitter-nominalscript"]
-	path = vendor/tree-sitter-nominalscript
-	url = git@github.com:Jakobeha/tree-sitter-nominalscript.git
+[submodule "vendor/btree-plus-store"]
+	path = vendor/btree-plus-store
+	url = git@github.com:Jakobeha/btree-plus-store.git
 [submodule "vendor/dependent-rebuilder"]
 	path = vendor/dependent-rebuilder
 	url = git@github.com:Jakobeha/dependent-rebuilder.git
+[submodule "vendor/rustc-arena-modified"]
+	path = vendor/rustc-arena-modified
+	url = git@github.com:Jakobeha/rustc-arena-modified.git
+[submodule "vendor/tree-sitter-nominalscript"]
+	path = vendor/tree-sitter-nominalscript
+	url = git@github.com:Jakobeha/tree-sitter-nominalscript.git

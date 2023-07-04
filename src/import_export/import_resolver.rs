@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use derive_more::{Display, Error, From};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use nonempty::NonEmpty;
+use thiserror::Error;
 use tsconfig::TsConfig;
 
 use crate::import_export::export::ImportPath;
@@ -61,14 +62,15 @@ pub struct ResolvedFatPath {
     pub arbitrary_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Display, Error, From)]
+#[derive(Debug, Error)]
 pub enum ImportResolverCreateError {
-    #[display(fmt = "Failed to parse tsconfig.json: {}", error)]
-    TSConfigError { error: tsconfig::ConfigError },
-    IOError { error: std::io::Error },
+    #[error("Failed to parse tsconfig.json: {0}")]
+    TSConfigError(#[from] tsconfig::ConfigError),
+    #[error("{0}")]
+    IOError(#[from] std::io::Error),
 }
 
-#[derive(Debug, Clone, Display, Error)]
+#[derive(Debug, Clone, Error)]
 pub struct ResolveFailure;
 
 impl ImportResolver {
@@ -79,7 +81,7 @@ impl ImportResolver {
             Ok(tsconfig) => Some(tsconfig),
             Err(tsconfig::ConfigError::CouldNotFindFile(io_error))
             if io_error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(ImportResolverCreateError::TSConfigError { error }),
+            Err(error) => return Err(ImportResolverCreateError::TSConfigError(error)),
         };
         let mut module_root_path = tsconfig_path;
         module_root_path.pop();
@@ -238,7 +240,7 @@ impl GlobPaths {
     }
 
     /// Match `path` against each glob pattern and return the result with `base_path` prepended.
-    pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a str) -> impl Iterator<Item=PathBuf> + 'a {
+    pub fn resolve<'a>(&'a self, base_path: &'a Path, path: &'a ImportPath) -> impl Iterator<Item=PathBuf> + 'a {
         self.globs.matches(path).into_iter().flat_map(move |match_idx| {
             self.glob_paths[match_idx].clone().map(|resolved_path| {
                 mk_path!(base_path, resolved_path, path)

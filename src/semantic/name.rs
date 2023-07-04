@@ -1,12 +1,11 @@
 use smol_str::SmolStr;
 use crate::semantic::ann::Ann;
-use crate::type_sitter::ann::Ann;
 
 macro_rules! define_names {
     ($($(#[$attr:meta])* $NameOwned:ident $Name:ident $NameCow:ident $Ident:ident),+) => { $(
 #[doc = "An owned typed identifier = a type-safe wrapper around [SmolStr]"]
 $(#[$attr])*
-#[derive(Debug, Clone, Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct $NameOwned(SmolStr);
 
@@ -35,7 +34,7 @@ pub struct $Ident<'tree> {
     pub name: &'tree $Name,
 }
 $crate::impl_has_ann_record_struct!($Ident);
-$crate::impl_has_eqv_ident_struct!(<'tree> $Ident<'tree> { name; ann });
+$crate::impl_has_eqv_ident_struct!($Ident<'tree> { name; ann });
 
 impl $NameOwned {
     pub fn new(name: impl Into<SmolStr>) -> Self {
@@ -65,7 +64,7 @@ impl AsRef<str> for $NameOwned {
     }
 }
 
-impl Borrow<$Name> for $NameOwned {
+impl std::borrow::Borrow<$Name> for $NameOwned {
     fn borrow(&self) -> &$Name {
         $Name::of(self)
     }
@@ -80,6 +79,12 @@ impl PartialEq<$Name> for $NameOwned {
 impl PartialOrd<$Name> for $NameOwned {
     fn partial_cmp(&self, other: &$Name) -> Option<std::cmp::Ordering> {
         self.as_ref().partial_cmp(other.as_ref())
+    }
+}
+
+impl std::fmt::Display for $NameOwned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -155,7 +160,7 @@ impl<'tree> AsRef<str> for $Ident<'tree> {
     }
 }
 
-impl<'tree> Borrow<$Name> for $Ident<'tree> {
+impl<'tree> std::borrow::Borrow<$Name> for $Ident<'tree> {
     fn borrow(&self) -> &$Name {
         self.name
     }

@@ -1,12 +1,12 @@
 use std::cell::Cell;
 use crate::impl_has_ann_enum;
 use crate::semantic::ann::Ann;
-use crate::semantic::arena::IdentityRef;
+use crate::semantic::arena::Interned;
 use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
 
 /// Value expression = either a value (identifier, builtin or structure) or operation which reduces to a value
-pub type Expr<'tree> = IdentityRef<'tree, OwnedExpr<'tree>>;
+pub type Expr<'tree> = Interned<'tree, OwnedExpr<'tree>>;
 /// Owned [Expr]
 #[derive(Debug)]
 pub enum OwnedExpr<'tree> {
@@ -71,7 +71,7 @@ impl<'tree> HasExprType<'tree> for OwnedExpr<'tree> {
     }
 }
 
-impl<'tree, 'a, T: HasExprType<'tree>> HasExprType<'tree> for IdentityRef<'a, T> {
+impl<'tree, 'a, T: HasExprType<'tree>> HasExprType<'tree> for Interned<'a, T> {
     #[inline]
     fn expr_type(&self) -> &ExprType<'tree> {
         self.as_ref().expr_type()

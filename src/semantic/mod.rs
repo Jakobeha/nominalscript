@@ -12,7 +12,7 @@ pub mod r#use;
 pub mod expr;
 mod package;
 /// Custom arena types
-pub mod arena;
+// pub mod arena;
 /// Binding identifiers
 pub mod name;
 

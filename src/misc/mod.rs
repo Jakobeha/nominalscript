@@ -6,8 +6,6 @@ mod downcast_with_lifetime;
 mod eqv_ident;
 /// Display with context like indentation
 mod fmt_with_ctx;
-/// Iterator for [elsa::FrozenMap], since it has no builtin iteration for some reason
-mod frozen_map_iter;
 /// Generate impl which just calls `map` on the inner value
 mod impl_by_map;
 /// Helpers for iterators which are empty if a boolean is `false`
@@ -38,27 +36,21 @@ mod vec_find_remove;
 /// Offset a utf-8 error
 mod utf8_error_offset_by;
 
-//noinspection RsUnusedImport (IntelliJ bug)
-pub(crate) use chain::chain;
+pub(crate) use chain::*;
 pub(crate) use downcast_with_lifetime::*;
 pub use eqv_ident::*;
 pub use fmt_with_ctx::*;
-pub(crate) use frozen_map_iter::FrozenMapIter;
-//noinspection RsUnusedImport (IntelliJ bug)
-pub(crate) use impl_by_map::impl_by_map;
+pub(crate) use impl_by_map::*;
 pub(crate) use iter_if::*;
-//noinspection RsUnusedImport (IntelliJ bug)
 pub(crate) use iter_eq::*;
-//noinspection RsUnusedImport (IntelliJ bug)
-pub(crate) use mk_path::mk_path;
-pub use nice_mutex::NiceMutex;
-pub(crate) use once_cell_with_option::OnceCellExt;
-pub(crate) use path_patricia_map::PathPatriciaMap;
-//noinspection RsUnusedImport (IntelliJ bug)
-pub(crate) use rc_unwrap_or_clone::rc_unwrap_or_clone;
-pub(crate) use ref_iterator::RefIterator;
-pub(crate) use result_filter_err::ResultFilterErr;
-pub(crate) use result_either::result_either;
-pub(crate) use vec_extend_no_dup::VecExtendNoDup;
-pub(crate) use vec_find_remove::VecFilter;
-pub(crate) use utf8_error_offset_by::Utf8ErrorOffsetBy;
+pub(crate) use mk_path::*;
+pub use nice_mutex::*;
+pub(crate) use once_cell_with_option::*;
+pub(crate) use path_patricia_map::*;
+pub(crate) use rc_unwrap_or_clone::*;
+pub(crate) use ref_iterator::*;
+pub(crate) use result_filter_err::*;
+pub(crate) use result_either::*;
+pub(crate) use vec_extend_no_dup::*;
+pub(crate) use vec_find_remove::*;
+pub(crate) use utf8_error_offset_by::*;

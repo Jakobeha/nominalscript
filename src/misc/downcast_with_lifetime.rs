@@ -11,7 +11,7 @@ macro_rules! downcast_ref_with_lifetime {
             let e = (e as &dyn std::any::Any).downcast_ref::<$U<'static>>();
             e.map(|e| std::mem::transmute::<&$U<'static>, &$U<$a>>(e))
         }
-    }
+    };
     (($a:lifetime, $T:ident<$A0:ty> => $U:ident) $e:expr) => {
         // SAFETY: Transmuting is the same except for lifetime changes, the lifetime remains valid
         // and is the same in the downcast

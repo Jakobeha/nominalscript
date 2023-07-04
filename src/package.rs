@@ -1,4 +1,9 @@
+use std::collections::BTreeMap;
+use dependent_rebuilder::dependent_rebuilder;
 use crate::misc::PathPatriciaMap;
+use crate::semantic::ann::{Ann, HasAnn};
+use crate::semantic::arena::Interned;
+use crate::semantic::scope::Scope;
 use crate::syntax::nodes::ProgramTree;
 
 /// A package is a self-contained unit of files which depend on one another, and are compiled
@@ -30,22 +35,51 @@ use crate::syntax::nodes::ProgramTree;
 /// didn't have the new data in the first place $C(a_s) - C(b_s) + C(c_s) = C((a + b - c)_s)$.
 ///
 /// TODO: A package may also depend on a files outside of the package, and recompile if
-///     those files change, but this is not yet implemented.
+///     those files change, but this isn't yet implemented.
 #[dependent_rebuilder]
 pub struct Package {
     /// AST nodes
     sources: FileMap<ProgramTree>,
     /// Definitions
-    definitions: PackageDefinitions<'this>,
+    definitions: PackageDefinitions,
     /// Expressions, including type definitions and trivially-inferred types (most types)
-    expressions: PackageExpressions<'this>,
+    expressions: PackageExpressions,
     /// Type inference (re-declare the trivial types, and resolve constrained type holes)
-    type_inference: PackageTypeInference<'this>,
+    type_inference: PackageTypeInference,
     /// Type check results
-    type_check: PackageTypeCheck<'this>,
+    type_check: PackageTypeCheck,
     /// Re-printed source removing all type annotations, and inserting runtime type checks and guard
     /// code
-    output: PackageOutput<'this>,
+    output: PackageOutput
 }
 
 pub type FileMap<T> = PathPatriciaMap<T>;
+pub trait SemanticNode<'tree> {
+    type Owned: HasAnn<'tree>;
+}
+impl<'tree, T> SemanticNode<'tree> for Interned<'tree, T> {
+    type Owned = T;
+}
+pub struct SemanticSet<'tree, V: SemanticNode<'tree>> {
+    repr: BTreeMap<Ann<'tree>, Box<V::Owned>>
+}
+
+pub struct PackageDefinitions<'tree> {
+    scopes: SemanticSet<'tree, Scope<'tree>>
+}
+
+pub struct PackageExpressions<'tree> {
+
+}
+
+pub struct PackageTypeInference<'tree> {
+
+}
+
+pub struct PackageTypeCheck<'tree> {
+
+}
+
+pub struct PackageOutput<'tree> {
+
+}
