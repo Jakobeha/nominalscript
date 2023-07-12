@@ -1,30 +1,25 @@
 use std::cell::Cell;
-use crate::impl_has_ann_enum;
-use crate::semantic::ann::Ann;
-use crate::semantic::arena::Interned;
+
 use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
+use crate::semantic::storage::Id;
 
 /// Value expression = either a value (identifier, builtin or structure) or operation which reduces to a value
-pub type Expr<'tree> = Interned<'tree, OwnedExpr<'tree>>;
-/// Owned [Expr]
+pub type Expr<'tree> = Id<'tree, ExprData<'tree>>;
+/// [Expr] data
 #[derive(Debug)]
-pub enum OwnedExpr<'tree> {
+pub enum ExprData<'tree> {
     Identifier {
-        /// Source location
-        ann: Ann<'tree>,
         /// Assigned and required type for type checking
-        type_: ExprType<'tree>,
+        r#type: ExprType<'tree>,
         /// Identifier name and declaration referenced by this identifier, or [None] if this is a
         /// nonexistent reference
         r#use: Option<ValueUse<'tree>>
     },
     /// Misc operation, we only care about the sub-expressions
     Misc {
-        /// Source location
-        ann: Ann<'tree>,
         /// Assigned and required type for type checking
-        type_: ExprType<'tree>,
+        r#type: ExprType<'tree>,
         /// Immediate sub-expressions (e.g. operator arguments, or function call name and arguments)
         children: Expr<'tree>
     }
@@ -55,26 +50,14 @@ pub enum CheckTypeAt {
     /// insert a runtime guard to check instances are instances of `required` at runtime.
     Runtime
 }
-pub trait HasExprType<'tree> {
-    fn expr_type(&self) -> &ExprType<'tree>;
-}
 
-impl_has_ann_enum!(OwnedExpr { Identifier, Misc });
-
-impl<'tree> HasExprType<'tree> for OwnedExpr<'tree> {
+impl<'tree> ExprData<'tree> {
     #[inline]
-    fn expr_type(&self) -> &ExprType<'tree> {
+    pub fn expr_type(&self) -> &ExprType<'tree> {
         match self {
-            OwnedExpr::Identifier { type_, .. } => type_,
-            OwnedExpr::Misc { type_, .. } => type_
+            ExprData::Identifier { r#type: type_, .. } => type_,
+            ExprData::Misc { r#type: type_, .. } => type_
         }
-    }
-}
-
-impl<'tree, 'a, T: HasExprType<'tree>> HasExprType<'tree> for Interned<'a, T> {
-    #[inline]
-    fn expr_type(&self) -> &ExprType<'tree> {
-        self.as_ref().expr_type()
     }
 }
 

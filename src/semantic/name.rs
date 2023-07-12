@@ -1,5 +1,5 @@
 use smol_str::SmolStr;
-use crate::semantic::ann::Ann;
+use crate::semantic::storage::ann::Ann;
 
 macro_rules! define_names {
     ($($(#[$attr:meta])* $NameOwned:ident $Name:ident $NameCow:ident $Ident:ident),+) => { $(
@@ -33,7 +33,6 @@ pub struct $Ident<'tree> {
     #[doc = "The name"]
     pub name: &'tree $Name,
 }
-$crate::impl_has_ann_record_struct!($Ident);
 $crate::impl_has_eqv_ident_struct!($Ident<'tree> { name; ann });
 
 impl $NameOwned {

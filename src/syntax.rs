@@ -11,8 +11,6 @@ pub mod nodes;
 /// Nominalscript syntax queries
 pub mod queries;
 mod package;
-/// tree-sitter-wrapper for types nodes, with custom `Tree` data
-pub mod tree_sitter_wrapper;
 
 lazy_static! {
     pub static ref PARSER: NiceMutex<Parser> =

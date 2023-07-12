@@ -52,17 +52,17 @@ macro_rules! impl_has_eqv_ident_struct_body {
 #[macro_export]
 macro_rules! impl_has_eqv_ident_struct {
     ($Name:ident < $A:ident > $($tt:tt)+) => {
-        impl<$A> $crate::misc::eqv_ident::HasEqvIdent for $Name<$A> {
+        impl<$A> $crate::misc::HasEqvIdent for $Name<$A> {
             $crate::impl_has_eqv_ident_struct_body!($($tt)+);
         }
     };
     ($Name:ident < $a:lifetime > $($tt:tt)+) => {
-        impl<$a> $crate::misc::eqv_ident::HasEqvIdent for $Name<$a> {
+        impl<$a> $crate::misc::HasEqvIdent for $Name<$a> {
             $crate::impl_has_eqv_ident_struct_body!($($tt)+);
         }
     };
     ($Name:ident $($tt:tt)+) => {
-        impl $crate::misc::eqv_ident::HasEqvIdent for $Name {
+        impl $crate::misc::HasEqvIdent for $Name {
             $crate::impl_has_eqv_ident_struct_body!($($tt)+);
         }
     };

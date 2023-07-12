@@ -15,11 +15,17 @@
       <sourceFolder url="file://$MODULE_DIR$/vendor/dependent-rebuilder/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vendor/dependent-rebuilder/macros/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vendor/dependent-rebuilder/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/btree-plus-store/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/btree-plus-store/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/btree-plus-store/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/rustc-arena-modified/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/rustc-arena-modified/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/vendor/tree-sitter-nominalscript/target" />
       <excludeFolder url="file://$MODULE_DIR$/vendor/patricia_tree/target" />
       <excludeFolder url="file://$MODULE_DIR$/vendor/dependent-rebuilder/target" />
       <excludeFolder url="file://$MODULE_DIR$/vendor/dependent-rebuilder/macros/target" />
+      <excludeFolder url="file://$MODULE_DIR$/vendor/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

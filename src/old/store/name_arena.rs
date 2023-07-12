@@ -9,7 +9,7 @@ use yak_sitter::Node;
 
 use crate::{error, issue};
 use crate::semantic::ann::Point;
-use crate::semantic::arena::{AnnArena, AnnArenaPhase, HasName};
+use crate::semantic::store::{AnnArena, AnnArenaPhase, HasName};
 
 /// An [AnnArena] which also has fast lookup and removal of values by their name (only in the proper
 /// phases), and logs *diagnostics* against insertion of multiple elements with the same name when

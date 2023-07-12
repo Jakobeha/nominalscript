@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 /// Iterator chain macro
 mod chain;
 /// Safely downcast types with lifetimes

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::fs::{copy, create_dir, create_dir_all, remove_dir_all};
 use std::iter::zip;
@@ -14,9 +15,11 @@ use walkdir::WalkDir;
 
 use crate::compiler::output::{FatalError, Output};
 use crate::misc::{PathPatriciaMap, ResultFilterErr};
-use crate::output::{FatalError, Output};
+use crate::package::Package;
 
 mod output;
+
+pub type Never = Infallible;
 
 pub struct Compiler {
     packages: BTreeMap<PathBuf, PackageCompiler>,
@@ -34,11 +37,13 @@ struct PackageCompiler {
 
 struct RecompileEventHandler(*mut IncrementalCompiler);
 
+unsafe impl Send for RecompileEventHandler {}
+
 type Debouncer = notify_debouncer_mini::Debouncer<RecommendedWatcher>;
 
 const WATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 const SRC_DIR_NAMES: [&'static str; 3] = ["src", "bin", "tests"];
-const OUR_DIR_NAME: &'static str = "out";
+const OUT_DIR_NAME: &'static str = "out";
 const NOMINALSCRIPT_EXTENSION: &'static str = "ns";
 
 impl Compiler {
@@ -67,7 +72,7 @@ impl IncrementalCompiler {
         Self::try_run(package_paths).unwrap_or_else(FatalError::exit)
     }
 
-    fn try_run(package_paths: impl IntoIterator<Item=PathBuf>) -> Result<!, FatalError> {
+    fn try_run(package_paths: impl IntoIterator<Item=PathBuf>) -> Result<Never, FatalError> {
         // Create a 'static pointer. Why leak? Because we're going to run this for the rest of the
         // program, there's no "exit and do something else"
         let ptr = Box::leak::<'static>(Box::new(MaybeUninit::<IncrementalCompiler>::uninit()));
@@ -253,7 +258,7 @@ mod tests {
 
     use test_log::test;
 
-    use crate::compiler::{Compiler, PackageCompiler, run};
+    use crate::compiler::{Compiler, PackageCompiler};
 
     /// Test the batch compiler
     #[test]

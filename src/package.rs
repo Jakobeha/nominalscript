@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::marker::PhantomData;
 use dependent_rebuilder::dependent_rebuilder;
+
 use crate::misc::PathPatriciaMap;
-use crate::semantic::ann::{Ann, HasAnn};
-use crate::semantic::arena::Interned;
 use crate::semantic::scope::Scope;
+use crate::semantic::storage::root_set::RootSet;
 use crate::syntax::nodes::ProgramTree;
 
 /// A package is a self-contained unit of files which depend on one another, and are compiled
@@ -54,32 +54,23 @@ pub struct Package {
 }
 
 pub type FileMap<T> = PathPatriciaMap<T>;
-pub trait SemanticNode<'tree> {
-    type Owned: HasAnn<'tree>;
-}
-impl<'tree, T> SemanticNode<'tree> for Interned<'tree, T> {
-    type Owned = T;
-}
-pub struct SemanticSet<'tree, V: SemanticNode<'tree>> {
-    repr: BTreeMap<Ann<'tree>, Box<V::Owned>>
-}
 
 pub struct PackageDefinitions<'tree> {
-    scopes: SemanticSet<'tree, Scope<'tree>>
+    scopes: RootSet<'tree, Scope<'tree>>
 }
 
 pub struct PackageExpressions<'tree> {
-
+    _p: PhantomData<&'tree ()>,
 }
 
 pub struct PackageTypeInference<'tree> {
-
+    _p: PhantomData<&'tree ()>,
 }
 
 pub struct PackageTypeCheck<'tree> {
-
+    _p: PhantomData<&'tree ()>,
 }
 
 pub struct PackageOutput<'tree> {
-
+    _p: PhantomData<&'tree ()>,
 }

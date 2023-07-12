@@ -1,34 +1,24 @@
-use std::cell::Cell;
-use std::cmp::Ordering;
-use std::ops::{Deref, DerefMut};
-use crate::{debug, note, impl_has_ann_enum, impl_has_ann_record_struct, warning};
-use crate::semantic::ann::{Ann, HasAnn};
-use crate::semantic::def::{OwnedTypeDef, OwnedValueDef, TypeDef, ValueDef};
-use crate::semantic::expr::{Expr, OwnedExpr, OwnedType, Type};
-pub use toplevel::*;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::semantic::arena::{AnnArena, Interned, NameArena};
-use crate::semantic::name::{TypeName, ValueName};
-use crate::semantic::SemanticPhase;
+use crate::semantic::storage::Id;
+use crate::semantic::storage::inner::InnerSet;
 
-mod toplevel;
+/// Package Scopes
+pub struct Scopes<'tree> {
+    root: Scope<'tree>,
+}
 
 /// e.g. toplevel scope, class scope, function scope
-pub type Scope<'tree> = Interned<'tree, OwnedScope<'tree>>;
-#[derive(Debug, MultiPhase)]
-#[phase(SemanticPhase)]
-pub struct OwnedScope<'tree> {
-    #[phase(Definitions)]
-    /// The scope node
-    pub ann: Ann<'tree>,
-    /// The parent scope
+pub type Scope<'tree> = Id<'tree, ScopeData<'tree>>;
+#[derive(Debug)]
+pub struct ScopeData<'tree> {
     parent: Option<Scope<'tree>>,
-    /// Ordered child scopes
-    children: Vec<Scope<'tree>>,
-    /// Ordered value definitions
-    value_defs: Vec<ValueDef<'tree>>,
-    /// Ordered type definitions
-    type_defs: Vec<TypeDef<'tree>>,
+    children: InnerSet<'tree, Scope<'tree>>,
+}
+
+/*
+    /// Immediate value definitions = values defined in this scope, not parent or children
+    value_defs: AnnSet<'tree, OwnedValueDef<'tree>>,
+    /// Immediate type definitions = types defined in this scope, not parent or children
+    type_defs: AnnSet<'tree, OwnedTypeDef<'tree>>,
     #[phase(Expressions)]
     /// Ordered value expressions
     exprs: Vec<Expr<'tree>>,
@@ -272,3 +262,4 @@ impl<'cycle, 'tree> Scope<'cycle, 'tree> {
         })
     }
 }
+*/

@@ -1,5 +1,5 @@
 pub use value::*;
-pub use type_::*;
+pub use r#type::*;
 
 mod value;
-mod type_;
+mod r#type;

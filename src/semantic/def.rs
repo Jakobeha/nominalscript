@@ -1,45 +1,33 @@
 use once_cell::unsync::OnceCell;
-use crate::analyses::bindings::{TypeName, ValueName};
-use crate::{impl_has_ann_record_struct, impl_has_name};
-use crate::semantic::ann::Ann;
-use crate::semantic::arena::{Interned, impl_has_name};
+use crate::impl_has_name;
+
 use crate::semantic::expr::{Expr, Type};
-use crate::semantic::name::{TypeIdent, ValueIdent};
+use crate::semantic::name::{TypeIdent, ValueIdent, ValueName, TypeName};
+use crate::semantic::storage::Id;
 
 /// Value declaration
-pub type ValueDef<'tree> = Interned<'tree, OwnedValueDef<'tree>>;
-/// Owned [ValueDef]
+pub type ValueDef<'tree> = Id<'tree, ValueDefData<'tree>>;
+/// [ValueDef] data
 #[derive(Debug)]
-// #[derive(MultiPhase)] #[phase(SemanticPhase)]
-pub struct OwnedValueDef<'tree> {
-    /// Source location
-    pub ann: Ann<'tree>,
+pub struct ValueDefData<'tree> {
     /// Identifier
     pub ident: ValueIdent<'tree>,
     /// Type
-    // #[phase(SemanticPhase::Expressions)]
     pub type_: OnceCell<Type<'tree>>,
     /// Initial value
-    // #[phase(SemanticPhase::Expressions)]
     pub init: OnceCell<Option<Expr<'tree>>>
 }
 
 /// Type declaration
-pub type TypeDef<'tree> = Interned<'tree, OwnedTypeDef<'tree>>;
-/// Owned [TypeDef]
+pub type TypeDef<'tree> = Id<'tree, TypeDefData<'tree>>;
+/// [TypeDef] data
 #[derive(Debug)]
-// #[derive(MultiPhase)] #[phase(SemanticPhase)]
-pub struct OwnedTypeDef<'tree> {
-    /// Source location
-    pub ann: Ann<'tree>,
+pub struct TypeDefData<'tree> {
     /// Identifier
     pub ident: TypeIdent<'tree>,
     /// Type this is defined as
-    // #[phase(SemanticPhase::Expressions)]
     pub value: OnceCell<Type<'tree>>
 }
 
-impl_has_name!(<'tree> &'tree ValueName for OwnedValueDef<'tree>);
-impl_has_name!(<'tree> &'tree TypeName for OwnedTypeDef<'tree>);
-impl_has_ann_record_struct!(OwnedValueDef);
-impl_has_ann_record_struct!(OwnedTypeDef);
+impl_has_name!(&'tree ValueName for ValueDefData<'tree>);
+impl_has_name!(&'tree TypeName for TypeDefData<'tree>);

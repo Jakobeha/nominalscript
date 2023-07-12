@@ -1,7 +1,7 @@
 use crate::semantic::def::{TypeDef, ValueDef};
 
 /// Value reference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ValueUse<'tree> {
     /// Referenced declaration
@@ -9,7 +9,7 @@ pub struct ValueUse<'tree> {
 }
 
 /// Type reference
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct TypeUse<'tree> {
     /// Referenced declaration

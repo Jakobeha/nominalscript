@@ -1,7 +1,6 @@
 use std::ops::Add;
 use std::process::exit;
 use thiserror::Error;
-use crate::import_export::import_resolver::ImportResolverCreateError;
 
 #[derive(Debug, Default)]
 pub struct Output {
@@ -15,8 +14,6 @@ pub enum FatalError {
     InvalidPackageRoot,
     #[error("Package path must be valid UTF-8, sorry")]
     InvalidPackagePath,
-    #[error("{0}")]
-    ImportResolverCreateError(#[from] ImportResolverCreateError),
     #[error("{0}")]
     NotifyError(#[from] notify_debouncer_mini::notify::Error),
     #[error("When {action}: {source}")]
