@@ -6,19 +6,19 @@ use std::hash::Hash;
 /// 2 semantic values in the same scope can't have the same name
 pub trait HasName<'tree> {
     /// The name type
-    type Name: Debug + Display + Eq + Hash;
+    type Name: Debug + Display + Eq + Hash + ?Sized;
     /// Get the name
     fn name(&self) -> &'tree Self::Name;
 }
 
 #[macro_export]
 macro_rules! impl_has_name {
-    (&$a:lifetime $Name:ident for $Ty:ty) => {
+    (<$a:lifetime> $Name:ident for $Ty:ty) => {
 impl<$a> $crate::semantic::storage::HasName<$a> for $Ty {
-    type Name = &$a $Name;
+    type Name = $Name;
 
-    fn name(&self) -> &Self::Name {
-        &self.ident.name
+    fn name(&self) -> &$a Self::Name {
+        self.ident.name
     }
 }
     }

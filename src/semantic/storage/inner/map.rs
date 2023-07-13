@@ -1,28 +1,24 @@
 use std::borrow::Borrow;
-use std::fmt::Display;
-
-use derivative::Derivative;
+use std::fmt::{Debug, Display};
 
 use btree_plus_store::{BTreeMap, BTreeStore};
 
-use crate::semantic::storage::{HasStore, Id};
+use crate::semantic::storage::HasStore;
 use crate::semantic::storage::ann::Ann;
 use crate::semantic::storage::inner::InnerSet;
 
 /// Map of semantic names to nodes inside another semantic node; an [InnerSet] where each node is
 /// uniqued by its name.
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
+#[derive(Debug)]
 pub struct InnerMap<'tree, K: ?Sized, V> {
     /// Underlying semantic set of nodes
     set: InnerSet<'tree, V>,
     /// Map of names to nodes
-    by_name: BTreeMap<'tree, &'tree K, Id<'tree, V>>,
+    by_name: BTreeMap<'tree, &'tree K, V>,
 }
 
 /// Error when a node is inserted into an [InnerMap] with a name that already exists
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
+#[derive(Debug)]
 pub struct DuplicateNode<'tree, K: ?Sized, V> {
     pub name: &'tree K,
     pub old: V,
@@ -46,15 +42,15 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
 
     /// Check if we have the name
     #[inline]
-    pub fn contains_name<Q: Ord + ?Sized>(&self, name: &Q) -> bool where K: Borrow<Q> {
+    pub fn contains_name<Q: Ord + ?Sized>(&self, name: &Q) -> bool where &'tree K: Borrow<Q> {
         self.by_name.contains_key(name)
     }
 
     /// Insert a node into the map. *Warns* if the node was already in the map. If a different node
     /// with the same name is present, replaces and returns an error with that node.
     #[inline]
-    pub fn insert(&mut self, name: &'tree K, node: V) -> Result<(), DuplicateNode<K, V>> where V: Copy {
-        self.set.insert(node);
+    pub fn insert(&mut self, name: &'tree K, node: V) -> Result<(), DuplicateNode<K, V>> where K: Ord, V: Debug + Clone + Eq {
+        self.set.insert(node.clone());
         match self.by_name.insert(name, node) {
             Some(old) if old != node => Err(DuplicateNode { name, old }),
             _ => Ok(()),
@@ -63,7 +59,7 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
 
     /// Remove the node with the name in the map. *Warns* if the name was not in the map.
     #[inline]
-    pub fn remove<Q: Display + Ord + ?Sized>(&mut self, name: &Q) {
+    pub fn remove<Q: Display + Ord + ?Sized>(&mut self, name: &Q) where &'tree K: Borrow<Q>, V: Debug {
         if let Some(node) = self.by_name.remove(name) {
             self.set.remove(&node);
         } else {
@@ -79,13 +75,13 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
 
     /// Get a reference to the node with the given name, or `None` if it doesn't exist
     #[inline]
-    pub fn by_name<Q: Ord + ?Sized>(&self, name: &Q) -> Option<&V> where K: Borrow<Q> {
+    pub fn by_name<Q: Ord + ?Sized>(&self, name: &Q) -> Option<&V> where &'tree K: Borrow<Q> {
         self.by_name.get(name)
     }
 
     /// Iterate over the nodes in the map
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item=&V> {
+    pub fn iter(&self) -> btree_plus_store::set::Iter<'_, V> {
         self.set.iter()
     }
 }

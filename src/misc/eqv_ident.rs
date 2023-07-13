@@ -36,11 +36,15 @@ macro_rules! impl_has_eqv_ident_struct_body {
         }
 
         fn hash_eqv<H: std::hash::Hasher>(&self, state: &mut H) {
+            #[allow(unused_imports)]
+            use std::hash::Hash;
             $( self.$eqv_field.hash(state); )*
             $($($( self.$eqv_field2.hash_eqv(state); )*)?)?
         }
 
         fn hash_identical<H: std::hash::Hasher>(&self, state: &mut H) {
+            #[allow(unused_imports)]
+            use std::hash::Hash;
             $( self.$eqv_field.hash(state); )*
             $($( self.$ident_field.hash(state); )*
             $($( self.$eqv_field2.hash_identical(state); )*

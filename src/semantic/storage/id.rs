@@ -36,7 +36,7 @@ impl<'tree, T> Id<'tree, T> {
     /// Get the annotation which identifies this semantic node.
     #[inline]
     pub fn ann(&self) -> &Ann<'tree> {
-        &self.0
+        &self.id
     }
 }
 

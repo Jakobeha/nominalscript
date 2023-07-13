@@ -4,6 +4,7 @@ pub use crate::type_sitter::nominalscript::nodes::*;
 /// Typed nominalscript syntax tree
 pub type ProgramTree = TypedTree<ProgramGAT>;
 /// GAT of [Program]
+#[derive(Debug)]
 pub struct ProgramGAT;
 
 impl TypedNodeGAT for ProgramGAT {

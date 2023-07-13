@@ -4,10 +4,12 @@ use std::ffi::OsStr;
 use std::fs::{copy, create_dir, create_dir_all, remove_dir_all};
 use std::iter::zip;
 use std::mem::MaybeUninit;
+use std::ops::RangeTo;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::thread::park;
 
+use join_lazy_fmt::Join;
 use notify_debouncer_mini::{DebouncedEvent, DebounceEventHandler, DebounceEventResult, new_debouncer};
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -48,14 +50,14 @@ const NOMINALSCRIPT_EXTENSION: &'static str = "ns";
 
 impl Compiler {
     pub fn run(package_paths: impl IntoIterator<Item=PathBuf>) -> ! {
-        exit(Self::try_new(package_paths).unwrap_or_else(FatalError::exit).run_batch())
+        exit(Self::try_new(package_paths).unwrap_or_else(|err| err.exit()).run_batch())
     }
 
     pub fn try_new(package_paths: impl IntoIterator<Item=PathBuf>) -> Result<Self, FatalError> {
         Ok(Self {
             packages: package_paths.into_iter().map(|path| {
                 PackageCompiler::try_new(path.clone()).map(|package| (path, package))
-            }).collect()?
+            }).collect::<Result<BTreeMap<PathBuf, PackageCompiler>, FatalError>>()?
         })
     }
 
@@ -68,8 +70,8 @@ impl Compiler {
 }
 
 impl IncrementalCompiler {
-    pub fn run(package_paths: impl IntoIterator<Item=PathBuf>) -> ! {
-        Self::try_run(package_paths).unwrap_or_else(FatalError::exit)
+    pub fn run(package_paths: impl IntoIterator<Item=PathBuf>) -> Never {
+        Self::try_run(package_paths).unwrap_or_else(|err| err.exit())
     }
 
     fn try_run(package_paths: impl IntoIterator<Item=PathBuf>) -> Result<Never, FatalError> {
@@ -87,8 +89,8 @@ impl IncrementalCompiler {
             RecompileEventHandler(ptr.as_mut_ptr())
         )?;
         // Have the debouncer watch for changes in package sources
-        for package in &compiler.packages {
-            debouncer.watcher().watch(package.path(), RecursiveMode::Recursive)?;
+        for path in compiler.packages.keys() {
+            debouncer.watcher().watch(path, RecursiveMode::Recursive)?;
         }
         // Of course, if either of the above fail we leak memory, but we're leaking anyways
         // Write fields and forget. Afterward, RecompileEventHandler can get a mutable reference
@@ -119,7 +121,7 @@ impl DebounceEventHandler for RecompileEventHandler {
                     ptr: &'a mut IncrementalCompiler
                 ) -> (&'a Path, &'a mut PackageCompiler) {
                     let (path, compiler) = ptr.compiler.packages
-                        .range_mut(..&event.path)
+                        .range_mut::<&PathBuf, RangeTo<&PathBuf>>(..&event.path)
                         .next_back()
                         .expect("File watcher returned event for unknown path");
                     // Since it's not obvious, the path should be the prefix because of
@@ -133,14 +135,17 @@ impl DebounceEventHandler for RecompileEventHandler {
                 // }
                 // ```
                 // But satisfies the borrow checker and only calls event_path once
-                let mut current_package = None;
+                let (mut current_path, mut current_package) = (None, None);
                 let mut current_idx = 0;
                 for idx in 0..events.len() {
                     let event = &events[idx];
-                    let package = event_package(event, ptr).1;
-                    if Some(package) != current_package {
+                    let (path, package) = event_package(event, ptr);
+                    if Some(path) != current_path {
+                        if let Some(old_package) = current_package {
+                            old_package.recompile(&events[current_idx..idx]);
+                        }
+                        current_path = Some(path);
                         current_package = Some(package);
-                        package.recompile(&events[current_idx..idx]);
                     }
                 }
             }

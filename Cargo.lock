@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "btree-plus-store"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "rustc-arena-modified",
  "smallvec",
@@ -781,6 +781,8 @@ dependencies = [
 [[package]]
 name = "rustc-arena-modified"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec6c2302b99e19a602578e01579ec1cec6ed62642f28499453a07cb803d59afe"
 dependencies = [
  "smallvec",
 ]

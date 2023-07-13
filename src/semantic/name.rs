@@ -36,136 +36,212 @@ pub struct $Ident<'tree> {
 $crate::impl_has_eqv_ident_struct!($Ident<'tree> { name; ann });
 
 impl $NameOwned {
-    pub fn new(name: impl Into<SmolStr>) -> Self {
-        let name = name.into();
-        assert!(!Self::RESERVED.contains(&name.as_str()), "Reserved {}: {}", stringify!($NameOwned), name);
-        Self(name.into())
+    #[inline]
+    pub fn new(str: impl Into<SmolStr>) -> Self {
+        let str = str.into();
+        assert!(!$Name::RESERVED.contains(&str.as_str()), "Reserved {}: {}", stringify!($Name), str);
+        Self(str)
     }
 
-    pub const fn new_inline(name: &'static str) -> Self {
-        // const_assert!(!Self::RESERVED.contains(&name));
-        Self(SmolStr::new_inline(name))
+    #[inline]
+    pub const fn new_inline(str: &'static str) -> Self {
+        // const_assert!(!$Name::RESERVED.contains(&str));
+        Self(SmolStr::new_inline(str))
     }
 
-    pub fn fresh(base_name: &Self, mut is_valid: impl FnMut(&Self) -> bool) -> Self {
-        Self::new(fresh_smol_str(base_name, |str| is_valid(Self::from_ref(str))))
-    }
-
-    fn from_ref(str: &SmolStr) -> &Self {
+    #[inline]
+    fn of(str: &SmolStr) -> &Self {
+        assert!(!$Name::RESERVED.contains(&str.as_str()), "Reserved {}: {}", stringify!($Name), str);
         // SAFETY: Same repr + transparent
         unsafe { &*(str as *const SmolStr as *const Self) }
     }
-}
 
-impl AsRef<str> for $NameOwned {
-    fn as_ref(&self) -> &str {
+    #[inline]
+    pub fn fresh(base_name: &Self, mut is_valid: impl FnMut(&Self) -> bool) -> Self {
+        Self::new(fresh_smol_str(
+            base_name,
+            |str| !$Name::RESERVED.contains(&str.as_str()) && is_valid(Self::of(str))
+        ))
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 }
 
+impl AsRef<str> for $NameOwned {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<$Name> for $NameOwned {
+    #[inline]
+    fn as_ref(&self) -> &$Name {
+        // Skip checking RESERVED, because we know it's valid
+        // SAFETY: Same repr + transparent
+        unsafe { &*(self.as_str() as *const str as *const $Name) }
+    }
+}
+
+impl std::borrow::Borrow<str> for $NameOwned {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl std::borrow::Borrow<$Name> for $NameOwned {
+    #[inline]
     fn borrow(&self) -> &$Name {
-        $Name::of(self)
+        // Skip checking RESERVED, because we know it's valid
+        // SAFETY: Same repr + transparent
+        unsafe { &*(self.as_str() as *const str as *const $Name) }
     }
 }
 
 impl PartialEq<$Name> for $NameOwned {
+    #[inline]
     fn eq(&self, other: &$Name) -> bool {
-        self.as_ref() == other.as_ref()
+        self.as_str() == other.as_str()
     }
 }
 
 impl PartialOrd<$Name> for $NameOwned {
+    #[inline]
     fn partial_cmp(&self, other: &$Name) -> Option<std::cmp::Ordering> {
-        self.as_ref().partial_cmp(other.as_ref())
+        self.as_str().partial_cmp(other.as_str())
     }
 }
 
 impl std::fmt::Display for $NameOwned {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
 impl $Name {
-    pub const fn of_str(s: &str) -> &Self {
+    #[inline]
+    pub const fn of_str(str: &str) -> &Self {
+        assert!(!$Name::RESERVED.contains(&str), "Reserved {}: {}", stringify!($Name), str);
         // SAFETY: Same repr + transparent
-        unsafe { &*(s as *const str as *const Self) }
+        unsafe { &*(str as *const str as *const Self) }
     }
 
-    pub fn of(s: &(impl AsRef<str> + ?Sized)) -> &Self {
-        Self::of_str(s.as_ref())
+    #[inline]
+    pub fn of(str: &(impl AsRef<str> + ?Sized)) -> &Self {
+        Self::of_str(str.as_ref())
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        // SAFETY: Same repr + transparent
+        unsafe { &*(self as *const Self as *const str) }
     }
 }
 
 impl<'a> From<&'a str> for &'a $Name {
-    fn from(s: &'a str) -> Self {
-        $Name::of(s)
+    #[inline]
+    fn from(str: &'a str) -> Self {
+        $Name::of(str)
     }
 }
 
 impl<'a> From<&'a $NameOwned> for &'a $Name {
-    fn from(s: &'a $NameOwned) -> Self {
-        Self::from(s.as_ref())
+    #[inline]
+    fn from(str: &'a $NameOwned) -> Self {
+        $Name::of(str)
     }
 }
 
 impl AsRef<str> for $Name {
+    #[inline]
     fn as_ref(&self) -> &str {
-        // SAFETY: Same repr + transparent
-        unsafe { &*(self as *const Self as *const str) }
+        self.as_str()
     }
 }
 
 impl ToOwned for $Name {
     type Owned = $NameOwned;
 
+    #[inline]
     fn to_owned(&self) -> Self::Owned {
+        // Skip checking RESERVED, because we know it's valid
         $NameOwned(SmolStr::new(self))
     }
 }
 
 impl PartialEq<$NameOwned> for $Name {
+    #[inline]
     fn eq(&self, other: &$NameOwned) -> bool {
-        self.as_ref() == other.as_ref()
+        self.as_str() == other.as_str()
     }
 }
 
 impl PartialOrd<$NameOwned> for $Name {
+    #[inline]
     fn partial_cmp(&self, other: &$NameOwned) -> Option<std::cmp::Ordering> {
-        self.as_ref().partial_cmp(other.as_ref())
+        self.as_str().partial_cmp(other.as_str())
     }
 }
 
 impl std::fmt::Display for $Name {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
 impl<'tree> $Ident<'tree> {
+    #[inline]
     pub const fn of_str(ann: Ann<'tree>, name: &'tree str) -> Self {
         Self { ann, name: $Name::of_str(name) }
     }
 
+    #[inline]
     pub fn of(ann: Ann<'tree>, name: &'tree (impl AsRef<str> + ?Sized)) -> Self {
         Self::of_str(ann, name.as_ref())
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        self.name.as_str()
     }
 }
 
 impl<'tree> AsRef<str> for $Ident<'tree> {
+    #[inline]
     fn as_ref(&self) -> &str {
-        self.name.as_ref()
+        self.as_str()
+    }
+}
+
+impl<'tree> AsRef<$Name> for $Ident<'tree> {
+    #[inline]
+    fn as_ref(&self) -> &$Name {
+        self.name
+    }
+}
+
+impl<'tree> std::borrow::Borrow<str> for $Ident<'tree> {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
 impl<'tree> std::borrow::Borrow<$Name> for $Ident<'tree> {
+    #[inline]
     fn borrow(&self) -> &$Name {
         self.name
     }
 }
 
 impl<'tree> std::fmt::Display for $Ident<'tree> {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.name.fmt(f)
     }
@@ -199,13 +275,11 @@ impl TypeName {
 
     /// Reserved type names which should never be identifiers. Some of these may be valid types,
     /// like `Any`, just not [crate::semantic::expr::TypeIdentifier]s.
-    pub const RESERVED: [&'static Self; 6] = [
-        Self::of_str("Any"),
-        Self::of_str("Never"),
-        Self::of_str("Null"),
-        Self::of_str("Void"),
-        Self::MISSING,
-        Self::DUMMY_FOR_HOLE,
+    pub const RESERVED: [&'static str; 4] = [
+        "Any",
+        "Never",
+        "Null",
+        "Void",
     ];
 
     /// Gets the type of a number literal, if it's a valid number literal.
@@ -237,12 +311,12 @@ impl<'tree> TypeIdent<'tree> {
 
 impl ValueName {
     /// Reserved value names which should never be identifiers
-    pub const RESERVED: [&'static Self; 0] = [];
+    pub const RESERVED: [&'static str; 0] = [];
 }
 
 impl FieldName {
     /// Reserved field names which should never be identifiers
-    pub const RESERVED: [&'static Self; 0] = [];
+    pub const RESERVED: [&'static str; 0] = [];
 }
 
 fn fresh_smol_str(base_name: impl AsRef<str>, mut is_valid: impl FnMut(&SmolStr) -> bool) -> SmolStr {

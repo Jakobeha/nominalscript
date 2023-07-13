@@ -29,5 +29,5 @@ pub struct TypeDefData<'tree> {
     pub value: OnceCell<Type<'tree>>
 }
 
-impl_has_name!(&'tree ValueName for ValueDefData<'tree>);
-impl_has_name!(&'tree TypeName for TypeDefData<'tree>);
+impl_has_name!(<'tree> ValueName for ValueDefData<'tree>);
+impl_has_name!(<'tree> TypeName for TypeDefData<'tree>);

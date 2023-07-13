@@ -23,7 +23,7 @@ clap = { version = "4.1.8", features = ["derive"] }
 thiserror = "1.0.38"
 auto_enums = "0.8.0"
 # Rust data-structures
-btree-plus-store = { path = "vendor/btree-plus-store", features = ["copyable"], version = "0.2.1" }
+btree-plus-store = { path = "vendor/btree-plus-store", features = ["copyable"], version = "0.3.0" }
 dependent-rebuilder = { path = "vendor/dependent-rebuilder", version = "0.1.0" }
 patricia_tree = "0.6.1"
 roaring = "0.10.1"

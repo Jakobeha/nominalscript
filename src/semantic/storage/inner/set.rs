@@ -57,7 +57,7 @@ impl<'tree, T> InnerSet<'tree, T> {
 
     /// Iterate over the nodes in the set
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item=&T> {
+    pub fn iter(&self) -> btree_plus_store::set::Iter<'_, T> {
         self.inner.iter()
     }
 }

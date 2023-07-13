@@ -172,7 +172,7 @@ pub enum Optionality {
     Required,
 }
 
-impl_has_name!(&'tree FieldName for FieldTypeData<'tree>);
+impl_has_name!(<'tree> FieldName for FieldTypeData<'tree>);
 
 impl Variance {
     /// Returns the variance which is or isn't covariant and contravariant according to the args,

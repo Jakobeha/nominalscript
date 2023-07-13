@@ -4,7 +4,6 @@ use std::iter::{empty, once, zip};
 use std::path::Path;
 
 use auto_enums::auto_enum;
-use streaming_iterator::StreamingIterator;
 use yak_sitter::{Node, Range};
 use btree_plus_store::copyable::BTreeSet;
 
@@ -55,7 +54,7 @@ pub type DerivedNodeSet<'tree> = BTreeSet<'tree, Node<'tree>>;
 
 impl<'tree> Ann<'tree> {
     /// Source location(s) AKA syntax nodes this semantic node was created from, in lexicographic order
-    #[auto_enum]
+    #[auto_enum(DoubleEndedIterator)]
     pub fn sources(&self) -> impl DoubleEndedIterator<Item=&Node<'tree>> + '_ {
         match self {
             Self::Intrinsic => empty(),
@@ -93,7 +92,7 @@ impl<'tree> Ann<'tree> {
 
     /// Source location ranges for error reporting.
     #[inline]
-    pub fn ranges(&self) -> impl DoubleEndedIterator<Item=Range> {
+    pub fn ranges(&self) -> impl DoubleEndedIterator<Item=Range> + '_ {
         self.sources().map(|source| source.range())
     }
 
@@ -127,7 +126,7 @@ impl<'tree> PartialOrd for Ann<'tree> {
 impl<'tree> Ord for Ann<'tree> {
     fn cmp(&self, other: &Self) -> Ordering {
         zip(self.sources(), other.sources())
-            .map(Node::cmp)
+            .map(|(lhs, rhs)| lhs.cmp(rhs))
             .fold(Ordering::Equal, Ordering::then)
             .then(self.num_sources().cmp(&other.num_sources()))
     }

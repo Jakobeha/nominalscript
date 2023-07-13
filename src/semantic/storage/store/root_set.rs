@@ -10,7 +10,7 @@ use crate::semantic::storage::ann::Ann;
 use crate::semantic::storage::id::RootSetId;
 
 /// Collection of semantic nodes of a specific type in a package.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootSet<'tree, Data> {
     pub(in crate::semantic::storage) data: HashMap<Ann<'tree>, Data>,
     pub(in crate::semantic::storage) id: RootSetId,
@@ -74,7 +74,7 @@ impl<'tree, Data> RootSet<'tree, Data> {
 
     /// Iterate over the semantic nodes (identifiers and data) in the set
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = Id<'tree, Data>> {
+    pub fn iter(&self) -> impl Iterator<Item = Id<'tree, Data>> + '_ {
         self.data.iter().map(|(ann, data)| Id {
             id: *ann,
             owner: self.id,
@@ -129,7 +129,7 @@ impl<'a, 'tree, Data> Index<&'a Id<'tree, Data>> for RootSet<'tree, Data> {
                     // Cache is up to date, return it
                     // SAFETY: Eq owner, eq generation, and frozen means that the map didn't mutate
                     // since the pointer was set, and the map's pointers are stable sans mutation.
-                    unsafe { &*cached }
+                    unsafe { cached.as_ref() }
                 }
                 Ordering::Greater => {
                     // Cache is from the future, this is a bug

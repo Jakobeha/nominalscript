@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use once_cell::sync::OnceCell;
 
 use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
@@ -31,13 +31,13 @@ pub enum ExprData<'tree> {
 #[derive(Debug)]
 pub struct ExprType<'tree> {
     /// The type this expression **is**
-    assigned: Cell<Option<Type<'tree>>>,
+    assigned: OnceCell<Type<'tree>>,
     /// The type this expression **must be assigned** or there is a type error.
     ///
     /// If [CheckTypeAt::CompileTime], the assigned type must be a subtype of the required type.
     /// If [CheckTypeAt::Runtime], the assigned type must only be bivariant (either can be a
     /// subtype), and if its not a subtype, we will insert a guard at runtime.
-    required: Cell<Option<(Type<'tree>, CheckTypeAt)>>
+    required: OnceCell<(Type<'tree>, CheckTypeAt)>
 }
 
 /// When the subtype relation is checked: whether the `assigned` type must be a subtype of the
@@ -55,21 +55,21 @@ impl<'tree> ExprData<'tree> {
     #[inline]
     pub fn expr_type(&self) -> &ExprType<'tree> {
         match self {
-            ExprData::Identifier { r#type: type_, .. } => type_,
-            ExprData::Misc { r#type: type_, .. } => type_
+            ExprData::Identifier { r#type, .. } => r#type,
+            ExprData::Misc { r#type, .. } => r#type
         }
     }
 }
 
 impl<'tree> ExprType<'tree> {
     /// The type this expression **is**
-    pub fn assigned(&self) -> Option<Type<'tree>> {
+    pub fn assigned(&self) -> Option<&Type<'tree>> {
         self.assigned.get()
     }
 
     /// The type this expression **must be assigned at compile-time** or there is a type error
-    pub fn required(&self) -> Option<Type<'tree>> {
-        self.required.get().filter(|_, c| match c {
+    pub fn required(&self) -> Option<&Type<'tree>> {
+        self.required.get().filter(|(_, c)| match c {
             CheckTypeAt::CompileTime => true,
             CheckTypeAt::Runtime => false
         }).map(|(t, _)| t)
@@ -80,53 +80,39 @@ impl<'tree> ExprType<'tree> {
     /// means there are no valid assignments), and if `assigned` is not a subtype of `required`,
     /// the compiler will insert a runtime guard to check instances are instances of `required` at
     /// runtime.
-    pub fn runtime_required(&self) -> Option<Type<'tree>> {
-        self.required.get().filter(|_, c| match c {
+    pub fn runtime_required(&self) -> Option<&Type<'tree>> {
+        self.required.get().filter(|(_, c)| match c {
             CheckTypeAt::CompileTime => false,
             CheckTypeAt::Runtime => true
         }).map(|(t, _)| t)
     }
 
-    /// Set the type this expression **is**. If already assigned, logs an error and assigns to the
-    /// type intersection.
-    pub fn assign(&self, type_: Type<'tree>) {
-        self.assigned.set(Some(match self.assigned.get() {
-            None => type_,
-            Some(old_type) => {
-                log::error!("Type already assigned to expression: {:?}, {:?}, {:?}", self, old_type, type_);
-                old_type & type_
-            }
-        }))
+    /// Set the type this expression **is**. *Warns* if already assigned.
+    pub fn assign(&self, r#type: Type<'tree>) {
+        if let Err((real_type, r#type)) = self.assigned.try_insert(r#type) {
+            log::warn!("Type already assigned to expression: {:?}. Tried to assign {:?} but won't because it already has {:?}", self, r#type, real_type);
+        }
     }
 
-    /// Set the type this expression **must be assigned at compile-time**. If already required, logs
-    /// an error and requires the type intersection. If runtime-required, **panics**.
-    pub fn require(&self, type_: Type<'tree>) {
-        self.required.set(Some((match self.required.get() {
-            None => type_,
-            Some((old_type, CheckTypeAt::CompileTime)) => {
-                log::error!("Type already required for expression: {:?}, {:?}, {:?}", self, old_type, type_);
-                old_type & type_
+    /// Set the type this expression **must be assigned at compile-time**. *Warns* if already
+    /// required, and *warns* again if already runtime required.
+    pub fn require(&self, r#type: Type<'tree>) {
+        if let Err(((real_type, real_check_type), (r#type, _))) = self.required.try_insert((r#type, CheckTypeAt::CompileTime)) {
+            log::warn!("Type already required for expression: {:?}. Tried to compile-time require {:?} but won't because it already requires {:?}", self, r#type, real_type);
+            if !matches!(real_check_type, CheckTypeAt::CompileTime) {
+                log::warn!("Cannot require type at compile-time and runtime: in {:?}, {:?} required at runtime, then {:?} required at compile time", self, real_type, r#type);
             }
-            Some((old_type, CheckTypeAt::Runtime)) => {
-                panic!("Cannot require type at runtime and compile-time: {:?}, {:?}, {:?}", self, old_type, type_);
-            }
-        }, CheckTypeAt::CompileTime)))
+        }
     }
 
-    /// Set the type this expression **must be an instance of at runtime**. If already runtime-
-    /// required, logs an error and runtime-requires the type intersection. If compile-time
-    /// required, **panics**.
-    pub fn runtime_require(&self, type_: Type<'tree>) {
-        self.required.set(Some((match self.required.get() {
-            None => type_,
-            Some((old_type, CheckTypeAt::CompileTime)) => {
-                panic!("Cannot require type at compile-time and runtime: {:?}, {:?}, {:?}", self, old_type, type_);
-            },
-            Some((old_type, CheckTypeAt::Runtime)) => {
-                log::error!("Type already runtime-required for expression: {:?}, {:?}, {:?}", self, old_type, type_);
-                old_type & type_
+    /// Set the type this expression **must be an instance of at runtime**. *Warns* if already
+    /// required, and *warns* again if already compile-time required.
+    pub fn runtime_require(&self, r#type: Type<'tree>) {
+        if let Err(((real_type, real_check_type), (r#type, _))) = self.required.try_insert((r#type, CheckTypeAt::Runtime)) {
+            log::warn!("Type already required for expression: {:?}. Tried to runtime require {:?} but won't because it already requires {:?}", self, r#type, real_type);
+            if !matches!(real_check_type, CheckTypeAt::Runtime) {
+                log::warn!("Cannot require type at compile-time and runtime: in {:?}, {:?} required at compile-time, then {:?} required at runtime", self, real_type, r#type);
             }
-        }, CheckTypeAt::CompileTime)))
+        }
     }
 }

@@ -1,8 +1,6 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 
-use derivative::Derivative;
-
 use btree_plus_store::{BTreeMap, BTreeStore};
 
 use crate::semantic::storage::HasStore;
@@ -12,8 +10,7 @@ use crate::semantic::storage::ann::Ann;
 /// identifiers, the nodes' data is stored in the [RootSet]; furthermore, the set also allocates
 /// memory in an external, root store. See [InnerSet] for more, the only difference is that this is
 /// ordered, and it still can't contain duplicates.
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
+#[derive(Debug)]
 pub struct InnerVec<'tree, T> {
     /// Unordered set, for fast `contains` and `position`
     set: BTreeMap<'tree, T, usize>,
@@ -33,23 +30,23 @@ impl<'tree, T> InnerVec<'tree, T> {
 
     /// Check if we have the node
     #[inline]
-    pub fn contains(&self, node: &T) -> bool {
+    pub fn contains(&self, node: &T) -> bool where T: Ord {
         self.set.contains_key(node)
     }
 
     /// Get the index of the node, if we have it
     #[inline]
-    pub fn position(&self, node: &T) -> Option<usize> {
+    pub fn position(&self, node: &T) -> Option<usize> where T: Ord {
         self.set.get(node).copied()
     }
 
     /// Insert a node at the end. *Warns* if the node was already in the set.
     #[inline]
-    pub fn push(&mut self, node: T) where T: Debug + Copy {
+    pub fn push(&mut self, node: T) where T: Debug + Clone + Ord {
         debug_assert_eq!(self.set.len(), self.order.len(), "InnerVec broken invariant: set and order have different lengths");
         let index = self.set.len();
-        if self.set.insert(node, index) {
-            let true = self.order.insert(index, node) else {
+        if self.set.insert(node.clone(), index).is_none() {
+            let None = self.order.insert(index, node) else {
                 unreachable!("InnerVec broken invariant: inserted index {} twice", index);
             };
         } else {
@@ -60,16 +57,16 @@ impl<'tree, T> InnerVec<'tree, T> {
     /// Insert a node at the given index. *Warns* if the node was already in the set. *Panics* if
     /// the index is out of bounds.
     #[inline]
-    pub fn insert(&mut self, node: T, index: usize) where T: Debug + Copy {
+    pub fn insert(&mut self, node: T, index: usize) where T: Debug + Clone + Ord {
         assert!(index <= self.set.len(), "index out of bounds");
-        if self.set.contains_key(node) {
+        if self.set.contains_key(node.clone()) {
             log::warn!("inserted node {:?} into InnerVec (an ordered set) twice", node);
         } else {
             self.increment_indices_at_and_after(index);
-            let true = self.set.insert(node, index) else {
+            let None = self.set.insert(node.clone(), index) else {
                 unreachable!()
             };
-            let true = self.order.insert(index, node) else {
+            let None = self.order.insert(index, node) else {
                 unreachable!("InnerVec broken invariant: inserted index {} twice", index);
             };
         }
@@ -77,7 +74,7 @@ impl<'tree, T> InnerVec<'tree, T> {
 
     /// Remove a node from the set. *Warns* if the node was not in the set.
     #[inline]
-    pub fn remove(&mut self, node: &T) where T: Debug + Eq {
+    pub fn remove(&mut self, node: &T) where T: Debug + Clone + Ord {
         if let Some(index) = self.set.remove(node) {
             let Some(node2) = self.order.remove(&index) else {
                 unreachable!("InnerVec broken invariant: T->usize has an entry with no corresponding usize->T");
@@ -92,17 +89,17 @@ impl<'tree, T> InnerVec<'tree, T> {
     /// Remove and return the node from the set at the specified index. *Panics* if the index is out
     /// of bounds
     #[inline]
-    pub fn remove_at(&mut self, index: usize) -> T {
+    pub fn remove_at(&mut self, index: usize) -> T where T: Debug + Clone + Ord {
         assert!(index < self.order.len(), "index out of bounds");
-        let Some(item) = self.order.remove(index) else {
+        let Some(node) = self.order.remove(&index) else {
             unreachable!("InnerVec broken invariant: missing index {}", index);
         };
-        let Some(index2) = self.order.remove(&index) else {
+        let Some(index2) = self.set.remove(&node) else {
             unreachable!("InnerVec broken invariant: usize->T has an entry with no corresponding T->usize");
         };
         debug_assert_eq!(index, index2, "InnerVec broken invariant: usize->T and T->usize are out of sync");
         self.decrement_indices_after(index);
-        item
+        node
     }
 
     /// Get the index and a reference to the node at the given annotation, or `None` if the node
@@ -121,7 +118,7 @@ impl<'tree, T> InnerVec<'tree, T> {
     /// Increment the indices after `index`. This is called before inserting at `index` to keep the
     /// indices contiguous and in sync with the order.
     #[inline]
-    fn increment_indices_at_and_after(&mut self, index: usize) {
+    fn increment_indices_at_and_after(&mut self, index: usize) where T: Ord {
         for i in index..self.order.len() {
             let Some(node) = self.order.remove(&i) else {
                 unreachable!("InnerVec broken invariant: missing subsequent index to increment {}", i);
@@ -137,7 +134,7 @@ impl<'tree, T> InnerVec<'tree, T> {
     /// Decrement the indices after `index`. This is called after removing at `index` to keep the
     /// indices contiguous and in sync with the order.
     #[inline]
-    fn decrement_indices_after(&mut self, index: usize) {
+    fn decrement_indices_after(&mut self, index: usize) where T: Ord {
         for i in index..self.order.len() {
             let Some(node) = self.order.remove(&(i + 1)) else {
                 unreachable!("InnerVec broken invariant: missing subsequent index to decrement {}", i);
