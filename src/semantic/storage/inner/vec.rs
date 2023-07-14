@@ -21,7 +21,7 @@ pub struct InnerVec<'tree, T> {
 impl<'tree, T> InnerVec<'tree, T> {
     /// Create a new, empty set
     #[inline]
-    pub fn new_in(store: impl HasStore<'tree, BTreeStore<usize, T>> + HasStore<'tree, BTreeStore<T, usize>>) -> Self {
+    pub fn new_in(store: &(impl HasStore<'tree, BTreeStore<usize, T>> + HasStore<'tree, BTreeStore<T, usize>>)) -> Self {
         Self {
             set: BTreeMap::new_in(store.inner_store()),
             order: BTreeMap::new_in(store.inner_store()),
@@ -59,7 +59,7 @@ impl<'tree, T> InnerVec<'tree, T> {
     #[inline]
     pub fn insert(&mut self, node: T, index: usize) where T: Debug + Clone + Ord {
         assert!(index <= self.set.len(), "index out of bounds");
-        if self.set.contains_key(node.clone()) {
+        if self.set.contains_key(&node) {
             log::warn!("inserted node {:?} into InnerVec (an ordered set) twice", node);
         } else {
             self.increment_indices_at_and_after(index);
@@ -123,10 +123,10 @@ impl<'tree, T> InnerVec<'tree, T> {
             let Some(node) = self.order.remove(&i) else {
                 unreachable!("InnerVec broken invariant: missing subsequent index to increment {}", i);
             };
-            self.order.insert(i + 1, node);
             let Some(i2) = self.set.get_mut(&node) else {
                 unreachable!("InnerVec broken invariant: T->usize has an entry with no corresponding usize->T (for subsequent index to increment {})", i);
             };
+            self.order.insert(i + 1, node);
             debug_assert_eq!(i, *i2, "InnerVec broken invariant: T->usize and usize->T are out of sync (for subsequent index to increment {})", i);
             *i2 = i + 1;
         }
@@ -139,10 +139,10 @@ impl<'tree, T> InnerVec<'tree, T> {
             let Some(node) = self.order.remove(&(i + 1)) else {
                 unreachable!("InnerVec broken invariant: missing subsequent index to decrement {}", i);
             };
-            self.order.insert(i, node);
             let Some(i2) = self.set.get_mut(&node) else {
                 unreachable!("InnerVec broken invariant: T->usize has an entry with no corresponding usize->T (for subsequent index to decrement {})", i);
             };
+            self.order.insert(i, node);
             debug_assert_eq!(i + 1, *i2, "InnerVec broken invariant: T->usize and usize->T are out of sync (for subsequent index to decrement {})", i);
             *i2 = i;
         }

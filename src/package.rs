@@ -1,7 +1,10 @@
+use std::io;
 use std::marker::PhantomData;
+use std::path::Path;
 use dependent_rebuilder::dependent_rebuilder;
-
+use crate::compiler::Output;
 use crate::misc::PathPatriciaMap;
+
 use crate::semantic::scope::Scope;
 use crate::semantic::storage::root_set::RootSet;
 use crate::syntax::nodes::ProgramTree;
@@ -53,6 +56,8 @@ pub struct Package {
     output: PackageOutput
 }
 
+unsafe impl Send for Package {}
+
 pub type FileMap<T> = PathPatriciaMap<T>;
 
 pub struct PackageDefinitions<'tree> {
@@ -73,4 +78,25 @@ pub struct PackageTypeCheck<'tree> {
 
 pub struct PackageOutput<'tree> {
     _p: PhantomData<&'tree ()>,
+}
+
+pub struct FileOutput {
+
+}
+
+impl Package {
+    pub fn build(paths: impl Iterator<Item=impl AsRef<Path>>, output: &mut Output) -> Package {
+        todo!()
+    }
+
+    pub fn outputs(&self) -> impl Iterator<Item=(&Path, &FileOutput)> {
+        todo!();
+        std::iter::empty()
+    }
+}
+
+impl FileOutput {
+    pub fn write_to_file(&self, path: &Path) -> io::Result<()> {
+        todo!()
+    }
 }

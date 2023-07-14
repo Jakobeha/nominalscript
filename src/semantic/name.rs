@@ -43,9 +43,11 @@ impl $NameOwned {
         Self(str)
     }
 
+    /// # Safety
+    /// Can't pass a reserved string; unlike `new` this isn't checked
     #[inline]
-    pub const fn new_inline(str: &'static str) -> Self {
-        // const_assert!(!$Name::RESERVED.contains(&str));
+    pub const unsafe fn new_inline(str: &'static str) -> Self {
+        // const_assert!(!$Name::RESERVED.contains(&str.as_str()), "Reserved {}: {}", stringify!($Name), str);
         Self(SmolStr::new_inline(str))
     }
 
@@ -125,10 +127,19 @@ impl std::fmt::Display for $NameOwned {
 
 impl $Name {
     #[inline]
-    pub const fn of_str(str: &str) -> &Self {
+    pub fn of_str(str: &str) -> &Self {
+        // const_assert!(!$Name::RESERVED.contains(&str.as_str()), "Reserved {}: {}", stringify!($Name), str);
         assert!(!$Name::RESERVED.contains(&str), "Reserved {}: {}", stringify!($Name), str);
         // SAFETY: Same repr + transparent
         unsafe { &*(str as *const str as *const Self) }
+    }
+
+    /// # Safety
+    /// Can't pass a reserved string; unlike `of_str` this isn't checked
+    #[inline]
+    pub const unsafe fn of_str_const(str: &str) -> &Self {
+        // SAFETY: Same repr + transparent
+        &*(str as *const str as *const Self)
     }
 
     #[inline]
@@ -197,8 +208,15 @@ impl std::fmt::Display for $Name {
 
 impl<'tree> $Ident<'tree> {
     #[inline]
-    pub const fn of_str(ann: Ann<'tree>, name: &'tree str) -> Self {
+    pub fn of_str(ann: Ann<'tree>, name: &'tree str) -> Self {
         Self { ann, name: $Name::of_str(name) }
+    }
+
+    /// # Safety
+    /// Can't pass a reserved string; unlike `of_str` this isn't checked
+    #[inline]
+    pub const unsafe fn of_str_const(ann: Ann<'tree>, name: &'tree str) -> Self {
+        Self { ann, name: $Name::of_str_const(name) }
     }
 
     #[inline]
@@ -260,18 +278,18 @@ FieldNameOwned FieldName FieldNameCow FieldIdent
 
 impl TypeNameOwned {
     /// Name to substitute for missing types, should never actually appear in code
-    pub const MISSING: TypeNameOwned = TypeNameOwned::new_inline("__Missing");
+    pub const MISSING: TypeNameOwned = unsafe { TypeNameOwned::new_inline("__Missing") };
     /// Name to substitute for hole types when you need some AST representation, should never
     /// actually appear in code
-    pub const DUMMY_FOR_HOLE: TypeNameOwned = TypeNameOwned::new_inline("__Hole");
+    pub const DUMMY_FOR_HOLE: TypeNameOwned = unsafe { TypeNameOwned::new_inline("__Hole") };
 }
 
 impl TypeName {
     /// Name to substitute for missing types, should never actually appear in code
-    pub const MISSING: &'static Self = Self::of_str("__Missing");
+    pub const MISSING: &'static Self = unsafe { Self::of_str_const("__Missing") };
     /// Name to substitute for hole types when you need some AST representation, should never
     /// actually appear in code
-    pub const DUMMY_FOR_HOLE: &'static Self = Self::of_str("__Hole");
+    pub const DUMMY_FOR_HOLE: &'static Self = unsafe { Self::of_str_const("__Hole") };
 
     /// Reserved type names which should never be identifiers. Some of these may be valid types,
     /// like `Any`, just not [crate::semantic::expr::TypeIdentifier]s.

@@ -6,6 +6,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(wasi)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+use camino::Utf8Path;
 
 use patricia_tree::{GenericPatriciaMap, PatriciaMap};
 use patricia_tree::map::{Values, ValuesMut};
@@ -66,6 +67,12 @@ impl<V> PathPatriciaMap<V> {
             None => Err(NonUtf8PathError { value }),
             Some(s) => Ok(self.0.insert(s.as_bytes(), value)),
         }
+    }
+
+    /// Inserts a key-value pair into this map. This will always succeed because the path is
+    /// guaranteed to be UTF-8.
+    pub fn insert_utf8<Q: AsRef<Utf8Path>>(&mut self, key: Q, value: V) -> Option<V> {
+        self.0.insert(key.as_ref().as_str().as_bytes(), value)
     }
 }
 
@@ -417,5 +424,23 @@ impl<V> Iterator for IntoIter<V> {
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()
+    }
+}
+
+impl<K: AsRef<Utf8Path>, V> Extend<(K, V)> for PathPatriciaMap<V> {
+    #[inline]
+    fn extend<T: IntoIterator<Item=(K, V)>>(&mut self, iter: T) {
+        for (k, v) in iter {
+            self.insert_utf8(k.as_ref(), v);
+        }
+    }
+}
+
+impl<K: AsRef<Utf8Path>, V> FromIterator<(K, V)> for PathPatriciaMap<V> {
+    #[inline]
+    fn from_iter<T: IntoIterator<Item=(K, V)>>(iter: T) -> Self {
+        let mut map = Self::new();
+        map.extend(iter);
+        map
     }
 }

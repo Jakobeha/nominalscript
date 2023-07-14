@@ -19,7 +19,7 @@ impl SyntaxPackage {
     /// Add syntax to a specified path. **Panics** if already added at the path.
     pub fn add(&mut self, path: PathBuf, parsed: ProgramTree) {
         let None = self.files.insert(path, parsed) else {
-            panic!("Syntax already added at path: {}", path.display());
+            panic!("Syntax already added at path");
         };
     }
 

@@ -27,7 +27,7 @@ pub struct DuplicateNode<'tree, K: ?Sized, V> {
 impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
     /// Create a new, empty map
     #[inline]
-    pub fn new_in(store: impl HasStore<'tree, BTreeStore<V, ()>> + HasStore<'tree, BTreeStore<&'tree K, V>>) -> Self {
+    pub fn new_in(store: &(impl HasStore<'tree, BTreeStore<V, ()>> + HasStore<'tree, BTreeStore<&'tree K, V>>)) -> Self {
         Self {
             set: InnerSet::new_in(store),
             by_name: BTreeMap::new_in(store.inner_store()),
@@ -36,7 +36,7 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
 
     /// Check if we have the node
     #[inline]
-    pub fn contains(&self, node: &V) -> bool {
+    pub fn contains(&self, node: &V) -> bool where V: Ord {
         self.set.contains(node)
     }
 
@@ -49,9 +49,9 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
     /// Insert a node into the map. *Warns* if the node was already in the map. If a different node
     /// with the same name is present, replaces and returns an error with that node.
     #[inline]
-    pub fn insert(&mut self, name: &'tree K, node: V) -> Result<(), DuplicateNode<K, V>> where K: Ord, V: Debug + Clone + Eq {
+    pub fn insert(&mut self, name: &'tree K, node: V) -> Result<(), DuplicateNode<K, V>> where K: Ord, V: Debug + Clone + Ord {
         self.set.insert(node.clone());
-        match self.by_name.insert(name, node) {
+        match self.by_name.insert(name, node.clone()) {
             Some(old) if old != node => Err(DuplicateNode { name, old }),
             _ => Ok(()),
         }
@@ -59,7 +59,7 @@ impl<'tree, K: ?Sized, V> InnerMap<'tree, K, V> {
 
     /// Remove the node with the name in the map. *Warns* if the name was not in the map.
     #[inline]
-    pub fn remove<Q: Display + Ord + ?Sized>(&mut self, name: &Q) where &'tree K: Borrow<Q>, V: Debug {
+    pub fn remove<Q: Display + Ord + ?Sized>(&mut self, name: &Q) where &'tree K: Borrow<Q>, V: Debug + Clone + Ord {
         if let Some(node) = self.by_name.remove(name) {
             self.set.remove(&node);
         } else {

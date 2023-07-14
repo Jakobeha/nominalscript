@@ -105,14 +105,14 @@ impl<'tree> Ann<'tree> {
     /// Whether one of this annotation's sources intersects the given point range
     #[inline]
     pub fn intersects_range(&self, range: std::ops::Range<Point<'tree>>) -> bool {
-        self.sources().any(|source| source.intersects_range(range))
+        self.sources().any(|source| source.intersects_range(range.clone()))
     }
 
 
     /// Whether one of this annotation's sources touches or intersects the given point range
     #[inline]
     pub fn touches_or_intersects_range(&self, range: std::ops::Range<Point<'tree>>) -> bool {
-        self.sources().any(|source| source.touches_or_intersects_range(range))
+        self.sources().any(|source| source.touches_or_intersects_range(range.clone()))
     }
 }
 

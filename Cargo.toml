@@ -27,11 +27,12 @@ btree-plus-store = { path = "vendor/btree-plus-store", features = ["copyable"], 
 dependent-rebuilder = { path = "vendor/dependent-rebuilder", version = "0.1.0" }
 patricia_tree = "0.6.1"
 roaring = "0.10.1"
-indexmap = "1.9.2"
+indexmap = "2.0.0"
 nonempty = "0.8.1"
 smol_str = "0.2.0"
 smallvec = "1.10.0"
 # Rust patterns
+rustc-arena-modified = "0.1.1"
 rayon = "1.7.0"
 cc-traits = "2.0.0"
 streaming-iterator = "0.1.9"
@@ -45,6 +46,7 @@ replace_with = "0.1.7"
 tsconfig = "0.2.0"
 notify-debouncer-mini = { version = "0.3.0", default-features = false }
 walkdir = "2.3.3"
+camino = "1.1.6"
 # String utils
 enquote = "1.1.0"
 globset = "0.4.10"

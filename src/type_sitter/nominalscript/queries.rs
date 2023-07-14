@@ -1,3 +1,5 @@
+use crate::syntax::nodes;
+
 #[allow(non_upper_case_globals)]
 static __Tags__: type_sitter_lib::gen_internal::TypedQueryOnceBox<tree_sitter::Query> =
     type_sitter_lib::gen_internal::TypedQueryOnceBox::new();
@@ -18,7 +20,7 @@ pub type TagsMatches<'cursor, 'tree> = type_sitter_lib::TypedQueryMatches<'curso
 pub type TagsCaptures<'cursor, 'tree> = type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Tags>;
 #[doc = "A match returned by the query [Tags]:\n\n```sexp\n(function_signature\n  name: (identifier) @name) @definition.function\n\n(method_signature\n  name: (property_identifier) @name) @definition.method\n\n(abstract_method_signature\n  name: (property_identifier) @name) @definition.method\n\n(nominal_type_declaration\n  name: (nominal_type_identifier) @name) @definition.type\n\n(module\n  name: (identifier) @name) @definition.module\n\n(interface_declaration\n  name: (type_identifier) @name) @definition.interface\n\n(nominal_type_annotation\n  (nominal_type_identifier) @name) @reference.type\n\n(new_expression\n  constructor: (identifier) @name) @reference.class\n\n```"]
 pub struct TagsMatch<'cursor, 'tree> {
-    match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+    r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
     tree: &'tree yak_sitter::Tree,
 }
 #[doc = "A capture returned by the query [Tags]:\n\n```sexp\n(function_signature\n  name: (identifier) @name) @definition.function\n\n(method_signature\n  name: (property_identifier) @name) @definition.method\n\n(abstract_method_signature\n  name: (property_identifier) @name) @definition.method\n\n(nominal_type_declaration\n  name: (nominal_type_identifier) @name) @definition.type\n\n(module\n  name: (identifier) @name) @definition.module\n\n(interface_declaration\n  name: (type_identifier) @name) @definition.interface\n\n(nominal_type_annotation\n  (nominal_type_identifier) @name) @reference.type\n\n(new_expression\n  constructor: (identifier) @name) @reference.class\n\n```"]
@@ -38,17 +40,17 @@ pub enum TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     Name {
         node: anon_unions::Name<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `definition.function` ([crate::syntax::nodes::FunctionSignature])"]
+    #[doc = "A `definition.function` ([super::nodes::FunctionSignature])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(function_signature\n  name: (identifier) @name) @definition.function"]
     #[doc = "```"]
     DefinitionFunction {
-        node: crate::syntax::nodes::FunctionSignature<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::FunctionSignature<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
     #[doc = "A `definition.method` ([anon_unions::DefinitionMethod])"]
     #[doc = ""]
@@ -59,57 +61,57 @@ pub enum TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     DefinitionMethod {
         node: anon_unions::DefinitionMethod<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `definition.type` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+    #[doc = "A `definition.type` ([super::nodes::NominalTypeDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(nominal_type_declaration\n  name: (nominal_type_identifier) @name) @definition.type"]
     #[doc = "```"]
     DefinitionType {
-        node: crate::syntax::nodes::NominalTypeDeclaration<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::NominalTypeDeclaration<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `definition.module` ([crate::syntax::nodes::Module])"]
+    #[doc = "A `definition.module` ([super::nodes::Module])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(module\n  name: (identifier) @name) @definition.module"]
     #[doc = "```"]
     DefinitionModule {
-        node: crate::syntax::nodes::Module<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::Module<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `definition.interface` ([crate::syntax::nodes::InterfaceDeclaration])"]
+    #[doc = "A `definition.interface` ([super::nodes::InterfaceDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(interface_declaration\n  name: (type_identifier) @name) @definition.interface"]
     #[doc = "```"]
     DefinitionInterface {
-        node: crate::syntax::nodes::InterfaceDeclaration<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::InterfaceDeclaration<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `reference.type` ([crate::syntax::nodes::NominalTypeAnnotation])"]
+    #[doc = "A `reference.type` ([super::nodes::NominalTypeAnnotation])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(nominal_type_annotation\n  (nominal_type_identifier) @name) @reference.type"]
     #[doc = "```"]
     ReferenceType {
-        node: crate::syntax::nodes::NominalTypeAnnotation<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::NominalTypeAnnotation<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `reference.class` ([crate::syntax::nodes::NewExpression])"]
+    #[doc = "A `reference.class` ([super::nodes::NewExpression])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(new_expression\n  constructor: (identifier) @name) @reference.class"]
     #[doc = "```"]
     ReferenceClass {
-        node: crate::syntax::nodes::NewExpression<'tree>,
-        match_: Option<TagsMatch<'cursor, 'tree>>,
+        node: super::nodes::NewExpression<'tree>,
+        r#match: Option<TagsMatch<'cursor, 'tree>>,
     },
 }
 #[automatically_derived]
@@ -125,19 +127,19 @@ impl type_sitter_lib::TypedQuery for Tags {
     #[inline]
     unsafe fn wrap_match<'cursor, 'tree>(
         &self,
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Match<'cursor, 'tree> {
-        Self::Match { match_, tree }
+        Self::Match { r#match, tree }
     }
     #[inline]
     unsafe fn wrap_capture<'cursor, 'tree>(
         &self,
         capture: tree_sitter::QueryCapture<'tree>,
-        match_: Option<Self::Match<'cursor, 'tree>>,
+        r#match: Option<Self::Match<'cursor, 'tree>>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Capture<'cursor, 'tree> {
-        match capture . index as usize { 0usize => Self :: Capture :: Name { node : < anon_unions :: Name < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 1usize => Self :: Capture :: DefinitionFunction { node : < crate :: syntax :: nodes :: FunctionSignature < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 2usize => Self :: Capture :: DefinitionMethod { node : < anon_unions :: DefinitionMethod < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 3usize => Self :: Capture :: DefinitionType { node : < crate :: syntax :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 4usize => Self :: Capture :: DefinitionModule { node : < crate :: syntax :: nodes :: Module < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 5usize => Self :: Capture :: DefinitionInterface { node : < crate :: syntax :: nodes :: InterfaceDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 6usize => Self :: Capture :: ReferenceType { node : < crate :: syntax :: nodes :: NominalTypeAnnotation < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 7usize => Self :: Capture :: ReferenceClass { node : < crate :: syntax :: nodes :: NewExpression < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
+        match capture . index as usize { 0usize => Self :: Capture :: Name { node : < anon_unions :: Name < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 1usize => Self :: Capture :: DefinitionFunction { node : < super :: nodes :: FunctionSignature < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 2usize => Self :: Capture :: DefinitionMethod { node : < anon_unions :: DefinitionMethod < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 3usize => Self :: Capture :: DefinitionType { node : < super :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 4usize => Self :: Capture :: DefinitionModule { node : < super :: nodes :: Module < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 5usize => Self :: Capture :: DefinitionInterface { node : < super :: nodes :: InterfaceDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 6usize => Self :: Capture :: ReferenceType { node : < super :: nodes :: NominalTypeAnnotation < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 7usize => Self :: Capture :: ReferenceClass { node : < super :: nodes :: NewExpression < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
     }
 }
 #[automatically_derived]
@@ -158,9 +160,9 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[inline]
     #[allow(unused, non_snake_case)]
     pub fn name(&self) -> Option<anon_unions::Name<'tree>> {
-        { [0u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: Name < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        { [0u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: Name < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `definition.function` ([crate::syntax::nodes::FunctionSignature])"]
+    #[doc = "Returns an iterator over the nodes captured by `definition.function` ([super::nodes::FunctionSignature])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -168,8 +170,8 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_function(&self) -> Option<crate::syntax::nodes::FunctionSignature<'tree>> {
-        { [1u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: FunctionSignature < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn definition_function(&self) -> Option<super::nodes::FunctionSignature<'tree>> {
+        { [1u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: FunctionSignature < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
     #[doc = "Returns an iterator over the nodes captured by `definition.method` ([anon_unions::DefinitionMethod])"]
     #[doc = ""]
@@ -181,9 +183,9 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[inline]
     #[allow(unused, non_snake_case)]
     pub fn definition_method(&self) -> Option<anon_unions::DefinitionMethod<'tree>> {
-        { [2u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: DefinitionMethod < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        { [2u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: DefinitionMethod < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `definition.type` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+    #[doc = "Returns an iterator over the nodes captured by `definition.type` ([super::nodes::NominalTypeDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -191,20 +193,20 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_type(&self) -> Option<crate::syntax::nodes::NominalTypeDeclaration<'tree>> {
+    pub fn definition_type(&self) -> Option<super::nodes::NominalTypeDeclaration<'tree>> {
         {
             [3u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
-                    <crate::syntax::nodes::NominalTypeDeclaration<'tree> as type_sitter_lib::TypedNode<
+                    <super::nodes::NominalTypeDeclaration<'tree> as type_sitter_lib::TypedNode<
                         'tree,
                     >>::from_node_unchecked(yak_sitter::Node::new(n, self.tree))
                 })
         }
         .next()
     }
-    #[doc = "Returns an iterator over the nodes captured by `definition.module` ([crate::syntax::nodes::Module])"]
+    #[doc = "Returns an iterator over the nodes captured by `definition.module` ([super::nodes::Module])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -212,10 +214,10 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_module(&self) -> Option<crate::syntax::nodes::Module<'tree>> {
-        { [4u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: Module < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn definition_module(&self) -> Option<super::nodes::Module<'tree>> {
+        { [4u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: Module < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `definition.interface` ([crate::syntax::nodes::InterfaceDeclaration])"]
+    #[doc = "Returns an iterator over the nodes captured by `definition.interface` ([super::nodes::InterfaceDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -223,20 +225,20 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_interface(&self) -> Option<crate::syntax::nodes::InterfaceDeclaration<'tree>> {
+    pub fn definition_interface(&self) -> Option<super::nodes::InterfaceDeclaration<'tree>> {
         {
             [5u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
-                    <crate::syntax::nodes::InterfaceDeclaration<'tree> as type_sitter_lib::TypedNode<
+                    <super::nodes::InterfaceDeclaration<'tree> as type_sitter_lib::TypedNode<
                         'tree,
                     >>::from_node_unchecked(yak_sitter::Node::new(n, self.tree))
                 })
         }
         .next()
     }
-    #[doc = "Returns an iterator over the nodes captured by `reference.type` ([crate::syntax::nodes::NominalTypeAnnotation])"]
+    #[doc = "Returns an iterator over the nodes captured by `reference.type` ([super::nodes::NominalTypeAnnotation])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -244,20 +246,20 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn reference_type(&self) -> Option<crate::syntax::nodes::NominalTypeAnnotation<'tree>> {
+    pub fn reference_type(&self) -> Option<super::nodes::NominalTypeAnnotation<'tree>> {
         {
             [6u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
-                    <crate::syntax::nodes::NominalTypeAnnotation<'tree> as type_sitter_lib::TypedNode<
+                    <super::nodes::NominalTypeAnnotation<'tree> as type_sitter_lib::TypedNode<
                         'tree,
                     >>::from_node_unchecked(yak_sitter::Node::new(n, self.tree))
                 })
         }
         .next()
     }
-    #[doc = "Returns an iterator over the nodes captured by `reference.class` ([crate::syntax::nodes::NewExpression])"]
+    #[doc = "Returns an iterator over the nodes captured by `reference.class` ([super::nodes::NewExpression])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -265,15 +267,15 @@ impl<'cursor, 'tree> TagsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn reference_class(&self) -> Option<crate::syntax::nodes::NewExpression<'tree>> {
-        { [7u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: NewExpression < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn reference_class(&self) -> Option<super::nodes::NewExpression<'tree>> {
+        { [7u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: NewExpression < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
 }
 #[automatically_derived]
 impl<'cursor, 'tree> std::fmt::Debug for TagsMatch<'cursor, 'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(TagsMatch))
-            .field("match_", &self.match_)
+            .field("r#match", &self.r#match)
             .finish()
     }
 }
@@ -292,11 +294,11 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryMatch<'cursor, 'tree>
     }
     #[inline]
     fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-        &self.match_
+        &self.r#match
     }
     #[inline]
     fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-        self.match_
+        self.r#match
     }
 }
 #[automatically_derived]
@@ -323,7 +325,7 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `definition.function` ([crate::syntax::nodes::FunctionSignature])"]
+    #[doc = "Try to interpret this capture as a `definition.function` ([super::nodes::FunctionSignature])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -331,7 +333,7 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_function(&self) -> Option<&crate::syntax::nodes::FunctionSignature<'tree>> {
+    pub fn definition_function(&self) -> Option<&super::nodes::FunctionSignature<'tree>> {
         match self {
             Self::DefinitionFunction { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
@@ -354,7 +356,7 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `definition.type` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+    #[doc = "Try to interpret this capture as a `definition.type` ([super::nodes::NominalTypeDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -362,14 +364,14 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_type(&self) -> Option<&crate::syntax::nodes::NominalTypeDeclaration<'tree>> {
+    pub fn definition_type(&self) -> Option<&super::nodes::NominalTypeDeclaration<'tree>> {
         match self {
             Self::DefinitionType { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `definition.module` ([crate::syntax::nodes::Module])"]
+    #[doc = "Try to interpret this capture as a `definition.module` ([super::nodes::Module])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -377,14 +379,14 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_module(&self) -> Option<&crate::syntax::nodes::Module<'tree>> {
+    pub fn definition_module(&self) -> Option<&super::nodes::Module<'tree>> {
         match self {
             Self::DefinitionModule { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `definition.interface` ([crate::syntax::nodes::InterfaceDeclaration])"]
+    #[doc = "Try to interpret this capture as a `definition.interface` ([super::nodes::InterfaceDeclaration])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -392,14 +394,14 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn definition_interface(&self) -> Option<&crate::syntax::nodes::InterfaceDeclaration<'tree>> {
+    pub fn definition_interface(&self) -> Option<&super::nodes::InterfaceDeclaration<'tree>> {
         match self {
             Self::DefinitionInterface { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `reference.type` ([crate::syntax::nodes::NominalTypeAnnotation])"]
+    #[doc = "Try to interpret this capture as a `reference.type` ([super::nodes::NominalTypeAnnotation])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -407,14 +409,14 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn reference_type(&self) -> Option<&crate::syntax::nodes::NominalTypeAnnotation<'tree>> {
+    pub fn reference_type(&self) -> Option<&super::nodes::NominalTypeAnnotation<'tree>> {
         match self {
             Self::ReferenceType { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `reference.class` ([crate::syntax::nodes::NewExpression])"]
+    #[doc = "Try to interpret this capture as a `reference.class` ([super::nodes::NewExpression])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -422,7 +424,7 @@ impl<'cursor, 'tree> TagsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn reference_class(&self) -> Option<&crate::syntax::nodes::NewExpression<'tree>> {
+    pub fn reference_class(&self) -> Option<&super::nodes::NewExpression<'tree>> {
         match self {
             Self::ReferenceClass { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
@@ -494,6 +496,8 @@ impl<'cursor, 'tree> std::fmt::Debug for TagsCapture<'cursor, 'tree> {
                 ))
                 .field("node", node)
                 .finish(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -503,36 +507,38 @@ impl<'cursor, 'tree> Clone for TagsCapture<'cursor, 'tree> {
         match self {
             Self::Name { node, .. } => Self::Name {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::DefinitionFunction { node, .. } => Self::DefinitionFunction {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::DefinitionMethod { node, .. } => Self::DefinitionMethod {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::DefinitionType { node, .. } => Self::DefinitionType {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::DefinitionModule { node, .. } => Self::DefinitionModule {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::DefinitionInterface { node, .. } => Self::DefinitionInterface {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::ReferenceType { node, .. } => Self::ReferenceType {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::ReferenceClass { node, .. } => Self::ReferenceClass {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -546,18 +552,20 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         &Tags
     }
     #[inline]
-    fn match_(
+    fn r#match(
         &self,
     ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::Name { match_, .. } => match_.as_ref(),
-            Self::DefinitionFunction { match_, .. } => match_.as_ref(),
-            Self::DefinitionMethod { match_, .. } => match_.as_ref(),
-            Self::DefinitionType { match_, .. } => match_.as_ref(),
-            Self::DefinitionModule { match_, .. } => match_.as_ref(),
-            Self::DefinitionInterface { match_, .. } => match_.as_ref(),
-            Self::ReferenceType { match_, .. } => match_.as_ref(),
-            Self::ReferenceClass { match_, .. } => match_.as_ref(),
+            Self::Name { r#match, .. } => r#match.as_ref(),
+            Self::DefinitionFunction { r#match, .. } => r#match.as_ref(),
+            Self::DefinitionMethod { r#match, .. } => r#match.as_ref(),
+            Self::DefinitionType { r#match, .. } => r#match.as_ref(),
+            Self::DefinitionModule { r#match, .. } => r#match.as_ref(),
+            Self::DefinitionInterface { r#match, .. } => r#match.as_ref(),
+            Self::ReferenceType { r#match, .. } => r#match.as_ref(),
+            Self::ReferenceClass { r#match, .. } => r#match.as_ref(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -565,14 +573,16 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         self,
     ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::Name { match_, .. } => match_,
-            Self::DefinitionFunction { match_, .. } => match_,
-            Self::DefinitionMethod { match_, .. } => match_,
-            Self::DefinitionType { match_, .. } => match_,
-            Self::DefinitionModule { match_, .. } => match_,
-            Self::DefinitionInterface { match_, .. } => match_,
-            Self::ReferenceType { match_, .. } => match_,
-            Self::ReferenceClass { match_, .. } => match_,
+            Self::Name { r#match, .. } => r#match,
+            Self::DefinitionFunction { r#match, .. } => r#match,
+            Self::DefinitionMethod { r#match, .. } => r#match,
+            Self::DefinitionType { r#match, .. } => r#match,
+            Self::DefinitionModule { r#match, .. } => r#match,
+            Self::DefinitionInterface { r#match, .. } => r#match,
+            Self::ReferenceType { r#match, .. } => r#match,
+            Self::ReferenceClass { r#match, .. } => r#match,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -620,6 +630,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
                 index: 7usize,
                 name: "reference.class",
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -635,6 +647,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::DefinitionInterface { node, .. } => node.node(),
             Self::ReferenceType { node, .. } => node.node(),
             Self::ReferenceClass { node, .. } => node.node(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -650,6 +664,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::DefinitionInterface { node, .. } => node.node_mut(),
             Self::ReferenceType { node, .. } => node.node_mut(),
             Self::ReferenceClass { node, .. } => node.node_mut(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -663,6 +679,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::DefinitionInterface { .. } => "definition.interface",
             Self::ReferenceType { .. } => "reference.type",
             Self::ReferenceClass { .. } => "reference.class",
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -676,6 +694,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::DefinitionInterface { .. } => 5usize,
             Self::ReferenceType { .. } => 6usize,
             Self::ReferenceClass { .. } => 7usize,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -700,7 +720,7 @@ pub type LocalsCaptures<'cursor, 'tree> =
     type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Locals>;
 #[doc = "A match returned by the query [Locals]:\n\n```sexp\n; inherits: typescript\n\n```"]
 pub struct LocalsMatch<'cursor, 'tree> {
-    match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+    r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
     tree: &'tree yak_sitter::Tree,
 }
 #[doc = "A capture returned by the query [Locals]:\n\n```sexp\n; inherits: typescript\n\n```"]
@@ -718,16 +738,16 @@ impl type_sitter_lib::TypedQuery for Locals {
     #[inline]
     unsafe fn wrap_match<'cursor, 'tree>(
         &self,
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Match<'cursor, 'tree> {
-        Self::Match { match_, tree }
+        Self::Match { r#match, tree }
     }
     #[inline]
     unsafe fn wrap_capture<'cursor, 'tree>(
         &self,
         capture: tree_sitter::QueryCapture<'tree>,
-        match_: Option<Self::Match<'cursor, 'tree>>,
+        r#match: Option<Self::Match<'cursor, 'tree>>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Capture<'cursor, 'tree> {
         match capture.index as usize {
@@ -741,7 +761,7 @@ impl<'cursor, 'tree> LocalsMatch<'cursor, 'tree> {}
 impl<'cursor, 'tree> std::fmt::Debug for LocalsMatch<'cursor, 'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(LocalsMatch))
-            .field("match_", &self.match_)
+            .field("r#match", &self.r#match)
             .finish()
     }
 }
@@ -760,11 +780,11 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryMatch<'cursor, 'tree>
     }
     #[inline]
     fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-        &self.match_
+        &self.r#match
     }
     #[inline]
     fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-        self.match_
+        self.r#match
     }
 }
 #[automatically_derived]
@@ -772,13 +792,19 @@ impl LocalsCapture {}
 #[automatically_derived]
 impl std::fmt::Debug for LocalsCapture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 #[automatically_derived]
 impl Clone for LocalsCapture {
     fn clone(&self) -> Self {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 #[automatically_derived]
@@ -791,42 +817,63 @@ impl<'cursor, 'tree: 'cursor> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         &Locals
     }
     #[inline]
-    fn match_(
+    fn r#match(
         &self,
     ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn into_match(
         self,
     ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn to_raw(&self) -> yak_sitter::QueryCapture<'static, 'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn node(&self) -> &yak_sitter::Node<'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn node_mut(&mut self) -> &mut yak_sitter::Node<'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn name(&self) -> &'static str {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn index(&self) -> usize {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 #[allow(non_upper_case_globals)]
@@ -851,7 +898,7 @@ pub type IndentsCaptures<'cursor, 'tree> =
     type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Indents>;
 #[doc = "A match returned by the query [Indents]:\n\n```sexp\n; inherits: typescript\n[\n (nominal_type_declaration)\n (nominal_type_guard)\n] @indent.begin\n\n```"]
 pub struct IndentsMatch<'cursor, 'tree> {
-    match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+    r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
     tree: &'tree yak_sitter::Tree,
 }
 #[doc = "A capture returned by the query [Indents]:\n\n```sexp\n; inherits: typescript\n[\n (nominal_type_declaration)\n (nominal_type_guard)\n] @indent.begin\n\n```"]
@@ -864,7 +911,7 @@ pub enum IndentsCapture<'cursor, 'tree> {
     #[doc = "```"]
     IndentBegin {
         node: anon_unions::IndentBegin<'tree>,
-        match_: Option<IndentsMatch<'cursor, 'tree>>,
+        r#match: Option<IndentsMatch<'cursor, 'tree>>,
     },
 }
 #[automatically_derived]
@@ -880,19 +927,19 @@ impl type_sitter_lib::TypedQuery for Indents {
     #[inline]
     unsafe fn wrap_match<'cursor, 'tree>(
         &self,
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Match<'cursor, 'tree> {
-        Self::Match { match_, tree }
+        Self::Match { r#match, tree }
     }
     #[inline]
     unsafe fn wrap_capture<'cursor, 'tree>(
         &self,
         capture: tree_sitter::QueryCapture<'tree>,
-        match_: Option<Self::Match<'cursor, 'tree>>,
+        r#match: Option<Self::Match<'cursor, 'tree>>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Capture<'cursor, 'tree> {
-        match capture . index as usize { 0usize => Self :: Capture :: IndentBegin { node : < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
+        match capture . index as usize { 0usize => Self :: Capture :: IndentBegin { node : < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
     }
 }
 #[automatically_derived]
@@ -906,8 +953,8 @@ impl<'cursor, 'tree> IndentsMatch<'cursor, 'tree> {
     #[inline]
     #[allow(unused, non_snake_case)]
     pub fn indent_begin(&self) -> anon_unions::IndentBegin<'tree> {
-        let result = { [0u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . expect ("one quantifier returned nothing") ;
-        debug_assert ! ({ [0u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . is_none () , "one quantifier returned more than one item");
+        let result = { [0u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . expect ("one quantifier returned nothing") ;
+        debug_assert ! ({ [0u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: IndentBegin < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . is_none () , "one quantifier returned more than one item");
         result
     }
 }
@@ -915,7 +962,7 @@ impl<'cursor, 'tree> IndentsMatch<'cursor, 'tree> {
 impl<'cursor, 'tree> std::fmt::Debug for IndentsMatch<'cursor, 'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(IndentsMatch))
-            .field("match_", &self.match_)
+            .field("r#match", &self.r#match)
             .finish()
     }
 }
@@ -934,11 +981,11 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryMatch<'cursor, 'tree>
     }
     #[inline]
     fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-        &self.match_
+        &self.r#match
     }
     #[inline]
     fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-        self.match_
+        self.r#match
     }
 }
 #[automatically_derived]
@@ -971,6 +1018,8 @@ impl<'cursor, 'tree> std::fmt::Debug for IndentsCapture<'cursor, 'tree> {
                 ))
                 .field("node", node)
                 .finish(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -980,8 +1029,10 @@ impl<'cursor, 'tree> Clone for IndentsCapture<'cursor, 'tree> {
         match self {
             Self::IndentBegin { node, .. } => Self::IndentBegin {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -995,11 +1046,13 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         &Indents
     }
     #[inline]
-    fn match_(
+    fn r#match(
         &self,
     ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::IndentBegin { match_, .. } => match_.as_ref(),
+            Self::IndentBegin { r#match, .. } => r#match.as_ref(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1007,7 +1060,9 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         self,
     ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::IndentBegin { match_, .. } => match_,
+            Self::IndentBegin { r#match, .. } => r#match,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1020,6 +1075,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
                 index: 0usize,
                 name: "indent.begin",
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1028,6 +1085,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         use type_sitter_lib::TypedNode;
         match self {
             Self::IndentBegin { node, .. } => node.node(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1036,18 +1095,24 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         use type_sitter_lib::TypedNode;
         match self {
             Self::IndentBegin { node, .. } => node.node_mut(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
     fn name(&self) -> &'static str {
         match self {
             Self::IndentBegin { .. } => "indent.begin",
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
     fn index(&self) -> usize {
         match self {
             Self::IndentBegin { .. } => 0usize,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -1073,30 +1138,30 @@ pub type HighlightsCaptures<'cursor, 'tree> =
     type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Highlights>;
 #[doc = "A match returned by the query [Highlights]:\n\n```sexp\n; inherits typescript\n; Keywords\n\n\"guard\" @keyword\n\n; Punctuation\n\n(\"<\" . \";\") @operator\n\n\";\" @punctuation.delimiter\n(nullable_nominal_type \"?\" @punctuation.delimiter)\n(optional_nominal_type \"?\" @punctuation.special)\n(nominal_property_signature \"?\" @punctuation.special)\n(nominal_method_signature \"?\" @punctuation.special)\n\n; (nominal_wrap_expression \";\" @punctuation.special)\n; (nominal_wrap_unchecked_expression [\"!\" \";\"] @punctuation.special)\n\n; (nominal_type_annotation \";\" @punctuation.delimiter)\n\n; Types\n\n(nominal_type_identifier) @type\n\n(nominal_type_arguments\n  \"<\" @punctuation.bracket\n  \">\" @punctuation.bracket)\n(nominal_type_parameters\n  \"<\" @punctuation.bracket\n  \">\" @punctuation.bracket)\n(nominal_formal_parameters \"this\" @variable.builtin)\n\n; Parameters\n(nominal_type_guard\n  bound: (identifier) @parameter)\n\n; Method signatures\n(nominal_method_signature name: (_) @method)\n\n; Property signatures\n(property_signature\n  name: (property_identifier) @method\n  nominal_type: (nominal_type_annotation \n                  [(function_nominal_type)\n                   (nullable_nominal_type (parenthesized_nominal_type (function_nominal_type)))]))\n\n(nominal_property_signature\n  name: (property_identifier) @method\n  type: (nominal_type_annotation \n          [(function_nominal_type)\n           (nullable_nominal_type (parenthesized_nominal_type (function_nominal_type)))]))\n\n```"]
 pub struct HighlightsMatch<'cursor, 'tree> {
-    match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+    r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
     tree: &'tree yak_sitter::Tree,
 }
 #[doc = "A capture returned by the query [Highlights]:\n\n```sexp\n; inherits typescript\n; Keywords\n\n\"guard\" @keyword\n\n; Punctuation\n\n(\"<\" . \";\") @operator\n\n\";\" @punctuation.delimiter\n(nullable_nominal_type \"?\" @punctuation.delimiter)\n(optional_nominal_type \"?\" @punctuation.special)\n(nominal_property_signature \"?\" @punctuation.special)\n(nominal_method_signature \"?\" @punctuation.special)\n\n; (nominal_wrap_expression \";\" @punctuation.special)\n; (nominal_wrap_unchecked_expression [\"!\" \";\"] @punctuation.special)\n\n; (nominal_type_annotation \";\" @punctuation.delimiter)\n\n; Types\n\n(nominal_type_identifier) @type\n\n(nominal_type_arguments\n  \"<\" @punctuation.bracket\n  \">\" @punctuation.bracket)\n(nominal_type_parameters\n  \"<\" @punctuation.bracket\n  \">\" @punctuation.bracket)\n(nominal_formal_parameters \"this\" @variable.builtin)\n\n; Parameters\n(nominal_type_guard\n  bound: (identifier) @parameter)\n\n; Method signatures\n(nominal_method_signature name: (_) @method)\n\n; Property signatures\n(property_signature\n  name: (property_identifier) @method\n  nominal_type: (nominal_type_annotation \n                  [(function_nominal_type)\n                   (nullable_nominal_type (parenthesized_nominal_type (function_nominal_type)))]))\n\n(nominal_property_signature\n  name: (property_identifier) @method\n  type: (nominal_type_annotation \n          [(function_nominal_type)\n           (nullable_nominal_type (parenthesized_nominal_type (function_nominal_type)))]))\n\n```"]
 pub enum HighlightsCapture<'cursor, 'tree> {
-    #[doc = "A `keyword` ([crate::syntax::nodes::unnamed::Guard])"]
+    #[doc = "A `keyword` ([super::nodes::unnamed::Guard])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "\"guard\" @keyword"]
     #[doc = "```"]
     Keyword {
-        node: crate::syntax::nodes::unnamed::Guard<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::unnamed::Guard<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `operator` ([crate::syntax::nodes::symbols::Lt])"]
+    #[doc = "A `operator` ([super::nodes::symbols::Lt])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(\"<\" . \";\") @operator"]
     #[doc = "```"]
     Operator {
-        node: crate::syntax::nodes::symbols::Lt<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::symbols::Lt<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
     #[doc = "A `punctuation.delimiter` ([anon_unions::PunctuationDelimiter])"]
     #[doc = ""]
@@ -1107,7 +1172,7 @@ pub enum HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     PunctuationDelimiter {
         node: anon_unions::PunctuationDelimiter<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
     #[doc = "A `punctuation.special` ([anon_unions::PunctuationSpecial])"]
     #[doc = ""]
@@ -1118,18 +1183,18 @@ pub enum HighlightsCapture<'cursor, 'tree> {
     #[doc = "\"?\" @punctuation.special"]
     #[doc = "```"]
     PunctuationSpecial {
-        node: crate::syntax::nodes::symbols::Question<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::symbols::Question<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `type` ([crate::syntax::nodes::NominalTypeIdentifier])"]
+    #[doc = "A `type` ([super::nodes::NominalTypeIdentifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(nominal_type_identifier) @type"]
     #[doc = "```"]
     Type {
-        node: crate::syntax::nodes::NominalTypeIdentifier<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::NominalTypeIdentifier<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
     #[doc = "A `punctuation.bracket` ([anon_unions::PunctuationBracket])"]
     #[doc = ""]
@@ -1142,27 +1207,27 @@ pub enum HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     PunctuationBracket {
         node: anon_unions::PunctuationBracket<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `variable.builtin` ([crate::syntax::nodes::unnamed::This])"]
+    #[doc = "A `variable.builtin` ([super::nodes::unnamed::This])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "\"this\" @variable.builtin"]
     #[doc = "```"]
     VariableBuiltin {
-        node: crate::syntax::nodes::unnamed::This<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::unnamed::This<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
-    #[doc = "A `parameter` ([crate::syntax::nodes::Identifier])"]
+    #[doc = "A `parameter` ([super::nodes::Identifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
     #[doc = "(identifier) @parameter"]
     #[doc = "```"]
     Parameter {
-        node: crate::syntax::nodes::Identifier<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        node: super::nodes::Identifier<'tree>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
     #[doc = "A `method` ([type_sitter_lib::UntypedNamedNode])"]
     #[doc = ""]
@@ -1174,7 +1239,7 @@ pub enum HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     Method {
         node: type_sitter_lib::UntypedNamedNode<'tree>,
-        match_: Option<HighlightsMatch<'cursor, 'tree>>,
+        r#match: Option<HighlightsMatch<'cursor, 'tree>>,
     },
 }
 #[automatically_derived]
@@ -1190,24 +1255,24 @@ impl type_sitter_lib::TypedQuery for Highlights {
     #[inline]
     unsafe fn wrap_match<'cursor, 'tree>(
         &self,
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Match<'cursor, 'tree> {
-        Self::Match { match_, tree }
+        Self::Match { r#match, tree }
     }
     #[inline]
     unsafe fn wrap_capture<'cursor, 'tree>(
         &self,
         capture: tree_sitter::QueryCapture<'tree>,
-        match_: Option<Self::Match<'cursor, 'tree>>,
+        r#match: Option<Self::Match<'cursor, 'tree>>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Capture<'cursor, 'tree> {
-        match capture . index as usize { 0usize => Self :: Capture :: Keyword { node : < crate :: syntax :: nodes :: unnamed :: Guard < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 1usize => Self :: Capture :: Operator { node : < crate :: syntax :: nodes :: symbols :: Lt < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 2usize => Self :: Capture :: PunctuationDelimiter { node : < anon_unions :: PunctuationDelimiter < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 3usize => Self :: Capture :: PunctuationSpecial { node : < crate :: syntax :: nodes :: symbols :: Question < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 4usize => Self :: Capture :: Type { node : < crate :: syntax :: nodes :: NominalTypeIdentifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 5usize => Self :: Capture :: PunctuationBracket { node : < anon_unions :: PunctuationBracket < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 6usize => Self :: Capture :: VariableBuiltin { node : < crate :: syntax :: nodes :: unnamed :: This < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 7usize => Self :: Capture :: Parameter { node : < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 8usize => Self :: Capture :: Method { node : < type_sitter_lib :: UntypedNamedNode < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
+        match capture . index as usize { 0usize => Self :: Capture :: Keyword { node : < super :: nodes :: unnamed :: Guard < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 1usize => Self :: Capture :: Operator { node : < super :: nodes :: symbols :: Lt < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 2usize => Self :: Capture :: PunctuationDelimiter { node : < anon_unions :: PunctuationDelimiter < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 3usize => Self :: Capture :: PunctuationSpecial { node : < super :: nodes :: symbols :: Question < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 4usize => Self :: Capture :: Type { node : < super :: nodes :: NominalTypeIdentifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 5usize => Self :: Capture :: PunctuationBracket { node : < anon_unions :: PunctuationBracket < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 6usize => Self :: Capture :: VariableBuiltin { node : < super :: nodes :: unnamed :: This < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 7usize => Self :: Capture :: Parameter { node : < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 8usize => Self :: Capture :: Method { node : < type_sitter_lib :: UntypedNamedNode < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
     }
 }
 #[automatically_derived]
 impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
-    #[doc = "Returns an iterator over the nodes captured by `keyword` ([crate::syntax::nodes::unnamed::Guard])"]
+    #[doc = "Returns an iterator over the nodes captured by `keyword` ([super::nodes::unnamed::Guard])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1215,10 +1280,10 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn keyword(&self) -> Option<crate::syntax::nodes::unnamed::Guard<'tree>> {
-        { [0u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: unnamed :: Guard < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn keyword(&self) -> Option<super::nodes::unnamed::Guard<'tree>> {
+        { [0u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: unnamed :: Guard < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `operator` ([crate::syntax::nodes::symbols::Lt])"]
+    #[doc = "Returns an iterator over the nodes captured by `operator` ([super::nodes::symbols::Lt])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1226,8 +1291,8 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn operator(&self) -> Option<crate::syntax::nodes::symbols::Lt<'tree>> {
-        { [1u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: symbols :: Lt < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn operator(&self) -> Option<super::nodes::symbols::Lt<'tree>> {
+        { [1u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: symbols :: Lt < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
     #[doc = "Returns an iterator over the nodes captured by `punctuation.delimiter` ([anon_unions::PunctuationDelimiter])"]
     #[doc = ""]
@@ -1242,7 +1307,7 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
         {
             [2u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
                     <anon_unions::PunctuationDelimiter<'tree> as type_sitter_lib::TypedNode<
                         'tree,
@@ -1261,10 +1326,10 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn punctuation_special(&self) -> Option<crate::syntax::nodes::symbols::Question<'tree>> {
-        { [3u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: symbols :: Question < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn punctuation_special(&self) -> Option<super::nodes::symbols::Question<'tree>> {
+        { [3u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: symbols :: Question < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `type` ([crate::syntax::nodes::NominalTypeIdentifier])"]
+    #[doc = "Returns an iterator over the nodes captured by `type` ([super::nodes::NominalTypeIdentifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1272,13 +1337,13 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn r#type(&self) -> Option<crate::syntax::nodes::NominalTypeIdentifier<'tree>> {
+    pub fn r#type(&self) -> Option<super::nodes::NominalTypeIdentifier<'tree>> {
         {
             [4u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
-                    <crate::syntax::nodes::NominalTypeIdentifier<'tree> as type_sitter_lib::TypedNode<
+                    <super::nodes::NominalTypeIdentifier<'tree> as type_sitter_lib::TypedNode<
                         'tree,
                     >>::from_node_unchecked(yak_sitter::Node::new(n, self.tree))
                 })
@@ -1297,9 +1362,9 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[inline]
     #[allow(unused, non_snake_case)]
     pub fn punctuation_bracket(&self) -> Option<anon_unions::PunctuationBracket<'tree>> {
-        { [5u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: PunctuationBracket < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        { [5u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: PunctuationBracket < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `variable.builtin` ([crate::syntax::nodes::unnamed::This])"]
+    #[doc = "Returns an iterator over the nodes captured by `variable.builtin` ([super::nodes::unnamed::This])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1307,10 +1372,10 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn variable_builtin(&self) -> Option<crate::syntax::nodes::unnamed::This<'tree>> {
-        { [6u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: unnamed :: This < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn variable_builtin(&self) -> Option<super::nodes::unnamed::This<'tree>> {
+        { [6u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: unnamed :: This < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
-    #[doc = "Returns an iterator over the nodes captured by `parameter` ([crate::syntax::nodes::Identifier])"]
+    #[doc = "Returns an iterator over the nodes captured by `parameter` ([super::nodes::Identifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1318,8 +1383,8 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn parameter(&self) -> Option<crate::syntax::nodes::Identifier<'tree>> {
-        { [7u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+    pub fn parameter(&self) -> Option<super::nodes::Identifier<'tree>> {
+        { [7u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
     }
     #[doc = "Returns an iterator over the nodes captured by `method` ([type_sitter_lib::UntypedNamedNode])"]
     #[doc = ""]
@@ -1335,7 +1400,7 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
         {
             [8u32]
                 .into_iter()
-                .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                 .map(|n| unsafe {
                     <type_sitter_lib::UntypedNamedNode<'tree> as type_sitter_lib::TypedNode<
                         'tree,
@@ -1348,7 +1413,7 @@ impl<'cursor, 'tree> HighlightsMatch<'cursor, 'tree> {
 impl<'cursor, 'tree> std::fmt::Debug for HighlightsMatch<'cursor, 'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(HighlightsMatch))
-            .field("match_", &self.match_)
+            .field("r#match", &self.r#match)
             .finish()
     }
 }
@@ -1367,16 +1432,16 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryMatch<'cursor, 'tree>
     }
     #[inline]
     fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-        &self.match_
+        &self.r#match
     }
     #[inline]
     fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-        self.match_
+        self.r#match
     }
 }
 #[automatically_derived]
 impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
-    #[doc = "Try to interpret this capture as a `keyword` ([crate::syntax::nodes::unnamed::Guard])"]
+    #[doc = "Try to interpret this capture as a `keyword` ([super::nodes::unnamed::Guard])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1384,14 +1449,14 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn keyword(&self) -> Option<&crate::syntax::nodes::unnamed::Guard<'tree>> {
+    pub fn keyword(&self) -> Option<&super::nodes::unnamed::Guard<'tree>> {
         match self {
             Self::Keyword { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `operator` ([crate::syntax::nodes::symbols::Lt])"]
+    #[doc = "Try to interpret this capture as a `operator` ([super::nodes::symbols::Lt])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1399,7 +1464,7 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn operator(&self) -> Option<&crate::syntax::nodes::symbols::Lt<'tree>> {
+    pub fn operator(&self) -> Option<&super::nodes::symbols::Lt<'tree>> {
         match self {
             Self::Operator { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
@@ -1432,14 +1497,14 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn punctuation_special(&self) -> Option<&crate::syntax::nodes::symbols::Question<'tree>> {
+    pub fn punctuation_special(&self) -> Option<&super::nodes::symbols::Question<'tree>> {
         match self {
             Self::PunctuationSpecial { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `type` ([crate::syntax::nodes::NominalTypeIdentifier])"]
+    #[doc = "Try to interpret this capture as a `type` ([super::nodes::NominalTypeIdentifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1447,7 +1512,7 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn r#type(&self) -> Option<&crate::syntax::nodes::NominalTypeIdentifier<'tree>> {
+    pub fn r#type(&self) -> Option<&super::nodes::NominalTypeIdentifier<'tree>> {
         match self {
             Self::Type { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
@@ -1472,7 +1537,7 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `variable.builtin` ([crate::syntax::nodes::unnamed::This])"]
+    #[doc = "Try to interpret this capture as a `variable.builtin` ([super::nodes::unnamed::This])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1480,14 +1545,14 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn variable_builtin(&self) -> Option<&crate::syntax::nodes::unnamed::This<'tree>> {
+    pub fn variable_builtin(&self) -> Option<&super::nodes::unnamed::This<'tree>> {
         match self {
             Self::VariableBuiltin { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
             _ => None,
         }
     }
-    #[doc = "Try to interpret this capture as a `parameter` ([crate::syntax::nodes::Identifier])"]
+    #[doc = "Try to interpret this capture as a `parameter` ([super::nodes::Identifier])"]
     #[doc = ""]
     #[doc = "The full capture including pattern(s) is:"]
     #[doc = "```sexp"]
@@ -1495,7 +1560,7 @@ impl<'cursor, 'tree> HighlightsCapture<'cursor, 'tree> {
     #[doc = "```"]
     #[inline]
     #[allow(unused, non_snake_case)]
-    pub fn parameter(&self) -> Option<&crate::syntax::nodes::Identifier<'tree>> {
+    pub fn parameter(&self) -> Option<&super::nodes::Identifier<'tree>> {
         match self {
             Self::Parameter { node, .. } => Some(node),
             #[allow(unreachable_patterns)]
@@ -1596,6 +1661,8 @@ impl<'cursor, 'tree> std::fmt::Debug for HighlightsCapture<'cursor, 'tree> {
                 ))
                 .field("node", node)
                 .finish(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -1605,40 +1672,42 @@ impl<'cursor, 'tree> Clone for HighlightsCapture<'cursor, 'tree> {
         match self {
             Self::Keyword { node, .. } => Self::Keyword {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::Operator { node, .. } => Self::Operator {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::PunctuationDelimiter { node, .. } => Self::PunctuationDelimiter {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::PunctuationSpecial { node, .. } => Self::PunctuationSpecial {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::Type { node, .. } => Self::Type {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::PunctuationBracket { node, .. } => Self::PunctuationBracket {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::VariableBuiltin { node, .. } => Self::VariableBuiltin {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::Parameter { node, .. } => Self::Parameter {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
             Self::Method { node, .. } => Self::Method {
                 node: *node,
-                match_: None,
+                r#match: None,
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
@@ -1652,19 +1721,21 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         &Highlights
     }
     #[inline]
-    fn match_(
+    fn r#match(
         &self,
     ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::Keyword { match_, .. } => match_.as_ref(),
-            Self::Operator { match_, .. } => match_.as_ref(),
-            Self::PunctuationDelimiter { match_, .. } => match_.as_ref(),
-            Self::PunctuationSpecial { match_, .. } => match_.as_ref(),
-            Self::Type { match_, .. } => match_.as_ref(),
-            Self::PunctuationBracket { match_, .. } => match_.as_ref(),
-            Self::VariableBuiltin { match_, .. } => match_.as_ref(),
-            Self::Parameter { match_, .. } => match_.as_ref(),
-            Self::Method { match_, .. } => match_.as_ref(),
+            Self::Keyword { r#match, .. } => r#match.as_ref(),
+            Self::Operator { r#match, .. } => r#match.as_ref(),
+            Self::PunctuationDelimiter { r#match, .. } => r#match.as_ref(),
+            Self::PunctuationSpecial { r#match, .. } => r#match.as_ref(),
+            Self::Type { r#match, .. } => r#match.as_ref(),
+            Self::PunctuationBracket { r#match, .. } => r#match.as_ref(),
+            Self::VariableBuiltin { r#match, .. } => r#match.as_ref(),
+            Self::Parameter { r#match, .. } => r#match.as_ref(),
+            Self::Method { r#match, .. } => r#match.as_ref(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1672,15 +1743,17 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         self,
     ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
         match self {
-            Self::Keyword { match_, .. } => match_,
-            Self::Operator { match_, .. } => match_,
-            Self::PunctuationDelimiter { match_, .. } => match_,
-            Self::PunctuationSpecial { match_, .. } => match_,
-            Self::Type { match_, .. } => match_,
-            Self::PunctuationBracket { match_, .. } => match_,
-            Self::VariableBuiltin { match_, .. } => match_,
-            Self::Parameter { match_, .. } => match_,
-            Self::Method { match_, .. } => match_,
+            Self::Keyword { r#match, .. } => r#match,
+            Self::Operator { r#match, .. } => r#match,
+            Self::PunctuationDelimiter { r#match, .. } => r#match,
+            Self::PunctuationSpecial { r#match, .. } => r#match,
+            Self::Type { r#match, .. } => r#match,
+            Self::PunctuationBracket { r#match, .. } => r#match,
+            Self::VariableBuiltin { r#match, .. } => r#match,
+            Self::Parameter { r#match, .. } => r#match,
+            Self::Method { r#match, .. } => r#match,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1733,6 +1806,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
                 index: 8usize,
                 name: "method",
             },
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1749,6 +1824,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::VariableBuiltin { node, .. } => node.node(),
             Self::Parameter { node, .. } => node.node(),
             Self::Method { node, .. } => node.node(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1765,6 +1842,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::VariableBuiltin { node, .. } => node.node_mut(),
             Self::Parameter { node, .. } => node.node_mut(),
             Self::Method { node, .. } => node.node_mut(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1779,6 +1858,8 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::VariableBuiltin { .. } => "variable.builtin",
             Self::Parameter { .. } => "parameter",
             Self::Method { .. } => "method",
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
     #[inline]
@@ -1793,10 +1874,14 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
             Self::VariableBuiltin { .. } => 6usize,
             Self::Parameter { .. } => 7usize,
             Self::Method { .. } => 8usize,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
         }
     }
 }
 pub mod semantic {
+    use super::nodes;
+
     #[allow(non_upper_case_globals)]
     static __Decls__: type_sitter_lib::gen_internal::TypedQueryOnceBox<tree_sitter::Query> =
         type_sitter_lib::gen_internal::TypedQueryOnceBox::new();
@@ -1819,7 +1904,7 @@ pub mod semantic {
         type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Decls>;
     #[doc = "A match returned by the query [Decls]:\n\n```sexp\n; Exports\n(export_specifier (nominal_type_identifier) @nominal.export_id alias: (identifier)? @alias.export_id)\n(export_specifier (identifier) @value.export_id alias: (identifier)? @alias.export_id)\n(export_statement (nominal_type_declaration (nominal_type_identifier) @nominal.export_id))\n(export_statement (function_declaration (identifier) @value.export_id))\n(export_statement (function_signature (identifier) @value.export_id))\n(export_statement (lexical_declaration (variable_declarator (identifier) @value.export_id)))\n(export_statement (variable_declaration (variable_declarator (identifier) @value.export_id)))\n\n; Imports\n(import_statement) @import\n\n; Nominal type declarations (local and module-root)\n(nominal_type_declaration) @nominal_type.decl\n\n; Function declarations (local and module-root)\n(function_declaration) @function.decl\n(generator_function_declaration) @function.decl\n(function_signature) @function.decl\n\n; Value declarations (local and module-root)\n(variable_declarator) @value.decl\n\n```"]
     pub struct DeclsMatch<'cursor, 'tree> {
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     }
     #[doc = "A capture returned by the query [Decls]:\n\n```sexp\n; Exports\n(export_specifier (nominal_type_identifier) @nominal.export_id alias: (identifier)? @alias.export_id)\n(export_specifier (identifier) @value.export_id alias: (identifier)? @alias.export_id)\n(export_statement (nominal_type_declaration (nominal_type_identifier) @nominal.export_id))\n(export_statement (function_declaration (identifier) @value.export_id))\n(export_statement (function_signature (identifier) @value.export_id))\n(export_statement (lexical_declaration (variable_declarator (identifier) @value.export_id)))\n(export_statement (variable_declaration (variable_declarator (identifier) @value.export_id)))\n\n; Imports\n(import_statement) @import\n\n; Nominal type declarations (local and module-root)\n(nominal_type_declaration) @nominal_type.decl\n\n; Function declarations (local and module-root)\n(function_declaration) @function.decl\n(generator_function_declaration) @function.decl\n(function_signature) @function.decl\n\n; Value declarations (local and module-root)\n(variable_declarator) @value.decl\n\n```"]
@@ -1832,8 +1917,8 @@ pub mod semantic {
         #[doc = "(nominal_type_identifier) @nominal.export_id"]
         #[doc = "```"]
         NominalExportId {
-            node: crate::syntax::nodes::NominalTypeIdentifier<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::NominalTypeIdentifier<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
         #[doc = "A `alias.export_id` ([anon_unions::AliasExportId])"]
         #[doc = ""]
@@ -1843,8 +1928,8 @@ pub mod semantic {
         #[doc = "(identifier) @alias.export_id"]
         #[doc = "```"]
         AliasExportId {
-            node: crate::syntax::nodes::Identifier<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::Identifier<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
         #[doc = "A `value.export_id` ([anon_unions::ValueExportId])"]
         #[doc = ""]
@@ -1857,28 +1942,28 @@ pub mod semantic {
         #[doc = "(identifier) @value.export_id"]
         #[doc = "```"]
         ValueExportId {
-            node: crate::syntax::nodes::Identifier<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::Identifier<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
-        #[doc = "A `import` ([crate::syntax::nodes::ImportStatement])"]
+        #[doc = "A `import` ([super::nodes::ImportStatement])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
         #[doc = "(import_statement) @import"]
         #[doc = "```"]
         Import {
-            node: crate::syntax::nodes::ImportStatement<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::ImportStatement<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
-        #[doc = "A `nominal_type.decl` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+        #[doc = "A `nominal_type.decl` ([super::nodes::NominalTypeDeclaration])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
         #[doc = "(nominal_type_declaration) @nominal_type.decl"]
         #[doc = "```"]
         NominalTypeDecl {
-            node: crate::syntax::nodes::NominalTypeDeclaration<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::NominalTypeDeclaration<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
         #[doc = "A `function.decl` ([anon_unions::FunctionDecl])"]
         #[doc = ""]
@@ -1890,17 +1975,17 @@ pub mod semantic {
         #[doc = "```"]
         FunctionDecl {
             node: anon_unions::FunctionDecl<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
-        #[doc = "A `value.decl` ([crate::syntax::nodes::VariableDeclarator])"]
+        #[doc = "A `value.decl` ([super::nodes::VariableDeclarator])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
         #[doc = "(variable_declarator) @value.decl"]
         #[doc = "```"]
         ValueDecl {
-            node: crate::syntax::nodes::VariableDeclarator<'tree>,
-            match_: Option<DeclsMatch<'cursor, 'tree>>,
+            node: super::nodes::VariableDeclarator<'tree>,
+            r#match: Option<DeclsMatch<'cursor, 'tree>>,
         },
     }
     #[automatically_derived]
@@ -1916,19 +2001,19 @@ pub mod semantic {
         #[inline]
         unsafe fn wrap_match<'cursor, 'tree>(
             &self,
-            match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+            r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
             tree: &'tree yak_sitter::Tree,
         ) -> Self::Match<'cursor, 'tree> {
-            Self::Match { match_, tree }
+            Self::Match { r#match, tree }
         }
         #[inline]
         unsafe fn wrap_capture<'cursor, 'tree>(
             &self,
             capture: tree_sitter::QueryCapture<'tree>,
-            match_: Option<Self::Match<'cursor, 'tree>>,
+            r#match: Option<Self::Match<'cursor, 'tree>>,
             tree: &'tree yak_sitter::Tree,
         ) -> Self::Capture<'cursor, 'tree> {
-            match capture . index as usize { 0usize => Self :: Capture :: NominalExportId { node : < crate :: syntax :: nodes :: NominalTypeIdentifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 1usize => Self :: Capture :: AliasExportId { node : < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 2usize => Self :: Capture :: ValueExportId { node : < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 3usize => Self :: Capture :: Import { node : < crate :: syntax :: nodes :: ImportStatement < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 4usize => Self :: Capture :: NominalTypeDecl { node : < crate :: syntax :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 5usize => Self :: Capture :: FunctionDecl { node : < anon_unions :: FunctionDecl < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , 6usize => Self :: Capture :: ValueDecl { node : < crate :: syntax :: nodes :: VariableDeclarator < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , match_ } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
+            match capture . index as usize { 0usize => Self :: Capture :: NominalExportId { node : < super :: nodes :: NominalTypeIdentifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 1usize => Self :: Capture :: AliasExportId { node : < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 2usize => Self :: Capture :: ValueExportId { node : < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 3usize => Self :: Capture :: Import { node : < super :: nodes :: ImportStatement < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 4usize => Self :: Capture :: NominalTypeDecl { node : < super :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 5usize => Self :: Capture :: FunctionDecl { node : < anon_unions :: FunctionDecl < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , 6usize => Self :: Capture :: ValueDecl { node : < super :: nodes :: VariableDeclarator < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (unsafe { yak_sitter :: Node :: new (capture . node , tree) }) , r#match } , capture_index => unreachable ! ("Invalid capture index: {}" , capture_index) }
         }
     }
     #[automatically_derived]
@@ -1942,13 +2027,13 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn nominal_export_id(&self) -> Option<crate::syntax::nodes::NominalTypeIdentifier<'tree>> {
+        pub fn nominal_export_id(&self) -> Option<super::nodes::NominalTypeIdentifier<'tree>> {
             {
                 [0u32]
                     .into_iter()
-                    .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                    .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                     .map(|n| unsafe {
-                        <crate::syntax::nodes::NominalTypeIdentifier<'tree> as type_sitter_lib::TypedNode<
+                        <super::nodes::NominalTypeIdentifier<'tree> as type_sitter_lib::TypedNode<
                             'tree,
                         >>::from_node_unchecked(yak_sitter::Node::new(
                             n, self.tree,
@@ -1966,8 +2051,8 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn alias_export_id(&self) -> Option<crate::syntax::nodes::Identifier<'tree>> {
-            { [1u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        pub fn alias_export_id(&self) -> Option<super::nodes::Identifier<'tree>> {
+            { [1u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
         }
         #[doc = "Returns an iterator over the nodes captured by `value.export_id` ([anon_unions::ValueExportId])"]
         #[doc = ""]
@@ -1981,10 +2066,10 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn value_export_id(&self) -> Option<crate::syntax::nodes::Identifier<'tree>> {
-            { [2u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        pub fn value_export_id(&self) -> Option<super::nodes::Identifier<'tree>> {
+            { [2u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: Identifier < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
         }
-        #[doc = "Returns an iterator over the nodes captured by `import` ([crate::syntax::nodes::ImportStatement])"]
+        #[doc = "Returns an iterator over the nodes captured by `import` ([super::nodes::ImportStatement])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -1992,13 +2077,13 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn import(&self) -> Option<crate::syntax::nodes::ImportStatement<'tree>> {
+        pub fn import(&self) -> Option<super::nodes::ImportStatement<'tree>> {
             {
                 [3u32]
                     .into_iter()
-                    .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                    .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                     .map(|n| unsafe {
-                        <crate::syntax::nodes::ImportStatement<'tree> as type_sitter_lib::TypedNode<
+                        <super::nodes::ImportStatement<'tree> as type_sitter_lib::TypedNode<
                             'tree,
                         >>::from_node_unchecked(yak_sitter::Node::new(
                             n, self.tree,
@@ -2007,7 +2092,7 @@ pub mod semantic {
             }
             .next()
         }
-        #[doc = "Returns an iterator over the nodes captured by `nominal_type.decl` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+        #[doc = "Returns an iterator over the nodes captured by `nominal_type.decl` ([super::nodes::NominalTypeDeclaration])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -2015,8 +2100,8 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn nominal_type_decl(&self) -> Option<crate::syntax::nodes::NominalTypeDeclaration<'tree>> {
-            { [4u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < crate :: syntax :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+        pub fn nominal_type_decl(&self) -> Option<super::nodes::NominalTypeDeclaration<'tree>> {
+            { [4u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < super :: nodes :: NominalTypeDeclaration < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
         }
         #[doc = "Returns an iterator over the nodes captured by `function.decl` ([anon_unions::FunctionDecl])"]
         #[doc = ""]
@@ -2029,9 +2114,9 @@ pub mod semantic {
         #[inline]
         #[allow(unused, non_snake_case)]
         pub fn function_decl(&self) -> Option<anon_unions::FunctionDecl<'tree>> {
-            { [5u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: FunctionDecl < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
+            { [5u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < anon_unions :: FunctionDecl < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next ()
         }
-        #[doc = "Returns an iterator over the nodes captured by `value.decl` ([crate::syntax::nodes::VariableDeclarator])"]
+        #[doc = "Returns an iterator over the nodes captured by `value.decl` ([super::nodes::VariableDeclarator])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -2039,13 +2124,13 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn value_decl(&self) -> Option<crate::syntax::nodes::VariableDeclarator<'tree>> {
+        pub fn value_decl(&self) -> Option<super::nodes::VariableDeclarator<'tree>> {
             {
                 [6u32]
                     .into_iter()
-                    .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                    .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                     .map(|n| unsafe {
-                        <crate::syntax::nodes::VariableDeclarator<'tree> as type_sitter_lib::TypedNode<
+                        <super::nodes::VariableDeclarator<'tree> as type_sitter_lib::TypedNode<
                             'tree,
                         >>::from_node_unchecked(yak_sitter::Node::new(
                             n, self.tree,
@@ -2059,7 +2144,7 @@ pub mod semantic {
     impl<'cursor, 'tree> std::fmt::Debug for DeclsMatch<'cursor, 'tree> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct(stringify!(DeclsMatch))
-                .field("match_", &self.match_)
+                .field("r#match", &self.r#match)
                 .finish()
         }
     }
@@ -2078,11 +2163,11 @@ pub mod semantic {
         }
         #[inline]
         fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-            &self.match_
+            &self.r#match
         }
         #[inline]
         fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-            self.match_
+            self.r#match
         }
     }
     #[automatically_derived]
@@ -2096,7 +2181,7 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn nominal_export_id(&self) -> Option<&crate::syntax::nodes::NominalTypeIdentifier<'tree>> {
+        pub fn nominal_export_id(&self) -> Option<&super::nodes::NominalTypeIdentifier<'tree>> {
             match self {
                 Self::NominalExportId { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
@@ -2112,7 +2197,7 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn alias_export_id(&self) -> Option<&crate::syntax::nodes::Identifier<'tree>> {
+        pub fn alias_export_id(&self) -> Option<&super::nodes::Identifier<'tree>> {
             match self {
                 Self::AliasExportId { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
@@ -2131,14 +2216,14 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn value_export_id(&self) -> Option<&crate::syntax::nodes::Identifier<'tree>> {
+        pub fn value_export_id(&self) -> Option<&super::nodes::Identifier<'tree>> {
             match self {
                 Self::ValueExportId { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
                 _ => None,
             }
         }
-        #[doc = "Try to interpret this capture as a `import` ([crate::syntax::nodes::ImportStatement])"]
+        #[doc = "Try to interpret this capture as a `import` ([super::nodes::ImportStatement])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -2146,14 +2231,14 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn import(&self) -> Option<&crate::syntax::nodes::ImportStatement<'tree>> {
+        pub fn import(&self) -> Option<&super::nodes::ImportStatement<'tree>> {
             match self {
                 Self::Import { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
                 _ => None,
             }
         }
-        #[doc = "Try to interpret this capture as a `nominal_type.decl` ([crate::syntax::nodes::NominalTypeDeclaration])"]
+        #[doc = "Try to interpret this capture as a `nominal_type.decl` ([super::nodes::NominalTypeDeclaration])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -2161,7 +2246,7 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn nominal_type_decl(&self) -> Option<&crate::syntax::nodes::NominalTypeDeclaration<'tree>> {
+        pub fn nominal_type_decl(&self) -> Option<&super::nodes::NominalTypeDeclaration<'tree>> {
             match self {
                 Self::NominalTypeDecl { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
@@ -2185,7 +2270,7 @@ pub mod semantic {
                 _ => None,
             }
         }
-        #[doc = "Try to interpret this capture as a `value.decl` ([crate::syntax::nodes::VariableDeclarator])"]
+        #[doc = "Try to interpret this capture as a `value.decl` ([super::nodes::VariableDeclarator])"]
         #[doc = ""]
         #[doc = "The full capture including pattern(s) is:"]
         #[doc = "```sexp"]
@@ -2193,7 +2278,7 @@ pub mod semantic {
         #[doc = "```"]
         #[inline]
         #[allow(unused, non_snake_case)]
-        pub fn value_decl(&self) -> Option<&crate::syntax::nodes::VariableDeclarator<'tree>> {
+        pub fn value_decl(&self) -> Option<&super::nodes::VariableDeclarator<'tree>> {
             match self {
                 Self::ValueDecl { node, .. } => Some(node),
                 #[allow(unreachable_patterns)]
@@ -2257,6 +2342,8 @@ pub mod semantic {
                     ))
                     .field("node", node)
                     .finish(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
@@ -2266,32 +2353,34 @@ pub mod semantic {
             match self {
                 Self::NominalExportId { node, .. } => Self::NominalExportId {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::AliasExportId { node, .. } => Self::AliasExportId {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::ValueExportId { node, .. } => Self::ValueExportId {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::Import { node, .. } => Self::Import {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::NominalTypeDecl { node, .. } => Self::NominalTypeDecl {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::FunctionDecl { node, .. } => Self::FunctionDecl {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
                 Self::ValueDecl { node, .. } => Self::ValueDecl {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
@@ -2305,17 +2394,19 @@ pub mod semantic {
             &Decls
         }
         #[inline]
-        fn match_(
+        fn r#match(
             &self,
         ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
             match self {
-                Self::NominalExportId { match_, .. } => match_.as_ref(),
-                Self::AliasExportId { match_, .. } => match_.as_ref(),
-                Self::ValueExportId { match_, .. } => match_.as_ref(),
-                Self::Import { match_, .. } => match_.as_ref(),
-                Self::NominalTypeDecl { match_, .. } => match_.as_ref(),
-                Self::FunctionDecl { match_, .. } => match_.as_ref(),
-                Self::ValueDecl { match_, .. } => match_.as_ref(),
+                Self::NominalExportId { r#match, .. } => r#match.as_ref(),
+                Self::AliasExportId { r#match, .. } => r#match.as_ref(),
+                Self::ValueExportId { r#match, .. } => r#match.as_ref(),
+                Self::Import { r#match, .. } => r#match.as_ref(),
+                Self::NominalTypeDecl { r#match, .. } => r#match.as_ref(),
+                Self::FunctionDecl { r#match, .. } => r#match.as_ref(),
+                Self::ValueDecl { r#match, .. } => r#match.as_ref(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2323,13 +2414,15 @@ pub mod semantic {
             self,
         ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
             match self {
-                Self::NominalExportId { match_, .. } => match_,
-                Self::AliasExportId { match_, .. } => match_,
-                Self::ValueExportId { match_, .. } => match_,
-                Self::Import { match_, .. } => match_,
-                Self::NominalTypeDecl { match_, .. } => match_,
-                Self::FunctionDecl { match_, .. } => match_,
-                Self::ValueDecl { match_, .. } => match_,
+                Self::NominalExportId { r#match, .. } => r#match,
+                Self::AliasExportId { r#match, .. } => r#match,
+                Self::ValueExportId { r#match, .. } => r#match,
+                Self::Import { r#match, .. } => r#match,
+                Self::NominalTypeDecl { r#match, .. } => r#match,
+                Self::FunctionDecl { r#match, .. } => r#match,
+                Self::ValueDecl { r#match, .. } => r#match,
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2372,6 +2465,8 @@ pub mod semantic {
                     index: 6usize,
                     name: "value.decl",
                 },
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2386,6 +2481,8 @@ pub mod semantic {
                 Self::NominalTypeDecl { node, .. } => node.node(),
                 Self::FunctionDecl { node, .. } => node.node(),
                 Self::ValueDecl { node, .. } => node.node(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2400,6 +2497,8 @@ pub mod semantic {
                 Self::NominalTypeDecl { node, .. } => node.node_mut(),
                 Self::FunctionDecl { node, .. } => node.node_mut(),
                 Self::ValueDecl { node, .. } => node.node_mut(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2412,6 +2511,8 @@ pub mod semantic {
                 Self::NominalTypeDecl { .. } => "nominal_type.decl",
                 Self::FunctionDecl { .. } => "function.decl",
                 Self::ValueDecl { .. } => "value.decl",
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2424,6 +2525,8 @@ pub mod semantic {
                 Self::NominalTypeDecl { .. } => 4usize,
                 Self::FunctionDecl { .. } => 5usize,
                 Self::ValueDecl { .. } => 6usize,
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
@@ -2450,7 +2553,7 @@ pub mod semantic {
         type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, ProgramToExtractNominalType>;
     #[doc = "A match returned by the query [ProgramToExtractNominalType]:\n\n```sexp\n(program\n    (nominal_type_declaration\n        (nominal_supertypes ((_) @nominal_type .))))\n\n```"]
     pub struct ProgramToExtractNominalTypeMatch<'cursor, 'tree> {
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     }
     #[doc = "A capture returned by the query [ProgramToExtractNominalType]:\n\n```sexp\n(program\n    (nominal_type_declaration\n        (nominal_supertypes ((_) @nominal_type .))))\n\n```"]
@@ -2463,7 +2566,7 @@ pub mod semantic {
         #[doc = "```"]
         NominalType {
             node: type_sitter_lib::UntypedNamedNode<'tree>,
-            match_: Option<ProgramToExtractNominalTypeMatch<'cursor, 'tree>>,
+            r#match: Option<ProgramToExtractNominalTypeMatch<'cursor, 'tree>>,
         },
     }
     #[automatically_derived]
@@ -2479,16 +2582,16 @@ pub mod semantic {
         #[inline]
         unsafe fn wrap_match<'cursor, 'tree>(
             &self,
-            match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+            r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
             tree: &'tree yak_sitter::Tree,
         ) -> Self::Match<'cursor, 'tree> {
-            Self::Match { match_, tree }
+            Self::Match { r#match, tree }
         }
         #[inline]
         unsafe fn wrap_capture<'cursor, 'tree>(
             &self,
             capture: tree_sitter::QueryCapture<'tree>,
-            match_: Option<Self::Match<'cursor, 'tree>>,
+            r#match: Option<Self::Match<'cursor, 'tree>>,
             tree: &'tree yak_sitter::Tree,
         ) -> Self::Capture<'cursor, 'tree> {
             match capture.index as usize {
@@ -2499,7 +2602,7 @@ pub mod semantic {
                         >>::from_node_unchecked(unsafe {
                             yak_sitter::Node::new(capture.node, tree)
                         }),
-                    match_,
+                    r#match,
                 },
                 capture_index => unreachable!("Invalid capture index: {}", capture_index),
             }
@@ -2519,7 +2622,7 @@ pub mod semantic {
             let result = {
                 [0u32]
                     .into_iter()
-                    .flat_map(|i| self.match_.nodes_for_capture_index(i))
+                    .flat_map(|i| self.r#match.nodes_for_capture_index(i))
                     .map(|n| unsafe {
                         <type_sitter_lib::UntypedNamedNode<'tree> as type_sitter_lib::TypedNode<
                             'tree,
@@ -2530,7 +2633,7 @@ pub mod semantic {
             }
             .next()
             .expect("one quantifier returned nothing");
-            debug_assert ! ({ [0u32] . into_iter () . flat_map (| i | self . match_ . nodes_for_capture_index (i)) . map (| n | unsafe { < type_sitter_lib :: UntypedNamedNode < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . is_none () , "one quantifier returned more than one item");
+            debug_assert ! ({ [0u32] . into_iter () . flat_map (| i | self . r#match . nodes_for_capture_index (i)) . map (| n | unsafe { < type_sitter_lib :: UntypedNamedNode < 'tree > as type_sitter_lib :: TypedNode < 'tree >> :: from_node_unchecked (yak_sitter :: Node :: new (n , self . tree)) }) } . next () . is_none () , "one quantifier returned more than one item");
             result
         }
     }
@@ -2538,7 +2641,7 @@ pub mod semantic {
     impl<'cursor, 'tree> std::fmt::Debug for ProgramToExtractNominalTypeMatch<'cursor, 'tree> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct(stringify!(ProgramToExtractNominalTypeMatch))
-                .field("match_", &self.match_)
+                .field("r#match", &self.r#match)
                 .finish()
         }
     }
@@ -2557,11 +2660,11 @@ pub mod semantic {
         }
         #[inline]
         fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-            &self.match_
+            &self.r#match
         }
         #[inline]
         fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-            self.match_
+            self.r#match
         }
     }
     #[automatically_derived]
@@ -2594,6 +2697,8 @@ pub mod semantic {
                     ))
                     .field("node", node)
                     .finish(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
@@ -2603,8 +2708,10 @@ pub mod semantic {
             match self {
                 Self::NominalType { node, .. } => Self::NominalType {
                     node: *node,
-                    match_: None,
+                    r#match: None,
                 },
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
@@ -2618,11 +2725,13 @@ pub mod semantic {
             &ProgramToExtractNominalType
         }
         #[inline]
-        fn match_(
+        fn r#match(
             &self,
         ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
             match self {
-                Self::NominalType { match_, .. } => match_.as_ref(),
+                Self::NominalType { r#match, .. } => r#match.as_ref(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2630,7 +2739,9 @@ pub mod semantic {
             self,
         ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
             match self {
-                Self::NominalType { match_, .. } => match_,
+                Self::NominalType { r#match, .. } => r#match,
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2643,6 +2754,8 @@ pub mod semantic {
                     index: 0usize,
                     name: "nominal_type",
                 },
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2651,6 +2764,8 @@ pub mod semantic {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalType { node, .. } => node.node(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
@@ -2659,24 +2774,31 @@ pub mod semantic {
             use type_sitter_lib::TypedNode;
             match self {
                 Self::NominalType { node, .. } => node.node_mut(),
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
         fn name(&self) -> &'static str {
             match self {
                 Self::NominalType { .. } => "nominal_type",
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
         #[inline]
         fn index(&self) -> usize {
             match self {
                 Self::NominalType { .. } => 0usize,
+                #[allow(unreachable_patterns)]
+                _ => unreachable!(),
             }
         }
     }
     pub mod anon_unions {
+
         #[allow(unused_imports)]
-        use crate::syntax::nodes::*;
+        use super::nodes::*;
         #[doc = "one of `{function_declaration | function_signature | generator_function_declaration}`:\n- [FunctionDeclaration]\n- [FunctionSignature]\n- [GeneratorFunctionDeclaration]"]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         #[allow(non_camel_case_types)]
@@ -2794,7 +2916,7 @@ pub type InjectionsCaptures<'cursor, 'tree> =
     type_sitter_lib::TypedQueryCaptures<'cursor, 'tree, Injections>;
 #[doc = "A match returned by the query [Injections]:\n\n```sexp\n; inherits: typescript\n\n```"]
 pub struct InjectionsMatch<'cursor, 'tree> {
-    match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+    r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
     tree: &'tree yak_sitter::Tree,
 }
 #[doc = "A capture returned by the query [Injections]:\n\n```sexp\n; inherits: typescript\n\n```"]
@@ -2812,16 +2934,16 @@ impl type_sitter_lib::TypedQuery for Injections {
     #[inline]
     unsafe fn wrap_match<'cursor, 'tree>(
         &self,
-        match_: tree_sitter::QueryMatch<'cursor, 'tree>,
+        r#match: tree_sitter::QueryMatch<'cursor, 'tree>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Match<'cursor, 'tree> {
-        Self::Match { match_, tree }
+        Self::Match { r#match, tree }
     }
     #[inline]
     unsafe fn wrap_capture<'cursor, 'tree>(
         &self,
         capture: tree_sitter::QueryCapture<'tree>,
-        match_: Option<Self::Match<'cursor, 'tree>>,
+        r#match: Option<Self::Match<'cursor, 'tree>>,
         tree: &'tree yak_sitter::Tree,
     ) -> Self::Capture<'cursor, 'tree> {
         match capture.index as usize {
@@ -2835,7 +2957,7 @@ impl<'cursor, 'tree> InjectionsMatch<'cursor, 'tree> {}
 impl<'cursor, 'tree> std::fmt::Debug for InjectionsMatch<'cursor, 'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(InjectionsMatch))
-            .field("match_", &self.match_)
+            .field("r#match", &self.r#match)
             .finish()
     }
 }
@@ -2854,11 +2976,11 @@ impl<'cursor, 'tree> type_sitter_lib::TypedQueryMatch<'cursor, 'tree>
     }
     #[inline]
     fn raw(&self) -> &tree_sitter::QueryMatch<'cursor, 'tree> {
-        &self.match_
+        &self.r#match
     }
     #[inline]
     fn into_raw(self) -> tree_sitter::QueryMatch<'cursor, 'tree> {
-        self.match_
+        self.r#match
     }
 }
 #[automatically_derived]
@@ -2866,13 +2988,19 @@ impl InjectionsCapture {}
 #[automatically_derived]
 impl std::fmt::Debug for InjectionsCapture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 #[automatically_derived]
-impl<'cursor, 'tree> Clone for InjectionsCapture {
+impl Clone for InjectionsCapture {
     fn clone(&self) -> Self {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 #[automatically_derived]
@@ -2885,47 +3013,69 @@ impl<'cursor, 'tree: 'cursor> type_sitter_lib::TypedQueryCapture<'cursor, 'tree>
         &Injections
     }
     #[inline]
-    fn match_(
+    fn r#match(
         &self,
     ) -> Option<&<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn into_match(
         self,
     ) -> Option<<Self::Query as type_sitter_lib::TypedQuery>::Match<'cursor, 'tree>> {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn to_raw(&self) -> yak_sitter::QueryCapture<'static, 'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn node(&self) -> &yak_sitter::Node<'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn node_mut(&mut self) -> &mut yak_sitter::Node<'tree> {
         #[allow(unused_imports)]
         use type_sitter_lib::TypedNode;
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn name(&self) -> &'static str {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
     #[inline]
     fn index(&self) -> usize {
-        match self {}
+        match self {
+            #[allow(unreachable_patterns)]
+            _ => unreachable!(),
+        }
     }
 }
 pub mod anon_unions {
+
     #[allow(unused_imports)]
-    use crate::syntax::nodes::*;
+    use super::nodes::*;
     #[doc = "one of `{identifier | nominal_type_identifier | property_identifier | type_identifier}`:\n- [Identifier]\n- [NominalTypeIdentifier]\n- [PropertyIdentifier]\n- [TypeIdentifier]"]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[allow(non_camel_case_types)]

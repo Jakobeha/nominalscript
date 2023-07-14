@@ -1,21 +1,25 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::fs::{copy, create_dir, create_dir_all, remove_dir_all};
 use std::iter::zip;
 use std::mem::MaybeUninit;
-use std::ops::RangeTo;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::thread::park;
 
+use camino::Utf8Path;
 use join_lazy_fmt::Join;
 use notify_debouncer_mini::{DebouncedEvent, DebounceEventHandler, DebounceEventResult, new_debouncer};
-use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rayon::iter::IntoParallelRefMutIterator;
+use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rustc_arena_modified::TypedArena;
 use walkdir::WalkDir;
 
-use crate::compiler::output::{FatalError, Output};
+use crate::compiler::output::FatalError;
+pub use crate::compiler::output::Output;
 use crate::misc::{PathPatriciaMap, ResultFilterErr};
 use crate::package::Package;
 
@@ -29,6 +33,8 @@ pub struct Compiler {
 
 pub struct IncrementalCompiler {
     compiler: Compiler,
+    // debouncer needs to be kept alive while [IncrementalCompiler] is, but it's not actually used
+    #[allow(unused)]
     debouncer: Debouncer,
 }
 
@@ -65,13 +71,17 @@ impl Compiler {
     fn run_batch(&mut self) -> i32 {
         self.packages.par_iter_mut()
             .map(|(_, package)| package.run_batch())
-            .fold(Output::new(), |a, b| a + b).report()
+            .reduce(Output::new, |a, b| a + b)
+            .report()
     }
 }
 
 impl IncrementalCompiler {
-    pub fn run(package_paths: impl IntoIterator<Item=PathBuf>) -> Never {
-        Self::try_run(package_paths).unwrap_or_else(|err| err.exit())
+    pub fn run(package_paths: impl IntoIterator<Item=PathBuf>) -> ! {
+        match Self::try_run(package_paths) {
+            Ok(never) => match never {},
+            Err(err) => err.exit()
+        }
     }
 
     fn try_run(package_paths: impl IntoIterator<Item=PathBuf>) -> Result<Never, FatalError> {
@@ -115,19 +125,28 @@ impl DebounceEventHandler for RecompileEventHandler {
         let ptr = unsafe { &mut *self.0 };
         match event {
             Ok(mut events) => {
-                events.sort_by_key(|event| &event.path);
-                fn event_package<'a>(
+                events.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+                // We have to return references here because we are storing the previous package
+                // compiler in `current_package` while we get the next one. Since we can't have a
+                // mutable reference and immutable reference which overlap exist at the same time,
+                // we return and store in `current_package` a mutable pointer instead of a mutable
+                // reference. We also need the borrow to `ptr` to end before we would dereference
+                // `current_package`, so we also return and store in `current_path` a const pointer
+                // instead of a shared reference.
+                fn event_package(
                     event: &DebouncedEvent,
-                    ptr: &'a mut IncrementalCompiler
-                ) -> (&'a Path, &'a mut PackageCompiler) {
+                    ptr: &IncrementalCompiler
+                ) -> (*const Path, *mut PackageCompiler) {
                     let (path, compiler) = ptr.compiler.packages
-                        .range_mut::<&PathBuf, RangeTo<&PathBuf>>(..&event.path)
+                        // See https://stackoverflow.com/questions/66130661/why-impl-rangeboundst-for-ranget-requires-t-to-be-sized and
+                        // https://github.com/rust-lang/rust/pull/64327 for why we don't use `..&event.path` or `..&*event.path` here
+                        .range::<Path, _>((Bound::Unbounded, Bound::Excluded(&*event.path)))
                         .next_back()
                         .expect("File watcher returned event for unknown path");
                     // Since it's not obvious, the path should be the prefix because of
                     // lexicographic order
                     assert!(path.starts_with(&event.path));
-                    (path, compiler)
+                    (path.as_path() as *const _, compiler as *const _ as *mut _)
                 }
                 // ```
                 // for events in events.linear_group_by_key(|event| event_package(event, ptr)) {
@@ -135,17 +154,27 @@ impl DebounceEventHandler for RecompileEventHandler {
                 // }
                 // ```
                 // But satisfies the borrow checker and only calls event_path once
-                let (mut current_path, mut current_package) = (None, None);
+                let (mut current_path, mut current_package) = (None::<*const Path>, None::<*mut PackageCompiler>);
                 let mut current_idx = 0;
                 for idx in 0..events.len() {
                     let event = &events[idx];
                     let (path, package) = event_package(event, ptr);
+                    // SAFETY: `path` and `package` are live
                     if Some(path) != current_path {
                         if let Some(old_package) = current_package {
-                            old_package.recompile(&events[current_idx..idx]);
+                            // SAFETY:
+                            // - `old_package` is live
+                            //   - `ptr.compiler.packages` is live
+                            //   - we haven't inserted or removed elements since we retrieved, and
+                            //     [BTreeMap] has stable deref
+                            // - We have no other live references to data in `old_package`
+                            //   - Importantly, we have no live shared references to `ptr`, because
+                            //     `current_path` and `current_package` are both raw pointers.
+                            unsafe { &mut *old_package }.recompile(&events[current_idx..idx]);
                         }
                         current_path = Some(path);
                         current_package = Some(package);
+                        current_idx = idx;
                     }
                 }
             }
@@ -184,24 +213,29 @@ impl PackageCompiler {
             output.num_errors += 1;
             return output
         }
-        if let Err(err) = create_dir(output_root) {
+        if let Err(err) = create_dir(&output_root) {
             eprintln!("Error creating new output root directory before batch compilation ({}):\n  {}", output_root.display(), err);
             output.num_errors += 1;
             return output
         }
 
         // Get paths AND copy non-nominalscript files
+        let tmp_root_dir_owner = TypedArena::new();
+        let num_errors = Cell::new(output.num_errors);
         let paths = SRC_DIR_NAMES.iter()
             .map(|dir_name| self.path.join(dir_name))
             .filter(|path| path.exists())
-            .flat_map(|root_dir| WalkDir::new(&root_dir)
-                .follow_links(true)
-                .into_iter()
-                .map(|e| (root_dir, e)))
+            .flat_map(|root_dir| {
+                let root_dir = tmp_root_dir_owner.alloc(root_dir);
+                WalkDir::new(root_dir)
+                    .follow_links(true)
+                    .into_iter()
+                    .map(move |e| (root_dir, e))
+            })
             .filter_map(|(root_dir, entry)| match entry {
                 Err(err) => {
                     eprintln!("Error processing file in {}:\n  {}", root_dir.display(), err);
-                    output.num_errors += 1;
+                    num_errors.set(num_errors.get() + 1);
                     None
                 }
                 Ok(entry) => Some((root_dir.clone(), entry))
@@ -216,37 +250,43 @@ impl PackageCompiler {
                     output_path
                 };
                 if entry.file_type().is_dir() {
-                    if let Err(err) = create_dir(output_path) {
+                    if let Err(err) = create_dir(&output_path) {
                         eprintln!("Error creating output subdirectory at {}:\n  {}", output_path.display(), err);
-                        output.num_errors += 1;
+                        num_errors.set(num_errors.get() + 1);
                     }
                     None
                 } else if path.extension() != Some(OsStr::new(NOMINALSCRIPT_EXTENSION)) {
-                    if let Err(err) = copy(path, output_path) {
-                        eprintln!("Error copying non-nominalscript file at {}:\n  {}", output_path.display(), err);
-                        output.num_errors += 1;
+                    if let Err(err) = copy(&path, &output_path) {
+                        eprintln!("Error copying non-nominalscript file from {} to {}:\n  {}", path.display(), output_path.display(), err);
+                        num_errors.set(num_errors.get() + 1);
                     }
                     None
                 } else {
-                    Some((path, output_path))
+                    let Some(path) = Utf8Path::from_path(&path) else {
+                        eprintln!("Error: path is not utf-8, so nominalscript file will be skipped: {}", path.display());
+                        num_errors.set(num_errors.get() + 1);
+                        return None
+                    };
+                    Some((path.to_path_buf(), output_path))
                 }
             })
             .collect::<PathPatriciaMap<PathBuf>>();
+        output.num_errors = num_errors.into_inner();
 
         // Build package with input files
-        let mut package = Package::build(paths.keys(), &mut output);
+        let package = Package::build(paths.keys(), &mut output);
 
         // Write output files
-        for ((path, output), (path2, output_path)) in zip(package.outputs, paths) {
+        for ((path, file_output), (path2, file_output_path)) in zip(package.outputs(), paths) {
             assert_eq!(path, path2, "Path output path tree is different (maybe has different order) than input path tree");
-            if let Err(err) = output.write_to_file(output_path) {
-                eprintln!("Error writing output file to {}:\n  {}", output_path.display(), err);
+            if let Err(err) = file_output.write_to_file(&file_output_path) {
+                eprintln!("Error writing output file to {}:\n  {}", file_output_path.display(), err);
                 output.num_errors += 1;
             }
         }
 
         // Done
-        self.latest = package;
+        self.latest = Some(package);
         output
     }
 

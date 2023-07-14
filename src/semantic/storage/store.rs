@@ -12,6 +12,6 @@ pub struct Store {
 /// This is equivalent to [rustc_arena::ArenaAllocatable](https://doc.rust-lang.org/stable/nightly-rustc/src/rustc_arena/lib.rs.html#571).
 pub trait HasStore<'tree, T> {
     /// Get the store of the given type.
-    fn inner_store(self) -> &'tree T;
+    fn inner_store(&self) -> &'tree T;
 }
 
