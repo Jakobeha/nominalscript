@@ -7,6 +7,8 @@ pub type ProgramTree = TypedTree<ProgramGAT>;
 #[derive(Debug)]
 pub struct ProgramGAT;
 
+pub type NominalType<'tree> = anon_unions::PrimaryNominalType_FunctionNominalType_NullableNominalType<'tree>;
+
 impl TypedNodeGAT for ProgramGAT {
     type This<'tree> = Program<'tree>;
 }

@@ -582,6 +582,7 @@ dependencies = [
  "replace_with",
  "roaring",
  "rustc-arena-modified",
+ "self_cell",
  "slice-group-by",
  "smallvec",
  "smol_str",
@@ -595,6 +596,7 @@ dependencies = [
  "type-sitter-lib",
  "walkdir",
  "yak-sitter",
+ "yoke",
 ]
 
 [[package]]
@@ -837,6 +839,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
 
 [[package]]
+name = "self_cell"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c309e515543e67811222dbc9e3dd7e1056279b782e1dacffe4242b718734fb6"
+
+[[package]]
 name = "serde"
 version = "1.0.163"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -887,6 +895,12 @@ checksum = "74212e6bbe9a4352329b2f68ba3130c15a3f26fe88ff22dbdc6cdd58fa85e99c"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "stable_deref_trait"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "static_assertions"
@@ -1011,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "type-sitter-lib"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "once_cell",
  "streaming-iterator",
@@ -1224,8 +1238,25 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 
 [[package]]
 name = "yak-sitter"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "streaming-iterator",
  "tree-sitter",
 ]
+
+[[package]]
+name = "yoke"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1848075a23a28f9773498ee9a0f2cf58fcbad4f8c0ccf84a210ab33c6ae495de"
+dependencies = [
+ "serde",
+ "stable_deref_trait",
+ "zerofrom",
+]
+
+[[package]]
+name = "zerofrom"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df54d76c3251de27615dfcce21e636c172dafb2549cd7fd93e21c66f6ca6bea2"

@@ -1,6 +1,9 @@
 use std::io;
 use std::marker::PhantomData;
 use std::path::Path;
+use camino::Utf8Path;
+use ouroboros::self_referencing;
+use self_cell::self_cell;
 use dependent_rebuilder::dependent_rebuilder;
 use crate::compiler::Output;
 use crate::misc::PathPatriciaMap;
@@ -39,21 +42,38 @@ use crate::syntax::nodes::ProgramTree;
 ///
 /// TODO: A package may also depend on a files outside of the package, and recompile if
 ///     those files change, but this isn't yet implemented.
-#[dependent_rebuilder]
-pub struct Package {
+pub struct Package(Repr);
+
+self_cell!(
+    struct Repr {
+        owner: PackageSyntax,
+
+        #[covariant]
+        dependent: PackageSemantic,
+    }
+
+    impl {Debug}
+);
+
+pub struct PackageSyntax {
     /// AST nodes
     sources: FileMap<ProgramTree>,
+    /// Diagnostics
+    diagnostics: Diagnostics
+}
+
+pub struct PackageSemantic<'tree> {
     /// Definitions
-    definitions: PackageDefinitions,
+    definitions: PackageDefinitions<'tree>,
     /// Expressions, including type definitions and trivially-inferred types (most types)
-    expressions: PackageExpressions,
+    expressions: PackageExpressions<'tree>,
     /// Type inference (re-declare the trivial types, and resolve constrained type holes)
-    type_inference: PackageTypeInference,
+    type_inference: PackageTypeInference<'tree>,
     /// Type check results
-    type_check: PackageTypeCheck,
+    type_check: PackageTypeCheck<'tree>,
     /// Re-printed source removing all type annotations, and inserting runtime type checks and guard
     /// code
-    output: PackageOutput
+    output: PackageOutput<'tree>
 }
 
 unsafe impl Send for Package {}
@@ -85,18 +105,22 @@ pub struct FileOutput {
 }
 
 impl Package {
-    pub fn build(paths: impl Iterator<Item=impl AsRef<Path>>, output: &mut Output) -> Package {
-        todo!()
+    pub fn build(paths: impl Iterator<Item=impl AsRef<Utf8Path>>, output: &mut Output) -> Package {
+        Package(Repr::new(
+            PackageSyntax {
+                sources: paths.map(|path| path.)
+            }
+        ))
     }
 
-    pub fn outputs(&self) -> impl Iterator<Item=(&Path, &FileOutput)> {
+    pub fn outputs(&self) -> impl Iterator<Item=(&Utf8Path, &FileOutput)> {
         todo!();
         std::iter::empty()
     }
 }
 
 impl FileOutput {
-    pub fn write_to_file(&self, path: &Path) -> io::Result<()> {
+    pub fn write_to_file(&self, path: &Utf8Path) -> io::Result<()> {
         todo!()
     }
 }

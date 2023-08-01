@@ -1,12 +1,14 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::iter::{empty, once, zip};
+use std::hash::{Hash, Hasher};
+use std::io::Read;
+use std::iter::{empty, once};
 use std::path::Path;
 
 use auto_enums::auto_enum;
-use yak_sitter::{Node, Range};
-use btree_plus_store::copyable::BTreeSet;
+use yak_sitter::Node;
 
+use btree_plus_store::copyable::BTreeSet;
 pub use point::*;
 
 mod point;
@@ -16,36 +18,42 @@ mod point;
 /// For proper memoization, *any* syntax node used to create a semantic node must be part of its
 /// annotation. When syntqx nodes are edited, we:
 ///
-/// - Delete all semantic nodes annotated with deleted or changed syntax nodes
+/// - Delete all semantic nodes annotated with deleted or changed syntax nodes.
 /// - (Re)process inserted or changed syntax nodes, which will insert new data into scopes
 ///   and parent expressions (including re-inserting data which was deleted because its syntax
-///   changed)
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+///   changed).
+///
+/// Even though there are different types of annotations, the annotations are ultimately compared
+/// based on their sources, and the types are only used for error reporting. This will lead to bugs
+/// if you expect a direct source to be different than an inferred source or an implicit source, but
+/// in practice you should not expect those things unless you're doing something wrong.
+#[derive(Debug, Default, Clone, Copy)]
 pub enum Ann<'tree> {
     #[default]
-    /// The annotated semantic node is defined globally, so not tied to any source
+    /// The annotated semantic node is defined globally, so not tied to any source.
     Intrinsic,
-    /// The annotated semantic node was parsed from source
+    /// The annotated semantic node was parsed from source.
     DirectSource {
-        /// Source syntax node it was derived from
+        /// Syntax node the semantic node was derived from.
         loc: Node<'tree>
     },
-    /// The annotated semantic node came from the absence of source
+    /// The annotated semantic node came from the absence of source.
     ImplicitSource {
-        /// Syntax node immediately before what would be parsed into this.
+        /// Syntax node immediately after what would be parsed into the semantic node.
         ///
-        /// The end of this node is the point where the implicit source would exist, and the next
-        /// node is the syntax node immediately after what would be parsed into this.
-        before_loc: Node<'tree>
+        /// Importantly, this syntax node should be what *prevented* the semantic node from *not*
+        /// existing, i.e. caused it to exist. This means we can treat this syntax node as the
+        /// "source" of the semantic node.
+        after_loc: Node<'tree>
     },
-    /// The annotated semantic node was inferred from source
+    /// The annotated semantic node was inferred from source.
     InferredSource {
-        /// Syntax nodes it was inferred from
+        /// One of more syntax nodes the semantic node was inferred from.
         locs: DerivedNodeSet<'tree>
     },
-    /// The annotated semantic node was derived from other semantic nodes
+    /// The annotated semantic node was derived from other semantic nodes.
     Derived {
-        /// Syntax nodes of derived semantic nodes
+        /// Syntax nodes of the semantic nodes this semantic node was derived from.
         locs: DerivedNodeSet<'tree>
     }
 }
@@ -53,19 +61,20 @@ pub enum Ann<'tree> {
 pub type DerivedNodeSet<'tree> = BTreeSet<'tree, Node<'tree>>;
 
 impl<'tree> Ann<'tree> {
-    /// Source location(s) AKA syntax nodes this semantic node was created from, in lexicographic order
+    /// Source location(s) AKA syntax nodes this semantic node was created from, in lexicographic
+    /// order.
     #[auto_enum(DoubleEndedIterator)]
     pub fn sources(&self) -> impl DoubleEndedIterator<Item=&Node<'tree>> + '_ {
         match self {
             Self::Intrinsic => empty(),
             Self::DirectSource { loc } => once(loc),
-            Self::ImplicitSource { before_loc } => once(before_loc),
+            Self::ImplicitSource { after_loc } => once(after_loc),
             Self::InferredSource { locs } => locs.iter(),
             Self::Derived { locs } => locs.iter()
         }
     }
 
-    /// Number of sources
+    /// Number of sources AKA syntax nodes
     pub fn num_sources(&self) -> usize {
         match self {
             Ann::Intrinsic => 0,
@@ -90,31 +99,45 @@ impl<'tree> Ann<'tree> {
         self.first_source().and_then(|n| n.path())
     }
 
-    /// Source location ranges for error reporting.
-    #[inline]
-    pub fn ranges(&self) -> impl DoubleEndedIterator<Item=Range> + '_ {
-        self.sources().map(|source| source.range())
-    }
-
     /// Whether one of this annotation's sources contains the given point
     #[inline]
-    pub fn contains_point(&self, point: Point<'tree>) -> bool {
-        self.sources().any(|source| source.contains_point(point))
+    pub fn contains_point(&self, point: &Point<'tree>) -> bool {
+        self.sources().any(|source| source.contains_point(&point))
     }
 
     /// Whether one of this annotation's sources intersects the given point range
     #[inline]
-    pub fn intersects_range(&self, range: std::ops::Range<Point<'tree>>) -> bool {
-        self.sources().any(|source| source.intersects_range(range.clone()))
+    pub fn intersects_range(&self, range: &RangeAtPath<'tree>) -> bool {
+        self.sources().any(|source| source.intersects_range_at_path(range))
     }
 
 
     /// Whether one of this annotation's sources touches or intersects the given point range
     #[inline]
-    pub fn touches_or_intersects_range(&self, range: std::ops::Range<Point<'tree>>) -> bool {
-        self.sources().any(|source| source.touches_or_intersects_range(range.clone()))
+    pub fn touches_or_intersects_range(&self, range: &RangeAtPath<'tree>) -> bool {
+        self.sources().any(|source| source.touches_or_intersects_range_at_path(range))
+    }
+
+    /// If either annotation is [Ann::Intrinsic], this becomes the other annotation. If they both
+    /// have sources, this becomes [Ann::Derived]
+    pub fn merge_with(&mut self, other: Ann<'tree>) {
+        *self = match (*self, other) {
+            (this, Ann::Intrinsic) => this,
+            (Ann::Intrinsic, other) => other,
+            (this, other) => Ann::Derived {
+                locs: this.sources().chain(other.sources()).collect(),
+            }
+        }
     }
 }
+
+impl<'tree> PartialEq for Ann<'tree> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sources().eq(other.sources())
+    }
+}
+
+impl<'tree> Eq for Ann<'tree> {}
 
 impl<'tree> PartialOrd for Ann<'tree> {
     #[inline]
@@ -125,9 +148,12 @@ impl<'tree> PartialOrd for Ann<'tree> {
 
 impl<'tree> Ord for Ann<'tree> {
     fn cmp(&self, other: &Self) -> Ordering {
-        zip(self.sources(), other.sources())
-            .map(|(lhs, rhs)| lhs.cmp(rhs))
-            .fold(Ordering::Equal, Ordering::then)
-            .then(self.num_sources().cmp(&other.num_sources()))
+        self.sources().cmp(other.sources())
+    }
+}
+
+impl<'tree> Hash for Ann<'tree> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sources().hash(state)
     }
 }

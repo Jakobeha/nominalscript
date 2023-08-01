@@ -54,6 +54,8 @@ join-lazy-fmt = "0.9.2"
 # Logging
 log = "0.4.17"
 env_logger = "0.10.0"
+yoke = "0.7.1"
+self_cell = "1.0.1"
 
 [dev-dependencies]
 tree-sitter-typescript = "0.20.2"

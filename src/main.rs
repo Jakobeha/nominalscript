@@ -5,7 +5,7 @@
 /// Syntax (nodes queries, annotations), and "syntax package" which stores all syntax nodes in a package
 pub mod syntax;
 /// Diagnostics (errors/warnings/etc) and logging
-// pub mod diagnostics;
+pub mod diagnostics;
 /// Semantic "thin" (pre-resolution) and "fat" (post-resolution) data-types
 pub mod semantic;
 /// Import resolution, exports. Also includes the compiled output
