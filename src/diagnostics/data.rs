@@ -9,11 +9,9 @@ use join_lazy_fmt::Join;
 use lazy_static::lazy_static;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
-use streaming_iterator::StreamingIterator;
 use yak_sitter::Node;
 
-use crate::misc::DisplayWithCtx;
-use crate::semantic::storage::ann::Ann;
+use crate::semantic::storage::{Ann, DerivedNodeStore, HasStore};
 
 /// All diagnostics for a package
 #[derive(Debug)]
@@ -43,6 +41,10 @@ pub struct Diagnostic<'tree> {
     /// Ex: hints or root causes
     pub additional_info: SmallVec<[AdditionalInfo<'tree>; 4]>
 }
+
+/// Display a diagnostic without its log level. Used internally to abstract regular printing and
+/// [Diagnostic::log_to_rust]
+struct DisplayDiagnosticWithoutLevel<'a, 'tree>(&'a Diagnostic<'tree>);
 
 /// Diagnostic level: how important is the diagnostic, and is it a bad thing or just debug message?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -166,8 +168,12 @@ impl<'tree> Diagnostics<'tree> {
 
 impl<'tree> Diagnostic<'tree> {
     /// Set the location if [Ann::Intrinsic], otherwise set to [Ann::Derived]
-    pub fn add_loc(&mut self, loc: Ann<'tree>) {
-        self.loc.merge_with(loc);
+    pub fn add_loc(
+        &mut self,
+        loc: Ann<'tree>,
+        store: impl HasStore<'tree, DerivedNodeStore<'tree>>
+    ) {
+        self.loc.merge_with(loc, store);
     }
 
     /// Can add one or more information. This is called `add_info` not only because "info" is
@@ -176,6 +182,24 @@ impl<'tree> Diagnostic<'tree> {
     /// have the same type.
     pub fn add_info(&mut self, info: impl Iterator<Item=AdditionalInfo<'tree>>) {
         self.additional_info.extend(info);
+    }
+
+    /// Print the diagnostic using the [log] crate.
+    pub fn log_to_rust(&self) {
+        let level = self.level.rust_log_level();
+
+        log::log!(level, "{}", DisplayDiagnosticWithoutLevel(self));
+    }
+}
+
+impl DiagnosticLevel {
+    pub fn rust_log_level(&self) -> log::Level {
+        match self {
+            DiagnosticLevel::Error => log::Level::Error,
+            DiagnosticLevel::Warning => log::Level::Warn,
+            DiagnosticLevel::Info => log::Level::Info,
+            DiagnosticLevel::Debug => log::Level::Debug
+        }
     }
 }
 
@@ -265,6 +289,21 @@ impl<'tree> Display for Diagnostic<'tree> {
         };
         write!(f, ": {}", self.message)?;
         for info in &self.additional_info {
+            write!(f, "\n  {}", info)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a, 'tree> Display for DisplayDiagnosticWithoutLevel<'a, 'tree> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.0.loc.num_sources() {
+            0 => {},
+            1 => write!(f, "@ {}: ", DisplaySource(self.0.loc.first_source().unwrap()))?,
+            _ => write!(f, "@ {}: ", ", ".join(self.0.loc.sources().map(DisplaySource)))?,
+        };
+        write!(f, "{}", self.0.message)?;
+        for info in &self.0.additional_info {
             write!(f, "\n  {}", info)?;
         }
         Ok(())

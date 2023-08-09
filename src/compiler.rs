@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::ffi::OsStr;
 use std::fs::{copy, create_dir, create_dir_all, remove_dir_all};
 use std::iter::zip;
 use std::mem::MaybeUninit;
@@ -10,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::thread::park;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use join_lazy_fmt::Join;
 use notify_debouncer_mini::{DebouncedEvent, DebounceEventHandler, DebounceEventResult, new_debouncer};
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
@@ -206,81 +205,88 @@ impl PackageCompiler {
     pub fn run_batch(&mut self) -> Output {
         let mut output = Output::new();
 
+        let Some(root_root) = Utf8Path::from_path(&self.path) else {
+            eprintln!("Can only process packages at utf-8 paths, not {}", self.path.display());
+            output.num_errors += 1;
+            return output
+        };
+
         // Remove old outputs
-        let output_root = self.path.join(OUT_DIR_NAME);
+        let output_root = root_root.join(OUT_DIR_NAME);
         if let Err(err) = remove_dir_all(&output_root) {
-            eprintln!("Error removing old output root directory before batch compilation ({}):\n  {}", output_root.display(), err);
+            eprintln!("Error removing old output root directory before batch compilation ({}):\n  {}", output_root, err);
             output.num_errors += 1;
             return output
         }
         if let Err(err) = create_dir(&output_root) {
-            eprintln!("Error creating new output root directory before batch compilation ({}):\n  {}", output_root.display(), err);
+            eprintln!("Error creating new output root directory before batch compilation ({}):\n  {}", output_root, err);
             output.num_errors += 1;
             return output
         }
 
         // Get paths AND copy non-nominalscript files
-        let tmp_root_dir_owner = TypedArena::new();
+        let tmp_input_root_owner = TypedArena::new();
         let num_errors = Cell::new(output.num_errors);
         let paths = SRC_DIR_NAMES.iter()
-            .map(|dir_name| self.path.join(dir_name))
+            .map(|dir_name| root_root.join(dir_name))
             .filter(|path| path.exists())
-            .flat_map(|root_dir| {
-                let root_dir = tmp_root_dir_owner.alloc(root_dir);
-                WalkDir::new(root_dir)
+            .flat_map(|input_root| {
+                let input_root = tmp_input_root_owner.alloc(input_root);
+                WalkDir::new(input_root)
                     .follow_links(true)
                     .into_iter()
-                    .map(move |e| (root_dir, e))
+                    .map(move |e| (input_root, e))
             })
-            .filter_map(|(root_dir, entry)| match entry {
+            .filter_map(|(input_root, entry)| match entry {
                 Err(err) => {
-                    eprintln!("Error processing file in {}:\n  {}", root_dir.display(), err);
+                    eprintln!("Error processing file in {}:\n  {}", input_root, err);
                     num_errors.set(num_errors.get() + 1);
                     None
                 }
-                Ok(entry) => Some((root_dir.clone(), entry))
+                Ok(entry) => Some((input_root.clone(), entry))
             })
-            .filter_map(|(root_dir, entry)| {
-                let path = entry.path();
-                let relative_path = path.strip_prefix(&root_dir).unwrap();
+            .filter_map(|(input_root, entry)| {
+                let input_path = entry.path();
+                let Some(input_path) = Utf8Path::from_path(&input_path) else {
+                    eprintln!("Error: path is not utf-8, so nominalscript file will be skipped: {}", input_path.display());
+                    num_errors.set(num_errors.get() + 1);
+                    return None
+                };
+                let relative_path = input_path.strip_prefix(&input_root).unwrap();
                 let output_path = {
-                    let mut output_path = root_dir;
+                    let mut output_path = root_root.to_path_buf();
                     output_path.push(OUT_DIR_NAME);
                     output_path.push(relative_path);
                     output_path
                 };
                 if entry.file_type().is_dir() {
                     if let Err(err) = create_dir(&output_path) {
-                        eprintln!("Error creating output subdirectory at {}:\n  {}", output_path.display(), err);
+                        eprintln!("Error creating output subdirectory at {}:\n  {}", output_path, err);
                         num_errors.set(num_errors.get() + 1);
                     }
                     None
-                } else if path.extension() != Some(OsStr::new(NOMINALSCRIPT_EXTENSION)) {
-                    if let Err(err) = copy(&path, &output_path) {
-                        eprintln!("Error copying non-nominalscript file from {} to {}:\n  {}", path.display(), output_path.display(), err);
+                } else if input_path.extension() != Some(NOMINALSCRIPT_EXTENSION) {
+                    if let Err(err) = copy(&input_path, &output_path) {
+                        eprintln!("Error copying non-nominalscript file from {} to {}:\n  {}", input_path, output_path, err);
                         num_errors.set(num_errors.get() + 1);
                     }
                     None
                 } else {
-                    let Some(path) = Utf8Path::from_path(&path) else {
-                        eprintln!("Error: path is not utf-8, so nominalscript file will be skipped: {}", path.display());
-                        num_errors.set(num_errors.get() + 1);
-                        return None
-                    };
-                    Some((path.to_path_buf(), output_path))
+                    let input_path = input_path.to_path_buf();
+                    Some((input_path, output_path))
                 }
             })
-            .collect::<PathPatriciaMap<PathBuf>>();
+            .collect::<PathPatriciaMap<Utf8PathBuf>>();
         output.num_errors = num_errors.into_inner();
 
         // Build package with input files
-        let package = Package::build(paths.keys(), &mut output);
+        let package = Package::build(paths.utf8_keys(), &mut output);
 
         // Write output files
-        for ((path, file_output), (path2, file_output_path)) in zip(package.outputs(), paths) {
-            assert_eq!(path, path2, "Path output path tree is different (maybe has different order) than input path tree");
-            if let Err(err) = file_output.write_to_file(&file_output_path) {
-                eprintln!("Error writing output file to {}:\n  {}", file_output_path.display(), err);
+        for ((path, file_output), (path2, file_output_path)) in zip(package.outputs(), paths.iter_utf8()) {
+            assert_eq!(path, &path2, "Path output path tree is different (maybe has different order) than input path tree");
+            if let Err(err) = file_output.write_to_file(file_output_path) {
+                eprintln!("Error writing output file to {}:\n  {}", file_output_path, err);
                 output.num_errors += 1;
             }
         }

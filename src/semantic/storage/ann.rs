@@ -1,15 +1,16 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
 use std::iter::{empty, once};
 use std::path::Path;
 
 use auto_enums::auto_enum;
+use type_sitter_lib::TypedNode;
 use yak_sitter::Node;
+use btree_plus_store::{copyable, BTreeStore};
 
-use btree_plus_store::copyable::BTreeSet;
 pub use point::*;
+use crate::semantic::storage::HasStore;
 
 mod point;
 
@@ -58,9 +59,17 @@ pub enum Ann<'tree> {
     }
 }
 
-pub type DerivedNodeSet<'tree> = BTreeSet<'tree, Node<'tree>>;
+pub type DerivedNodeSet<'tree> = copyable::BTreeSet<'tree, Node<'tree>>;
+pub type DerivedNodeStore<'tree> = BTreeStore<Node<'tree>, ()>;
 
 impl<'tree> Ann<'tree> {
+    /// Create an annotation derived directly from a typed node. Generalized `Ann::DirectSource`
+    /// which can take any typed node.
+    #[inline]
+    pub fn direct(node: impl TypedNode<'tree>) -> Self {
+        Self::DirectSource { loc: node.into_node() }
+    }
+
     /// Source location(s) AKA syntax nodes this semantic node was created from, in lexicographic
     /// order.
     #[auto_enum(DoubleEndedIterator)]
@@ -120,14 +129,24 @@ impl<'tree> Ann<'tree> {
 
     /// If either annotation is [Ann::Intrinsic], this becomes the other annotation. If they both
     /// have sources, this becomes [Ann::Derived]
-    pub fn merge_with(&mut self, other: Ann<'tree>) {
+    pub fn merge_with(&mut self, other: Ann<'tree>, store: impl HasStore<'tree, DerivedNodeStore<'tree>>) {
         *self = match (*self, other) {
             (this, Ann::Intrinsic) => this,
             (Ann::Intrinsic, other) => other,
             (this, other) => Ann::Derived {
-                locs: this.sources().chain(other.sources()).collect(),
+                locs: DerivedNodeSet::build(store.inner_store(), |locs| {
+                    locs.extend(this.sources().copied());
+                    locs.extend(other.sources().copied());
+                }),
             }
         }
+    }
+}
+
+impl<'tree> From<Node<'tree>> for Ann<'tree> {
+    #[inline]
+    fn from(loc: Node<'tree>) -> Self {
+        Self::DirectSource { loc }
     }
 }
 
@@ -154,6 +173,8 @@ impl<'tree> Ord for Ann<'tree> {
 
 impl<'tree> Hash for Ann<'tree> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.sources().hash(state)
+        for source in self.sources() {
+            source.hash(state);
+        }
     }
 }

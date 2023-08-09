@@ -4,9 +4,7 @@ use crate::impl_has_name;
 use crate::semantic::def::TypeDefData;
 use crate::semantic::name::{FieldIdent, FieldName};
 use crate::semantic::r#use::TypeUse;
-use crate::semantic::storage::ann::Ann;
-use crate::semantic::storage::Id;
-use crate::semantic::storage::inner::{InnerMap, InnerSet, InnerVec};
+use crate::semantic::storage::{Ann, Id, InnerMap, InnerSet, InnerVec};
 use crate::type_sitter::nominalscript::nodes;
 
 /// Type = identifier with optional generics, builtin or structural type.

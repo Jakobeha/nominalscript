@@ -6,7 +6,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 #[cfg(wasi)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use patricia_tree::{GenericPatriciaMap, PatriciaMap};
 use patricia_tree::map::{Values, ValuesMut};
@@ -73,6 +73,58 @@ impl<V> PathPatriciaMap<V> {
     /// guaranteed to be UTF-8.
     pub fn insert_utf8<Q: AsRef<Utf8Path>>(&mut self, key: Q, value: V) -> Option<V> {
         self.0.insert(key.as_ref().as_str().as_bytes(), value)
+    }
+
+    /// Gets an iterator over the entries of this map, sorted by key. Keys use the [camino] type
+    /// because this map only stores utf-8 keys.
+    #[inline]
+    pub fn iter_utf8(&self) -> impl Iterator<Item=(Utf8PathBuf, &V)> {
+        self.0.iter().map(|(k, v)| {
+            // SAFETY: Only stores valid UTF-8 paths.
+            (Utf8PathBuf::from(unsafe { String::from_utf8_unchecked(k) }), v)
+        })
+    }
+
+    /// Gets an iterator over the entries of this map, sorted by key, with mutable values. Keys use
+    /// the [camino] type because this map only stores utf-8 keys.
+    #[inline]
+    pub fn iter_mut_utf8(&mut self) -> impl Iterator<Item=(Utf8PathBuf, &mut V)> {
+        self.0.iter_mut().map(|(k, v)| {
+            // SAFETY: Only stores valid UTF-8 paths.
+            (Utf8PathBuf::from(unsafe { String::from_utf8_unchecked(k) }), v)
+        })
+    }
+
+    /// Destructs this map into an iterator over its entries of this map. Keys use the [camino] type
+    /// because this map only stores utf-8 keys.
+    #[inline]
+    pub fn into_iter_utf8(self) -> impl Iterator<Item=(Utf8PathBuf, V)> {
+        self.0.into_iter().map(|(k, v)| {
+            // SAFETY: Only stores valid UTF-8 paths.
+            (Utf8PathBuf::from(unsafe { String::from_utf8_unchecked(k) }), v)
+        })
+    }
+
+    /// Gets an iterator over the keys of this map, in sorted order. Keys use the [camino] type
+    /// because this map only stores utf-8 keys.
+    #[inline]
+    pub fn utf8_keys(&self) -> impl Iterator<Item=Utf8PathBuf> + '_ {
+        self.0.keys().map(|k| {
+            // SAFETY: Only stores valid UTF-8 paths
+            Utf8PathBuf::from(unsafe { String::from_utf8_unchecked(k) })
+        })
+    }
+
+    /// Gets an iterator over the values of this map, in order by key.
+    #[inline]
+    pub fn values(&self) -> Values<V> {
+        self.0.values()
+    }
+
+    /// Gets a mutable iterator over the values of this map, in order by key.
+    #[inline]
+    pub fn values_mut(&mut self) -> ValuesMut<V> {
+        self.0.values_mut()
     }
 }
 
@@ -185,18 +237,6 @@ impl<V> PathPatriciaMap<V> {
     #[inline]
     pub fn keys(&self) -> impl Iterator<Item=PathBuf> + '_ {
         self.0.keys().map(|k| PathBuf::from(OsString::from_vec(k)))
-    }
-
-    /// Gets an iterator over the values of this map, in order by key.
-    #[inline]
-    pub fn values(&self) -> Values<V> {
-        self.0.values()
-    }
-
-    /// Gets a mutable iterator over the values of this map, in order by key.
-    #[inline]
-    pub fn values_mut(&mut self) -> ValuesMut<V> {
-        self.0.values_mut()
     }
 
     /// Gets an iterator over the entries having the given prefix of this map, sorted by key.
@@ -342,18 +382,6 @@ impl<V> PathPatriciaMap<V> {
             // SAFETY: Only stores valid UTF-8 paths.
             PathBuf::from(unsafe { String::from_utf8_unchecked(k) })
         })
-    }
-
-    /// Gets an iterator over the values of this map, in order by key.
-    #[inline]
-    pub fn values(&self) -> Values<V> {
-        self.0.values()
-    }
-
-    /// Gets a mutable iterator over the values of this map, in order by key.
-    #[inline]
-    pub fn values_mut(&mut self) -> ValuesMut<V> {
-        self.0.values_mut()
     }
 
     /// Gets an iterator over the entries having the given prefix of this map, sorted by key.

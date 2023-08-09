@@ -5,7 +5,7 @@ macro_rules! log {
         $e.insert($crate::diagnostics::Diagnostic {
             level: $level,
             message: format!($format $(, $arg)*),
-            location: $loc,
+            loc: $crate::semantic::storage::Ann::from($loc),
             additional_info: $crate::misc::chain![
                 $($additional_info),*
             ].collect::<::smallvec::SmallVec<_>>(),
@@ -18,7 +18,7 @@ macro_rules! log {
     };
     ($e:expr, $level:expr, $format:literal $(, $arg:expr)* $(;
          $additional_info:expr)* $(;)?) => {
-        crate::log!($e, $level, $format @ $crate::semantic::Ann::Intrinsic $(, $arg)* $(;
+        crate::log!($e, $level, $format @ $crate::semantic::storage::Ann::Intrinsic $(, $arg)* $(;
             $additional_info)*)
     };
 }
@@ -57,14 +57,14 @@ macro_rules! additional_info {
         ::std::iter::once($crate::diagnostics::AdditionalInfo {
             type_: $r#type,
             message: format!($format $(, $arg)*),
-            location: $loc,
+            loc: $crate::semantic::storage::Ann::from($loc),
         })
     };
     ($r#type:expr, $format:literal @? $loc:expr $(, $arg:expr)* $(,)?) => {
         $crate::additional_info($r#type, $format @ $loc.unwrap_or_default() $(, $arg)*)
     };
     ($r#type:expr, $format:literal $(, $arg:expr)* $(,)?) => {
-        $crate::additional_info($r#type, $format @ $crate::semantic::Ann::Intrinsic $(, $arg)*)
+        $crate::additional_info!($r#type, $format @ $crate::semantic::storage::Ann::Intrinsic $(, $arg)*)
     };
 }
 

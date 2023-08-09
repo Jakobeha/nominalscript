@@ -7,7 +7,7 @@ use crate::{hint, issue, note};
 use crate::diagnostics::{Diagnostic, Diagnostics};
 use crate::semantic::expr::Type;
 use crate::semantic::name::{FieldName, TypeName};
-use crate::semantic::storage::ann::Ann;
+use crate::semantic::storage::Ann;
 use crate::syntax::nodes;
 
 /// Logs diagnostics in type-checking. Has extra context to do so easily.
@@ -34,7 +34,7 @@ struct TypeLoggerBase<'b, 'tree> {
     // - pops when that TypeLogger is destroyed.
     // If these are pointers, they are always active references though may have different lifetimes
     // (but they're not so currently we don't have to do anything unsafe)
-    context: RefCell<SmallVec<[TypeLoc; 2]>>
+    context: RefCell<SmallVec<[TypeLoc<'tree>; 2]>>
 }
 
 /// The additional info displayed to the user in type-check errors
@@ -57,25 +57,25 @@ pub struct TypeInfo<'tree> {
 /// Step to get from one type to one of its inner types (generalized type arguments), or from a type
 /// decl to one of its supertypes. There are also "in-between" steps like `SuperStructure`.
 #[derive(Debug, Clone)]
-pub enum TypeLoc {
+pub enum TypeLoc<'tree> {
     Supertype { index: usize },
-    SuperIdGeneric { name: TypeName },
+    SuperIdGeneric { name: &'tree TypeName },
     SuperStructure,
     TypeArgument { index: usize },
-    FunctionTypeParam { name: TypeName },
+    FunctionTypeParam { name: &'tree TypeName },
     FunctionThisParam,
     FunctionParam { index: usize },
     FunctionRestParam,
     FunctionReturn,
     ArrayElement,
     TupleElement { index: usize },
-    ObjectField { name: FieldName },
+    ObjectField { name: &'tree FieldName },
     /// For misc position
     Position { index: usize },
 }
 
 impl<'b, 'tree> TypeLogger<'b, 'b, 'tree> {
-    pub fn new(e: &'b Diagnostics, info: TypeCheckInfo<'tree>) -> Self {
+    pub fn new(e: &'b Diagnostics<'tree>, info: TypeCheckInfo<'tree>) -> Self {
         TypeLogger(_TypeLogger::Base(TypeLoggerBase {
             logger: e,
             info,
@@ -91,7 +91,7 @@ impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
 
     pub fn with_context<'a2>(
         &'a2 self,
-        context: TypeLoc
+        context: TypeLoc<'tree>
     ) -> TypeLogger<'a2, 'b, 'tree> {
         // ^ RULE A -> will pop context on derived drop
         match self.base() {
@@ -128,26 +128,26 @@ impl<'a, 'b, 'tree> TypeLogger<'a, 'b, 'tree> {
                 explicit_type: required_explicit_type
             }
         } = &base.info;
-        diagnostic.add_loc(*type_check_loc);
+        // diagnostic.add_loc(*type_check_loc, todo!("store"));
         let context_borrow = base.context.borrow();
         for context in &*context_borrow {
             diagnostic.add_info(note!("in {}", context));
         }
-        diagnostic.add_info(issue!("assigned type" @ assigned_type.ann()));
-        diagnostic.add_info(issue!("required type" @ required_type.ann()));
+        diagnostic.add_info(issue!("assigned type" @ *assigned_type.ann()));
+        diagnostic.add_info(issue!("required type" @ *required_type.ann()));
         if let Some(assigned_value) = assigned_value {
-            diagnostic.add_info(hint!("assigned type inferred here" => assigned_value));
+            diagnostic.add_info(hint!("assigned type inferred here" @ Ann::direct(*assigned_value)));
         }
         if let Some(required_value) = required_value {
-            diagnostic.add_info(hint!("required type inferred here" => required_value));
+            diagnostic.add_info(hint!("required type inferred here" @ Ann::direct(*required_value)));
         }
         if let Some(assigned_explicit_type) = assigned_explicit_type {
-            diagnostic.add_info(hint!("assigned type defined here" => assigned_explicit_type));
+            diagnostic.add_info(hint!("assigned type defined here" @ Ann::direct(*assigned_explicit_type)));
         }
         if let Some(required_explicit_type) = required_explicit_type {
-            diagnostic.add_info(hint!("required type defined here" => required_explicit_type));
+            diagnostic.add_info(hint!("required type defined here" @ Ann::direct(*required_explicit_type)));
         }
-        base.diagnostics.insert(diagnostic)
+        base.logger.insert(diagnostic)
     }
 }
 
@@ -167,7 +167,7 @@ impl<'a, 'b, 'tree> Drop for _TypeLogger<'a, 'b, 'tree> {
     }
 }
 
-impl Display for TypeLoc {
+impl<'tree> Display for TypeLoc<'tree> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TypeLoc::Supertype { index } => write!(f, "supertype {}", index),

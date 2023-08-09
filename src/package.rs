@@ -1,16 +1,17 @@
 use std::io;
 use std::marker::PhantomData;
-use std::path::Path;
-use camino::Utf8Path;
-use ouroboros::self_referencing;
-use self_cell::self_cell;
-use dependent_rebuilder::dependent_rebuilder;
-use crate::compiler::Output;
-use crate::misc::PathPatriciaMap;
 
+use camino::Utf8Path;
+use self_cell::self_cell;
+
+use crate::compiler::Output;
+use crate::diagnostics::Diagnostics;
+use crate::error;
+use crate::misc::PathPatriciaMap;
 use crate::semantic::scope::Scope;
 use crate::semantic::storage::root_set::RootSet;
 use crate::syntax::nodes::ProgramTree;
+use crate::syntax::PARSER;
 
 /// A package is a self-contained unit of files which depend on one another, and are compiled
 /// together.
@@ -48,21 +49,23 @@ self_cell!(
     struct Repr {
         owner: PackageSyntax,
 
-        #[covariant]
+        #[not_covariant]
         dependent: PackageSemantic,
     }
 
     impl {Debug}
 );
 
+#[derive(Debug)]
 pub struct PackageSyntax {
     /// AST nodes
     sources: FileMap<ProgramTree>,
-    /// Diagnostics
-    diagnostics: Diagnostics
 }
 
+#[derive(Debug)]
 pub struct PackageSemantic<'tree> {
+    /// Diagnostics
+    diagnostics: Diagnostics<'tree>,
     /// Definitions
     definitions: PackageDefinitions<'tree>,
     /// Expressions, including type definitions and trivially-inferred types (most types)
@@ -80,35 +83,74 @@ unsafe impl Send for Package {}
 
 pub type FileMap<T> = PathPatriciaMap<T>;
 
+#[derive(Debug)]
 pub struct PackageDefinitions<'tree> {
     scopes: RootSet<'tree, Scope<'tree>>
 }
 
+#[derive(Debug)]
 pub struct PackageExpressions<'tree> {
     _p: PhantomData<&'tree ()>,
 }
 
+#[derive(Debug)]
 pub struct PackageTypeInference<'tree> {
     _p: PhantomData<&'tree ()>,
 }
 
+#[derive(Debug)]
 pub struct PackageTypeCheck<'tree> {
     _p: PhantomData<&'tree ()>,
 }
 
+#[derive(Debug)]
 pub struct PackageOutput<'tree> {
     _p: PhantomData<&'tree ()>,
 }
 
+#[derive(Debug)]
 pub struct FileOutput {
 
 }
 
 impl Package {
     pub fn build(paths: impl Iterator<Item=impl AsRef<Utf8Path>>, output: &mut Output) -> Package {
+        // ???: Move setting print_immediately to true to somewhere else? Where do we use it false?
+        let diagnostics = Diagnostics::new(true);
+
+        let sources = paths.filter_map(|path| {
+            match PARSER.lock().parse_file(path.as_ref().as_std_path(), None, ()) {
+                Ok(source) => Some((path, ProgramTree::try_from(source).unwrap())),
+                Err(err) => {
+                    error!(&diagnostics, "@ {}: failed to parse, {}", path.as_ref(), err);
+                    None
+                }
+            }
+        }).collect::<FileMap<ProgramTree>>();
+
         Package(Repr::new(
             PackageSyntax {
-                sources: paths.map(|path| path.)
+                sources
+            },
+            |syntax| {
+                // let definitions = PackageDefinitions::build(&sources, &diagnostics);
+                // let expressions = PackageExpressions::build(&sources, &diagnostics, &definitions);
+                // let type_inference = PackageTypeInference::build(&sources, &diagnostics, &definitions, &expressions);
+                // let type_check = PackageTypeCheck::build(&sources, &diagnostics, &definitions, &expressions, &type_inference);
+                // let output = PackageOutput::build(&sources, &diagnostics, &definitions, &expressions, &type_inference, &type_check);
+                let definitions = todo!();
+                let expressions = todo!();
+                let type_inference = todo!();
+                let type_check = todo!();
+                let output = todo!();
+                PackageSemantic {
+                    diagnostics,
+                    definitions,
+                    expressions,
+                    type_inference,
+                    type_check,
+                    output,
+                }
             }
         ))
     }
