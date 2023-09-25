@@ -11,7 +11,7 @@ use nonempty::NonEmpty;
 use smallvec::SmallVec;
 use yak_sitter::Node;
 
-use crate::semantic::storage::{Ann, DerivedNodeStore, HasStore};
+use crate::storage::{Ann, DerivedNodeStore, HasStore};
 
 /// All diagnostics for a package
 #[derive(Debug)]

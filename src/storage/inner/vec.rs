@@ -3,8 +3,8 @@ use std::fmt::Debug;
 
 use btree_plus_store::{BTreeMap, BTreeStore};
 
-use crate::semantic::storage::HasStore;
-use crate::semantic::storage::ann::Ann;
+use crate::storage::HasStore;
+use crate::storage::ann::Ann;
 
 /// Ordered set of semantic nodes inside another semantic node. The set only contains the
 /// identifiers, the nodes' data is stored in the [RootSet]; furthermore, the set also allocates

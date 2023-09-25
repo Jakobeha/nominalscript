@@ -3,7 +3,7 @@ use crate::impl_has_name;
 
 use crate::semantic::expr::{Expr, Type};
 use crate::semantic::name::{TypeIdent, ValueIdent, ValueName, TypeName};
-use crate::semantic::storage::Id;
+use crate::storage::Id;
 
 /// Value declaration
 pub type ValueDef<'tree> = Id<'tree, ValueDefData<'tree>>;

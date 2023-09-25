@@ -27,6 +27,8 @@ pub mod misc;
 mod type_sitter;
 mod compiler;
 mod package;
+/// Storage (allocation) helpers
+pub mod storage;
 
 use std::path::PathBuf;
 use clap::Parser;

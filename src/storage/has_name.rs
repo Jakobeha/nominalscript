@@ -14,7 +14,7 @@ pub trait HasName<'tree> {
 #[macro_export]
 macro_rules! impl_has_name {
     (<$a:lifetime> $Name:ident for $Ty:ty) => {
-impl<$a> $crate::semantic::storage::HasName<$a> for $Ty {
+impl<$a> $crate::storage::HasName<$a> for $Ty {
     type Name = $Name;
 
     fn name(&self) -> &$a Self::Name {

@@ -1,5 +1,5 @@
 use smol_str::SmolStr;
-use crate::semantic::storage::Ann;
+use crate::storage::Ann;
 
 macro_rules! define_names {
     ($($(#[$attr:meta])* $NameOwned:ident $Name:ident $NameCow:ident $Ident:ident),+) => { $(

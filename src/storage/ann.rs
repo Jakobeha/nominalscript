@@ -10,7 +10,7 @@ use yak_sitter::Node;
 use btree_plus_store::{copyable, BTreeStore};
 
 pub use point::*;
-use crate::semantic::storage::HasStore;
+use crate::storage::HasStore;
 
 mod point;
 

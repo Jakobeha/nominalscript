@@ -1,4 +1,4 @@
-use crate::semantic::storage::{Id, InnerSet};
+use crate::storage::{Id, InnerSet};
 
 /// Package Scopes
 pub struct Scopes<'tree> {

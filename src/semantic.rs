@@ -8,5 +8,3 @@ pub mod r#use;
 pub mod expr;
 /// Binding identifiers
 pub mod name;
-/// Storage (allocation) helpers
-pub mod storage;

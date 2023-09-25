@@ -5,18 +5,18 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use std::ptr::NonNull;
-use crate::semantic::storage::{Generation, Id};
-use crate::semantic::storage::ann::Ann;
-use crate::semantic::storage::id::RootSetId;
+use crate::storage::{Generation, Id};
+use crate::storage::ann::Ann;
+use crate::storage::id::RootSetId;
 
 /// Collection of semantic nodes of a specific type in a package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootSet<'tree, Data> {
-    pub(in crate::semantic::storage) data: HashMap<Ann<'tree>, Data>,
-    pub(in crate::semantic::storage) id: RootSetId,
-    pub(in crate::semantic::storage) generation: Generation,
+    pub(crate) data: HashMap<Ann<'tree>, Data>,
+    pub(crate) id: RootSetId,
+    pub(crate) generation: Generation,
     /// If `true`, no more nodes can be added to this set until the generation is incremented.
-    pub(in crate::semantic::storage) is_frozen: bool,
+    pub(crate) is_frozen: bool,
 }
 
 /// Contains the root set of the given semantic node type, so you can use it to access and mutate

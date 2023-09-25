@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 
 use crate::semantic::expr::Type;
 use crate::semantic::r#use::ValueUse;
-use crate::semantic::storage::Id;
+use crate::storage::Id;
 
 /// Value expression = either a value (identifier, builtin or structure) or operation which reduces to a value
 pub type Expr<'tree> = Id<'tree, ExprData<'tree>>;

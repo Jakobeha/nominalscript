@@ -5,8 +5,8 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
 use derivative::Derivative;
-use crate::semantic::storage::ann::Ann;
-use crate::semantic::storage::generation::Generation;
+use crate::storage::ann::Ann;
+use crate::storage::generation::Generation;
 
 /// An semantic node identifier: a typed wrapper around an annotation (source location) which
 /// identifies a semantic node, taking advantage of the fact that there can't exist 2 different
@@ -14,19 +14,19 @@ use crate::semantic::storage::generation::Generation;
 #[derive(Derivative)]
 #[derivative(Debug(bound=""), Clone(bound=""))]
 pub struct Id<'tree, T> {
-    pub(super) id: Ann<'tree>,
-    pub(super) owner: RootSetId,
-    pub(super) cached: Cell<(NonNull<T>, Generation)>,
-    pub(super) _p: PhantomData<&'tree T>,
+    pub(crate) id: Ann<'tree>,
+    pub(crate) owner: RootSetId,
+    pub(crate) cached: Cell<(NonNull<T>, Generation)>,
+    pub(crate) _p: PhantomData<&'tree T>,
 }
 
 /// Unique id for each [Set] which distinguishes its [Id]s from those in other [Set]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct RootSetId(usize);
+pub(crate) struct RootSetId(usize);
 
 impl RootSetId {
     /// Create a new, unique set id
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
         Self(NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
     }

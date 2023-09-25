@@ -9,7 +9,7 @@ use crate::diagnostics::Diagnostics;
 use crate::error;
 use crate::misc::PathPatriciaMap;
 use crate::semantic::scope::Scope;
-use crate::semantic::storage::root_set::RootSet;
+use crate::storage::root_set::RootSet;
 use crate::syntax::nodes::ProgramTree;
 use crate::syntax::PARSER;
 
@@ -133,16 +133,11 @@ impl Package {
                 sources
             },
             |syntax| {
-                // let definitions = PackageDefinitions::build(&sources, &diagnostics);
-                // let expressions = PackageExpressions::build(&sources, &diagnostics, &definitions);
-                // let type_inference = PackageTypeInference::build(&sources, &diagnostics, &definitions, &expressions);
-                // let type_check = PackageTypeCheck::build(&sources, &diagnostics, &definitions, &expressions, &type_inference);
-                // let output = PackageOutput::build(&sources, &diagnostics, &definitions, &expressions, &type_inference, &type_check);
-                let definitions = todo!();
-                let expressions = todo!();
-                let type_inference = todo!();
-                let type_check = todo!();
-                let output = todo!();
+                let definitions = PackageDefinitions::build(&sources, &diagnostics);
+                let expressions = PackageExpressions::build(&sources, &diagnostics, &definitions);
+                let type_inference = PackageTypeInference::build(&sources, &diagnostics, &definitions, &expressions);
+                let type_check = PackageTypeCheck::build(&sources, &diagnostics, &definitions, &expressions, &type_inference);
+                let output = PackageOutput::build(&sources, &diagnostics, &definitions, &expressions, &type_inference, &type_check);
                 PackageSemantic {
                     diagnostics,
                     definitions,

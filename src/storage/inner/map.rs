@@ -3,9 +3,9 @@ use std::fmt::{Debug, Display};
 
 use btree_plus_store::{BTreeMap, BTreeStore};
 
-use crate::semantic::storage::HasStore;
-use crate::semantic::storage::ann::Ann;
-use crate::semantic::storage::inner::InnerSet;
+use crate::storage::HasStore;
+use crate::storage::ann::Ann;
+use crate::storage::inner::InnerSet;
 
 /// Map of semantic names to nodes inside another semantic node; an [InnerSet] where each node is
 /// uniqued by its name.

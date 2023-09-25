@@ -7,7 +7,7 @@ use crate::{hint, issue, note};
 use crate::diagnostics::{Diagnostic, Diagnostics};
 use crate::semantic::expr::Type;
 use crate::semantic::name::{FieldName, TypeName};
-use crate::semantic::storage::Ann;
+use crate::storage::Ann;
 use crate::syntax::nodes;
 
 /// Logs diagnostics in type-checking. Has extra context to do so easily.
